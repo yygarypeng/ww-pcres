@@ -1,6 +1,11 @@
 # hww_pcres_regressor
 
+This repo is the source code of Physics-constrained Residual regressor (PcRes regressor).
+The regressor aims to infer the $W$ bosons four-momentum from the four-vectors of leptons and MET.
 
+Please set up the `data_path` and `saved_path` in `train.py` file first before training.
+
+Author: Yuan-Yen Peng ([ypeng@cern.ch](ypeng@cern.ch)) from NTHU group
 
 ## Getting started
 
