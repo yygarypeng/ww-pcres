@@ -5,7 +5,9 @@ The regressor aims to infer the $W$ bosons four-momentum from the four-vectors o
 
 Please set up the `data_path` and `saved_path` in `train.py` file first before training.
 
-Author: Yuan-Yen Peng ([ypeng@cern.ch](ypeng@cern.ch)) from NTHU group
+The converted ONNX model can be found in `\hww_pcres_regressor` that is converted by `convert_to_onnx.py` and check with `onnxruntime_check.py`.
+
+Author: Yuan-Yen Peng (ypeng@cern.ch) from NTHU group
 
 ## Getting started
 
