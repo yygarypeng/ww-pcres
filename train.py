@@ -13,10 +13,10 @@ from data_module import WBosonDataModule
 import load_data as data
 
 # ====== Hyperparameters constants ======
-BATCH_SIZE = 512
+BATCH_SIZE = 256
 EPOCHS = 1024
-LEARNING_RATE = 1e-4
-LOSS_WEIGHTS = {"mae": 1.0, "w_mass_mmd0": 5.0, "w_mass_mmd1": 5.0}
+LEARNING_RATE = 5e-5
+LOSS_WEIGHTS = {"mae": 1.0, "w_mass_mmd0": 10.0, "w_mass_mmd1": 10.0}
 
 # ====== main parameters ======
 project_name = "hww_pcres_regressor"
@@ -43,7 +43,6 @@ def main(train=True):
     dm = WBosonDataModule(
         X, Y,
         batch_size=BATCH_SIZE,
-        num_workers=8,
         val_frac=0.1,
         test_frac=0.1
     )
@@ -59,7 +58,7 @@ def main(train=True):
         ckpt = ModelCheckpoint(monitor="val_loss", mode="min", save_top_k=1, filename="reg-{epoch:02d}-{val_loss:.2f}")
         early_stopping = EarlyStopping(
             monitor="val_loss",
-            patience=20,
+            patience=32,
             mode="min",
             verbose=False
         )
@@ -78,4 +77,8 @@ def main(train=True):
         return dm
 
 if __name__ == "__main__":
+    from time import time
+    t0 = time()
     main()
+    t1 = time()
+    print(f"Total time: {(t1 - t0):.2f} seconds.")

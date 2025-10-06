@@ -24,9 +24,9 @@ def compute_mmd(x, y, bandwidth_range=SIGMA_LST):
     XY = torch.zeros_like(xy)
 
     for a in bandwidth_range:
-        XX += torch.exp(-0.5 * dxx / a)
-        YY += torch.exp(-0.5 * dyy / a)
-        XY += torch.exp(-0.5 * dxy / a)
+        XX += torch.exp(-0.5 * dxx / a**2)
+        YY += torch.exp(-0.5 * dyy / a**2)
+        XY += torch.exp(-0.5 * dxy / a**2)
         
     #     print("bandwidth: ", a)
     #     print("Tot:", torch.mean(XX + YY - 2. * XY))
