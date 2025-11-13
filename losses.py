@@ -77,13 +77,13 @@ def w_mass_mmd_losses(y_true, y_pred):
     """
     Returns: (mmd_w0, mmd_w1) comparing predicted mass distributions to truth.
     """
-    w0_pred, w1_pred = y_pred[..., :4], y_pred[..., 4:8]
-    w0_true_mass, w1_true_mass = y_true[..., 8], y_true[..., 9]
 
-    w0_mass = invariant_mass(w0_pred)
-    w1_mass = invariant_mass(w1_pred)
+    w_pos_mass = y_pred[..., -2]
+    w_neg_mass = y_pred[..., -1]
+    w_pos_mass_true = y_true[..., -2]
+    w_neg_mass_true = y_true[..., -1]
 
-    return compute_mmd(w0_mass, w0_true_mass), compute_mmd(w1_mass, w1_true_mass)
+    return compute_mmd(w_pos_mass, w_pos_mass_true), compute_mmd(w_neg_mass, w_neg_mass_true)
 
 
 def higgs_mass_loss(y_pred):

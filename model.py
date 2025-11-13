@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import pytorch_lightning as L
 
-from layers import DenseDropoutBlock, ResidualBlock, WBosonFourVectorLayer
+from layers import DenseDropoutBlock, ResidualBlock, NeutrinosLayer
 from losses import (
     mae_loss, neg_r2_loss, w_mass_mae_losses, w_mass_mmd_losses,
     higgs_mass_loss, nu_mass_loss, dinu_pt_loss
@@ -27,16 +27,16 @@ class WBosonRegressor(nn.Module):
         self.trunk = nn.Sequential(*blocks)
         self.to_128 = DenseDropoutBlock(dim, 128, dropout=0.0)
         self.to_32 = DenseDropoutBlock(128, 32, dropout=0.0)
-        self.nu_out = nn.Linear(32, 6)
-        self.w_layer = WBosonFourVectorLayer()
+        self.leplep_out = nn.Linear(32, 8)
+        self.nunu_layer = NeutrinosLayer()
 
     def forward(self, x):
-        lep0, lep1 = x[..., :4], x[..., 4:8]
+        # lep0, lep1 = x[..., :4], x[..., 4:8]
         h = self.trunk(x)
         h = self.to_128(h)
         h = self.to_32(h)
-        nu_3mom = self.nu_out(h)
-        return self.w_layer(lep0, lep1, nu_3mom)
+        leplep_4vec = self.leplep_out(h)
+        return self.nunu_layer(leplep_4vec[..., :4], leplep_4vec[..., 4:8])
 
 
 class LightningWBoson(L.LightningModule):
@@ -44,11 +44,16 @@ class LightningWBoson(L.LightningModule):
         super().__init__()
         self.save_hyperparameters()
         self.model = WBosonRegressor(input_dim) # give a base model structure for forward() 
+        # defaults = {
+        #     "mae": 1.0, "nu_mass": 0.0, "higgs_mass": 0.0,
+        #     "w0_mass_mae": 0.0, "w1_mass_mae": 0.0,
+        #     "w_mass_mmd0": 0.0, "w_mass_mmd1": 0.0,
+        #     "dinu_pt": 0.0, "neg_r2": 0.0,
+        # }
         defaults = {
-            "mae": 1.0, "nu_mass": 0.0, "higgs_mass": 0.0,
-            "w0_mass_mae": 0.0, "w1_mass_mae": 0.0,
-            "w_mass_mmd0": 0.0, "w_mass_mmd1": 0.0,
-            "dinu_pt": 0.0, "neg_r2": 0.0,
+            "mae": 1.0,
+            "w_mass_mmd0": 10.0,
+            "w_mass_mmd1": 10.0,
         }
         self.loss_weights = {**defaults, **(loss_weights or {})}
         self.lr = lr
@@ -59,22 +64,22 @@ class LightningWBoson(L.LightningModule):
     def _compute_losses(self, x, y, y_pred):
         losses = {
             "mae": mae_loss(y, y_pred),
-            "nu_mass": nu_mass_loss(x, y_pred),
-            "higgs_mass": higgs_mass_loss(y_pred),
-            "w0_mass_mae": w_mass_mae_losses(y, y_pred)[0],
-            "w1_mass_mae": w_mass_mae_losses(y, y_pred)[1],
+            # "nu_mass": nu_mass_loss(x, y_pred),
+            # "higgs_mass": higgs_mass_loss(y_pred),
+            # "w0_mass_mae": w_mass_mae_losses(y, y_pred)[0],
+            # "w1_mass_mae": w_mass_mae_losses(y, y_pred)[1],
             "w_mass_mmd0": w_mass_mmd_losses(y, y_pred)[0],
             "w_mass_mmd1": w_mass_mmd_losses(y, y_pred)[1],
-            "dinu_pt": dinu_pt_loss(x, y_pred),
-            "neg_r2": neg_r2_loss(y, y_pred),
+            # "dinu_pt": dinu_pt_loss(x, y_pred),
+            # "neg_r2": neg_r2_loss(y, y_pred),
         }
         total = sum(self.loss_weights[k] * v for k, v in losses.items())
         return total.mean(), losses
 
     def _log_losses(self, prefix, losses, total):
-        self.log(f"{prefix}loss", total, prog_bar=True, on_step=False, on_epoch=True)
+        self.log(f"{prefix}loss", total, prog_bar=False, on_step=False, on_epoch=True)
         for k, v in losses.items():
-            self.log(f"{prefix}{k}_loss", v, prog_bar=True, on_step=False, on_epoch=True)
+            self.log(f"{prefix}{k}_loss", v, prog_bar=False, on_step=False, on_epoch=True)
 
     def training_step(self, batch, batch_idx):
         x, y = batch

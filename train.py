@@ -34,7 +34,7 @@ def main(train=True):
     else:
         print("Evaluation mode, loading checkpoints...")
         
-    torch.set_float32_matmul_precision("high")
+    torch.set_float32_matmul_precision("medium")
     train_obj, target_obj = data.load_data(data_path)
     X = train_obj.astype(np.float32)
     Y = target_obj.astype(np.float32)
