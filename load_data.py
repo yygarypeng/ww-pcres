@@ -1,6 +1,7 @@
 import numpy as np
 import h5py
 import ohbboosting as ohb
+from sklearn.preprocessing import StandardScaler
 
 def load_particles_from_h5(filename):
     result = {}
@@ -29,10 +30,11 @@ def load_data(data_path):
 
 	truth_pos_lep = data["truth_pos_lep"]
 	truth_neg_lep = data["truth_neg_lep"]
+	truth_dilep = data["truth_dilep"]
 	truth_pos_nu = data["truth_pos_nu"]
 	truth_neg_nu = data["truth_neg_nu"]
-	truth_pos_nu_p4 = data["truth_pos_nu"]["p4"]
-	truth_neg_nu_p4 = data["truth_neg_nu"]["p4"]
+	# truth_pos_nu_p4 = data["truth_pos_nu"]["p4"]
+	# truth_neg_nu_p4 = data["truth_neg_nu"]["p4"]
 	# truth_met_pt = np.sqrt(np.square((truth_pos_nu_p4 + truth_neg_nu_p4)[...,0:2]).sum(axis=-1))
 
 	# training objects
@@ -50,6 +52,8 @@ def load_data(data_path):
 	neg_nu_py = truth_neg_nu["py"]
 	met_px = pos_nu_px + neg_nu_px
 	met_py = pos_nu_py + neg_nu_py
+	dilep_phi = truth_dilep["dphi"]
+	dilep_eta = truth_dilep["deta"]
 	# pack them
 	train_obj = np.column_stack(
 		(
@@ -63,8 +67,12 @@ def load_data(data_path):
 			neg_lep_energy,
 			met_px,
 			met_py,
+			dilep_phi,
+			dilep_eta,
 		)
 	)
+	scaler = StandardScaler()
+	train_obj = scaler.fit_transform(train_obj)
 	print("Training objects shape:", train_obj.shape)
 
 	# target objects (need to use truth-level samples)

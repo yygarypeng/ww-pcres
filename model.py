@@ -14,26 +14,26 @@ class WBosonRegressor(nn.Module):
         super().__init__()
         blocks = []
         dim = input_dim
-        for _ in range(2):
-            blocks.append(ResidualBlock(dim, 128, dropout=0.25))
-            dim = 128
+        for _ in range(3):
             blocks.append(ResidualBlock(dim, 256, dropout=0.25))
             dim = 256
-        for _ in range(3):
+            blocks.append(ResidualBlock(dim, 512, dropout=0.25))
+            dim = 512
+        for _ in range(4):
+            blocks.append(ResidualBlock(dim, 256, dropout=0.25))
+            dim = 256
             blocks.append(ResidualBlock(dim, 128, dropout=0.25))
             dim = 128
-            blocks.append(ResidualBlock(dim, 64, dropout=0.25))
-            dim = 64
         self.trunk = nn.Sequential(*blocks)
-        self.to_128 = DenseDropoutBlock(dim, 128, dropout=0.0)
-        self.to_32 = DenseDropoutBlock(128, 32, dropout=0.0)
+        self.to_64 = DenseDropoutBlock(dim, 64, dropout=0.0)
+        self.to_32 = DenseDropoutBlock(64, 32, dropout=0.0)
         self.leplep_out = nn.Linear(32, 8)
         self.nunu_layer = NeutrinosLayer()
 
     def forward(self, x):
         # lep0, lep1 = x[..., :4], x[..., 4:8]
         h = self.trunk(x)
-        h = self.to_128(h)
+        h = self.to_64(h)
         h = self.to_32(h)
         leplep_4vec = self.leplep_out(h)
         return self.nunu_layer(leplep_4vec[..., :4], leplep_4vec[..., 4:8])
@@ -82,19 +82,31 @@ class LightningWBoson(L.LightningModule):
             self.log(f"{prefix}{k}_loss", v, prog_bar=False, on_step=False, on_epoch=True)
 
     def training_step(self, batch, batch_idx):
+        # x, y = batch
         x, y = batch
+        # move to GPU asynchronously
+        x = x.to(self.device, non_blocking=True)
+        y = y.to(self.device, non_blocking=True)
         total, losses = self._compute_losses(x, y, self(x)) # self(x) is equiv to self.forward(x) as it defined in __call__() internally in nn.Module
         self._log_losses("", losses, total)
         return total
 
     def validation_step(self, batch, batch_idx):
+        # x, y = batch
         x, y = batch
+        # move to GPU asynchronously
+        x = x.to(self.device, non_blocking=True)
+        y = y.to(self.device, non_blocking=True)
         total, losses = self._compute_losses(x, y, self(x))
         self._log_losses("val_", losses, total)
         return total
 
     def test_step(self, batch, batch_idx):
+        # x, y = batch
         x, y = batch
+        # move to GPU asynchronously
+        x = x.to(self.device, non_blocking=True)
+        y = y.to(self.device, non_blocking=True)
         total, losses = self._compute_losses(x, y, self(x))
         self._log_losses("test_", losses, total)
         return total
