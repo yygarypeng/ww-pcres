@@ -26,53 +26,37 @@ def load_data(data_path):
 	data = load_particles_from_h5(data_path)
 
 	# preselection
-	truth_lead_lep = data["truth_lead_lep"]
-	truth_sublead_lep = data["truth_sublead_lep"]
-	truth_lead_nu = data["truth_lead_nu"]
-	truth_sublead_nu = data["truth_sublead_nu"]
-	truth_lead_nu_p4 = data["truth_lead_nu"]["p4"]
-	truth_sublead_nu_p4 = data["truth_sublead_nu"]["p4"]
-	truth_met_pt = np.sqrt(np.square((truth_lead_nu_p4 + truth_sublead_nu_p4)[...,0:2]).sum(axis=-1))
-	# cut!!
-	cut_pre_pt_lead = truth_lead_lep["pt"] > 22
-	cut_pre_pt_sub = truth_sublead_lep["pt"] > 15
-	cut_pre_dilep_m = (
-		np.square(truth_lead_lep["energy"] + truth_sublead_lep["energy"])
-		- np.square(truth_lead_lep["px"] + truth_sublead_lep["px"])
-		- np.square(truth_lead_lep["py"] + truth_sublead_lep["py"])
-		- np.square(truth_lead_lep["pz"] + truth_sublead_lep["pz"])
-		> 10**2
-	)
-	cut_pre_pt_miss = truth_met_pt > 20
-	pre_cut = cut_pre_pt_lead & cut_pre_pt_sub & cut_pre_dilep_m & cut_pre_pt_miss
-	del (cut_pre_pt_lead, cut_pre_pt_sub, cut_pre_dilep_m, cut_pre_pt_miss)
+	truth_pos_lep = data["truth_pos_lep"]
+	truth_neg_lep = data["truth_neg_lep"]
+	truth_pos_nu = data["truth_pos_nu"]
+	truth_neg_nu = data["truth_neg_nu"]
 
 	# training objects
-	lead_lep_px = truth_lead_lep["px"][pre_cut]
-	lead_lep_py = truth_lead_lep["py"][pre_cut]
-	lead_lep_pz = truth_lead_lep["pz"][pre_cut]
-	lead_lep_energy = truth_lead_lep["energy"][pre_cut]
-	sublead_lep_px = truth_sublead_lep["px"][pre_cut]
-	sublead_lep_py = truth_sublead_lep["py"][pre_cut]
-	sublead_lep_pz = truth_sublead_lep["pz"][pre_cut]
-	sublead_lep_energy = truth_sublead_lep["energy"][pre_cut]
-	lead_nu_px = truth_lead_nu["px"][pre_cut]
-	lead_nu_py = truth_lead_nu["py"][pre_cut]
-	sublead_nu_px = truth_sublead_nu["px"][pre_cut]
-	sublead_nu_py = truth_sublead_nu["py"][pre_cut]
-	met_px = lead_nu_px + sublead_nu_px
-	met_py = lead_nu_py + sublead_nu_py
+	lep_pos_px = truth_pos_lep["px"]
+	lep_pos_py = truth_pos_lep["py"]
+	lep_pos_pz = truth_pos_lep["pz"]
+	lep_pos_energy = truth_pos_lep["energy"]
+	lep_neg_px = truth_neg_lep["px"]
+	lep_neg_py = truth_neg_lep["py"]
+	lep_neg_pz = truth_neg_lep["pz"]
+	lep_neg_energy = truth_neg_lep["energy"]
+	lep_pos_nu_px = truth_pos_nu["px"]
+	lep_pos_nu_py = truth_pos_nu["py"]
+	lep_neg_nu_px = truth_neg_nu["px"]
+	lep_neg_nu_py = truth_neg_nu["py"]
+	met_px = lep_pos_nu_px + lep_neg_nu_px
+	met_py = lep_pos_nu_py + lep_neg_nu_py
 	# pack them
 	train_obj = np.column_stack(
 		(
-			lead_lep_px,
-			lead_lep_py,
-			lead_lep_pz,
-			lead_lep_energy,
-			sublead_lep_px,
-			sublead_lep_py,
-			sublead_lep_pz,
-			sublead_lep_energy,
+			lep_pos_px,
+			lep_pos_py,
+			lep_pos_pz,
+			lep_pos_energy,
+			lep_neg_px,
+			lep_neg_py,
+			lep_neg_pz,
+			lep_neg_energy,
 			met_px,
 			met_py,
 		)
@@ -80,23 +64,38 @@ def load_data(data_path):
 	print("Training objects shape:", train_obj.shape)
 
 	# target objects
-	w_lead = data["lead_w"]
-	w_sublead = data["sublead_w"]
+	w_pos = data["pos_w"]
+	w_neg = data["neg_w"]
 	#  pack them
 	target_obj = np.column_stack(
 		(
-			w_lead["px"][pre_cut],
-			w_lead["py"][pre_cut],
-			w_lead["pz"][pre_cut],
-			w_lead["energy"][pre_cut],
-			w_sublead["px"][pre_cut],
-			w_sublead["py"][pre_cut],
-			w_sublead["pz"][pre_cut],
-			w_sublead["energy"][pre_cut],
-			w_lead["m"][pre_cut],
-			w_sublead["m"][pre_cut],
+			w_pos["px"],
+			w_pos["py"],
+			w_pos["pz"],
+			w_pos["energy"],
+			w_neg["px"],
+			w_neg["py"],
+			w_neg["pz"],
+			w_neg["energy"],
+			w_pos["m"],
+			w_neg["m"],
 		)
 	)
 	print("Target objects shape:", target_obj.shape)
 
 	return train_obj, target_obj
+
+if __name__ == "__main__":
+	from matplotlib import pyplot as plt
+	data_path = "/root/data/mc20_truth_v4_SM.h5"
+	train_obj, target_obj = load_data(data_path)
+	w_pos_mass = target_obj[:, 8]
+	w_neg_mass = target_obj[:, 9]
+	plt.hist(w_pos_mass, bins=50, range=(0, 120), histtype='step', label='W+ mass')
+	plt.hist(w_neg_mass, bins=50, range=(0, 120), histtype='bar', label='W- mass')
+	plt.xlabel("W mass [GeV]")
+	plt.ylabel("Entries")
+	plt.legend()
+	plt.savefig("w_mass.png")
+	print("Train objects:", train_obj)
+	print("Target objects:", target_obj)
