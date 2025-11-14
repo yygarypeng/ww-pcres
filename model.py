@@ -15,10 +15,10 @@ class WBosonRegressor(nn.Module):
         blocks = []
         dim = input_dim
         for _ in range(2):
-            blocks.append(ResidualBlock(dim, 128, dropout=0.25))
-            dim = 128
             blocks.append(ResidualBlock(dim, 256, dropout=0.25))
             dim = 256
+            blocks.append(ResidualBlock(dim, 512, dropout=0.25))
+            dim = 512
         for _ in range(3):
             blocks.append(ResidualBlock(dim, 128, dropout=0.25))
             dim = 128
@@ -72,9 +72,9 @@ class LightningWBoson(L.LightningModule):
         return total.mean(), losses
 
     def _log_losses(self, prefix, losses, total):
-        self.log(f"{prefix}loss", total, prog_bar=True, on_step=False, on_epoch=True)
+        self.log(f"{prefix}loss", total, prog_bar=False, on_step=False, on_epoch=True)
         for k, v in losses.items():
-            self.log(f"{prefix}{k}_loss", v, prog_bar=True, on_step=False, on_epoch=True)
+            self.log(f"{prefix}{k}_loss", v, prog_bar=False, on_step=False, on_epoch=True)
 
     def training_step(self, batch, batch_idx):
         x, y = batch

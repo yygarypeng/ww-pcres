@@ -13,7 +13,7 @@ from data_module import WBosonDataModule
 import load_data as data
 
 # ====== Hyperparameters constants ======
-BATCH_SIZE = 256
+BATCH_SIZE = 512
 EPOCHS = 1024
 LEARNING_RATE = 5e-5
 LOSS_WEIGHTS = {"mae": 1.0, "w_mass_mmd0": 10.0, "w_mass_mmd1": 10.0}
@@ -43,7 +43,7 @@ def main(train=True):
     dm = WBosonDataModule(
         X, Y,
         batch_size=BATCH_SIZE,
-        val_frac=0.1,
+        val_frac=0.2,
         test_frac=0.1
     )
     
