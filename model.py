@@ -4,8 +4,7 @@ import pytorch_lightning as L
 
 from layers import DenseDropoutBlock, ResidualBlock, NeutrinosLayer
 from losses import (
-    mae_loss, neg_r2_loss, w_mass_mae_losses, w_mass_mmd_losses,
-    higgs_mass_loss, nu_mass_loss, dinu_pt_loss
+    mae_loss, w_mass_mmd_losses,
 )
 
 
@@ -15,14 +14,14 @@ class WBosonRegressor(nn.Module):
         blocks = []
         dim = input_dim
         for _ in range(3):
-            blocks.append(ResidualBlock(dim, 256, dropout=0.25))
+            blocks.append(ResidualBlock(dim, 256, dropout=0.3))
             dim = 256
-            blocks.append(ResidualBlock(dim, 512, dropout=0.25))
+            blocks.append(ResidualBlock(dim, 512, dropout=0.3))
             dim = 512
-        for _ in range(4):
-            blocks.append(ResidualBlock(dim, 256, dropout=0.25))
+        for _ in range(3):
+            blocks.append(ResidualBlock(dim, 256, dropout=0.3))
             dim = 256
-            blocks.append(ResidualBlock(dim, 128, dropout=0.25))
+            blocks.append(ResidualBlock(dim, 128, dropout=0.3))
             dim = 128
         self.trunk = nn.Sequential(*blocks)
         self.to_64 = DenseDropoutBlock(dim, 64, dropout=0.0)
@@ -31,7 +30,6 @@ class WBosonRegressor(nn.Module):
         self.nunu_layer = NeutrinosLayer()
 
     def forward(self, x):
-        # lep0, lep1 = x[..., :4], x[..., 4:8]
         h = self.trunk(x)
         h = self.to_64(h)
         h = self.to_32(h)
@@ -44,12 +42,6 @@ class LightningWBoson(L.LightningModule):
         super().__init__()
         self.save_hyperparameters()
         self.model = WBosonRegressor(input_dim) # give a base model structure for forward() 
-        # defaults = {
-        #     "mae": 1.0, "nu_mass": 0.0, "higgs_mass": 0.0,
-        #     "w0_mass_mae": 0.0, "w1_mass_mae": 0.0,
-        #     "w_mass_mmd0": 0.0, "w_mass_mmd1": 0.0,
-        #     "dinu_pt": 0.0, "neg_r2": 0.0,
-        # }
         defaults = {
             "mae": 1.0,
             "w_mass_mmd0": 10.0,
@@ -82,7 +74,6 @@ class LightningWBoson(L.LightningModule):
             self.log(f"{prefix}{k}_loss", v, prog_bar=False, on_step=False, on_epoch=True)
 
     def training_step(self, batch, batch_idx):
-        # x, y = batch
         x, y = batch
         # move to GPU asynchronously
         x = x.to(self.device, non_blocking=True)
@@ -92,7 +83,6 @@ class LightningWBoson(L.LightningModule):
         return total
 
     def validation_step(self, batch, batch_idx):
-        # x, y = batch
         x, y = batch
         # move to GPU asynchronously
         x = x.to(self.device, non_blocking=True)
@@ -102,7 +92,6 @@ class LightningWBoson(L.LightningModule):
         return total
 
     def test_step(self, batch, batch_idx):
-        # x, y = batch
         x, y = batch
         # move to GPU asynchronously
         x = x.to(self.device, non_blocking=True)

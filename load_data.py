@@ -87,7 +87,6 @@ def load_data(data_path):
 		],
 		axis=-1,
 	)
-	print(particles.shape)
 	booster = ohb.Booster(particles)
 	booster.setup()
 	lep_pos_in_w, lep_neg_in_w = booster.lep_4_in_w_rest()
