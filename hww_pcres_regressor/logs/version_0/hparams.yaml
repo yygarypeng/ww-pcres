@@ -1,4 +1,4 @@
-input_dim: 10
+input_dim: 72
 loss_weights:
   mae: 1.0
   w_mass_mmd0: 12.0

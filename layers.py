@@ -50,4 +50,12 @@ class WBosonFourVectorLayer(nn.Module):
         nu0_4 = torch.cat([nu0_3, nu0_E], dim=-1)
         nu1_4 = torch.cat([nu1_3, nu1_E], dim=-1)
         # output concat: [ (lep0 + nu0_4), (lep1 + nu1_4) ] => shape (..., 8)
+        # # TODO: higgs constraint
+        # # if nu_1 is [px, py] only, 
+        # # compute pz and energy from higgs mass and massless neutrino constraints
+        # w0_3 = lep0[..., :3] + nu0_4[..., :3]
+        # w1_3 = lep1[..., :3] + nu1_4[..., :3]
+        # h_3 = w0_3 + w1_3
+        # m_h = 125.0
+        # nu1_e = torch.sqrt(torch.clamp(torch.sum(h_3[..., :3]**2, dim=-1) + m_h**2, min=1e-10)) - (lep0[..., 3] + nu0_4[..., 3]) - lep1[..., 3]
         return torch.cat([lep0 + nu0_4, lep1 + nu1_4], dim=-1)

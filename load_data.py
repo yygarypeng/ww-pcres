@@ -62,14 +62,14 @@ def load_data(data_path):
 		col(lep_neg_energy),
 		col(met_px),
 		col(met_py),
-		# col(jet_px),
-		# col(jet_py),
-		# col(jet_pz),
-		# col(jet_energy),
-		# col(jet_pt),
-		# col(jet_btag),
-		# col(n_jets),
-		# col(n_bjets),
+		col(jet_px),
+		col(jet_py),
+		col(jet_pz),
+		col(jet_energy),
+		col(jet_pt),
+		col(jet_btag),
+		col(n_jets),
+		col(n_bjets),
 	], axis=-1)
 	print("Training objects shape:", train_obj.shape)
 
