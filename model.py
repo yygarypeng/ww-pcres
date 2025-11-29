@@ -14,27 +14,32 @@ class WBosonRegressor(nn.Module):
         super().__init__()
         blocks = []
         dim = input_dim
-        for _ in range(2):
-            blocks.append(ResidualBlock(dim, 256, dropout=0.25))
-            dim = 256
-            blocks.append(ResidualBlock(dim, 512, dropout=0.25))
-            dim = 512
-        for _ in range(3):
-            blocks.append(ResidualBlock(dim, 128, dropout=0.25))
+        
+        blocks.append(ResidualBlock(dim, 512, dropout=0.5))
+        dim = 512
+        blocks.append(ResidualBlock(dim, 256, dropout=0.5))
+        dim = 256
+        for _ in range(8):
+            blocks.append(ResidualBlock(dim, 128, dropout=0.5))
             dim = 128
-            blocks.append(ResidualBlock(dim, 64, dropout=0.25))
-            dim = 64
+            blocks.append(ResidualBlock(dim, 128, dropout=0.5))
+            dim = 128
+        blocks.append(ResidualBlock(dim, 256, dropout=0.5))
+        dim = 256
+        blocks.append(ResidualBlock(dim, 512, dropout=0.5))
+        dim = 512
+        
         self.trunk = nn.Sequential(*blocks)
         self.to_128 = DenseDropoutBlock(dim, 128, dropout=0.0)
-        self.to_32 = DenseDropoutBlock(128, 32, dropout=0.0)
-        self.nu_out = nn.Linear(32, 6)
+        self.to_64 = DenseDropoutBlock(128, 64, dropout=0.0)
+        self.nu_out = nn.Linear(64, 6)
         self.w_layer = WBosonFourVectorLayer()
 
     def forward(self, x):
         lep0, lep1 = x[..., :4], x[..., 4:8]
         h = self.trunk(x)
         h = self.to_128(h)
-        h = self.to_32(h)
+        h = self.to_64(h)
         nu_3mom = self.nu_out(h)
         return self.w_layer(lep0, lep1, nu_3mom)
 

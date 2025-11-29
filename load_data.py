@@ -25,69 +25,75 @@ def load_data(data_path):
     
 	data = load_particles_from_h5(data_path)
 
-	# preselection
-	truth_pos_lep = data["truth_pos_lep"]
-	truth_neg_lep = data["truth_neg_lep"]
-	truth_pos_nu = data["truth_pos_nu"]
-	truth_neg_nu = data["truth_neg_nu"]
+	def col(a):
+		return a.reshape(a.shape[0], -1)
 
-	# training objects
-	lep_pos_px = truth_pos_lep["px"]
-	lep_pos_py = truth_pos_lep["py"]
-	lep_pos_pz = truth_pos_lep["pz"]
-	lep_pos_energy = truth_pos_lep["energy"]
-	lep_neg_px = truth_neg_lep["px"]
-	lep_neg_py = truth_neg_lep["py"]
-	lep_neg_pz = truth_neg_lep["pz"]
-	lep_neg_energy = truth_neg_lep["energy"]
-	lep_pos_nu_px = truth_pos_nu["px"]
-	lep_pos_nu_py = truth_pos_nu["py"]
-	lep_neg_nu_px = truth_neg_nu["px"]
-	lep_neg_nu_py = truth_neg_nu["py"]
-	met_px = lep_pos_nu_px + lep_neg_nu_px
-	met_py = lep_pos_nu_py + lep_neg_nu_py
+	# training features
+	lep_pos_px = data["pos_lep"]["px"]
+	lep_pos_py = data["pos_lep"]["py"]
+	lep_pos_pz = data["pos_lep"]["pz"]
+	lep_pos_energy = data["pos_lep"]["energy"]
+	lep_neg_px = data["neg_lep"]["px"]
+	lep_neg_py = data["neg_lep"]["py"]
+	lep_neg_pz = data["neg_lep"]["pz"]
+	lep_neg_energy = data["neg_lep"]["energy"]
+
+	met_px = data["met"]["px"]
+	met_py = data["met"]["py"]
+
+	jet_px = data["jets"]["px"]
+	jet_py = data["jets"]["py"]
+	jet_pz = data["jets"]["pz"]
+	jet_energy = data["jets"]["energy"]
+	jet_pt = data["jets"]["pt"]
+	jet_btag = data["jets"]["btag"]
+	n_jets = data["jets"]["n_jets"]
+	n_bjets = data["jets"]["n_bjets"]
+
 	# pack them
-	train_obj = np.column_stack(
-		(
-			lep_pos_px,
-			lep_pos_py,
-			lep_pos_pz,
-			lep_pos_energy,
-			lep_neg_px,
-			lep_neg_py,
-			lep_neg_pz,
-			lep_neg_energy,
-			met_px,
-			met_py,
-		)
-	)
+	train_obj = np.concat([
+		col(lep_pos_px),
+		col(lep_pos_py),
+		col(lep_pos_pz),
+		col(lep_pos_energy),
+		col(lep_neg_px),
+		col(lep_neg_py),
+		col(lep_neg_pz),
+		col(lep_neg_energy),
+		col(met_px),
+		col(met_py),
+		# col(jet_px),
+		# col(jet_py),
+		# col(jet_pz),
+		# col(jet_energy),
+		# col(jet_pt),
+		# col(jet_btag),
+		# col(n_jets),
+		# col(n_bjets),
+	], axis=-1)
 	print("Training objects shape:", train_obj.shape)
 
 	# target objects
-	w_pos = data["pos_w"]
-	w_neg = data["neg_w"]
-	#  pack them
-	target_obj = np.column_stack(
-		(
-			w_pos["px"],
-			w_pos["py"],
-			w_pos["pz"],
-			w_pos["energy"],
-			w_neg["px"],
-			w_neg["py"],
-			w_neg["pz"],
-			w_neg["energy"],
-			w_pos["m"],
-			w_neg["m"],
-		)
-	)
+	# pack them
+	target_obj = np.concatenate([
+		col(data["truth_pos_w"]["px"]),
+		col(data["truth_pos_w"]["py"]),
+		col(data["truth_pos_w"]["pz"]),
+		col(data["truth_pos_w"]["energy"]),
+		col(data["truth_neg_w"]["px"]),
+		col(data["truth_neg_w"]["py"]),
+		col(data["truth_neg_w"]["pz"]),
+		col(data["truth_neg_w"]["energy"]),
+		col(data["truth_pos_w"]["m"]),
+		col(data["truth_neg_w"]["m"]),
+	], axis=-1)
 	print("Target objects shape:", target_obj.shape)
 
 	return train_obj, target_obj
 
 if __name__ == "__main__":
 	from matplotlib import pyplot as plt
-	data_path = "/root/data/mc20_truth_v4_SM.h5"
+	data_path = "/root/data/danning_h5/ypeng/mc20_qe_v4_recotruth_ggF_train.h5"
 	train_obj, target_obj = load_data(data_path)
 	w_pos_mass = target_obj[:, 8]
 	w_neg_mass = target_obj[:, 9]

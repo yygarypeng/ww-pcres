@@ -4,44 +4,39 @@ import torch.nn as nn
 
 class DenseDropoutBlock(nn.Module):
     """
-    Dense -> BN -> Activation -> (Dropout)
-    Activation: SiLU
+    Pre-activation block:
+        BN(in_dim) -> SiLU -> Linear(in_dim -> out_dim) -> Dropout
     """
     def __init__(self, in_dim, out_dim, dropout=0.0):
         super().__init__()
-        self.fc = nn.Linear(in_dim, out_dim)
-        self.bn = nn.BatchNorm1d(out_dim)
+        self.bn = nn.BatchNorm1d(in_dim)
         self.act = nn.SiLU()
+        self.fc = nn.Linear(in_dim, out_dim)
         self.drop = nn.Dropout(dropout) if dropout and dropout > 0 else nn.Identity()
 
     def forward(self, x):
-        return self.drop(self.act(self.bn(self.fc(x))))
-
+        y = self.bn(x)
+        y = self.act(y)
+        y = self.fc(y)
+        y = self.drop(y)
+        return y
 
 class ResidualBlock(nn.Module):
-    """
-    Residual block with two DenseDropoutBlocks.
-    If in/out dims differ in the TF, they up-projected via a linear.
-    """
     def __init__(self, in_dim, out_dim, dropout=0.0):
         super().__init__()
-        self.proj = None
-        if in_dim != out_dim:
-            self.proj = nn.Linear(in_dim, out_dim, bias=False) # It's just a projection, dont use bias
 
-        self.block1 = DenseDropoutBlock(out_dim if self.proj else in_dim, out_dim, dropout)
+        # projection only when needed
+        self.proj = nn.Linear(in_dim, out_dim, bias=False) if in_dim != out_dim else nn.Identity()
+
+        # two pre-activation dense blocks
+        self.block1 = DenseDropoutBlock(in_dim, out_dim, dropout)
         self.block2 = DenseDropoutBlock(out_dim, out_dim, dropout)
-        self.bn = nn.BatchNorm1d(out_dim)
-        self.act = nn.SiLU()
 
     def forward(self, x):
-        if self.proj:
-            x = self.proj(x)
+        identity = self.proj(x)
         y = self.block1(x)
         y = self.block2(y)
-        z = x + y # elementwise add
-        return self.act(self.bn(z))
-
+        return identity + y
 
 class WBosonFourVectorLayer(nn.Module):
     """

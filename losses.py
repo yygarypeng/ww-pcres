@@ -2,7 +2,7 @@ import torch
 import torch.nn.functional as F
 
 # RBF kernel widths
-SIGMA_LST = [0.05, 0.1, 0.5, 1.0, 5.0, 10.0]
+SIGMA_LST = [0.05, 0.1, 0.3, 0.5, 1.0, 5.0, 10.0, 50.0]
 
 
 def compute_mmd(x, y, bandwidth_range=SIGMA_LST):
@@ -46,6 +46,7 @@ def invariant_mass(fourvec):
 
 
 def mae_loss(y_true, y_pred):
+    # do not consider mass targets in y_true
     return F.l1_loss(y_pred[..., :8], y_true[..., :8])
 
 

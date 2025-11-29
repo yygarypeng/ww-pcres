@@ -1,8 +1,11 @@
-import numpy as np
-import torch
-import wandb
-import glob
 import os
+import glob
+
+import numpy as np
+
+import torch
+from torch.utils.data import TensorDataset
+import wandb
 
 from pytorch_lightning import Trainer
 from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
@@ -14,15 +17,19 @@ import load_data as data
 
 # ====== Hyperparameters constants ======
 BATCH_SIZE = 512
-EPOCHS = 1024
-LEARNING_RATE = 5e-5
-LOSS_WEIGHTS = {"mae": 1.0, "w_mass_mmd0": 10.0, "w_mass_mmd1": 10.0}
+EPOCHS = 2048
+LEARNING_RATE = 1e-5
+LOSS_WEIGHTS = {"mae": 1.0, "w_mass_mmd0": 12.0, "w_mass_mmd1": 12.0}
 
 # ====== main parameters ======
 project_name = "hww_pcres_regressor"
 saved_path = f"/root/work/hww_pcres_regressor/{project_name}"
 ckpt_path = glob.glob(saved_path)
-data_path = "/root/data/mc20_truth_v4_SM.h5"
+data_path = [
+    "/root/data/danning_h5/ypeng/mc20_qe_v4_recotruth_ggF_train.h5",
+    "/root/data/danning_h5/ypeng/mc20_qe_v4_recotruth_ggF_validate.h5",
+    "/root/data/danning_h5/ypeng/mc20_qe_v4_recotruth_ggF_test.h5"
+]
 
 def main(train=True):
     if train == True:
@@ -34,30 +41,28 @@ def main(train=True):
     else:
         print("Evaluation mode, loading checkpoints...")
         
-    torch.set_float32_matmul_precision("high")
-    train_obj, target_obj = data.load_data(data_path)
-    X = train_obj.astype(np.float32)
-    Y = target_obj.astype(np.float32)
-    input_dim = X.shape[1]
+    torch.set_float32_matmul_precision("medium")
+    train_inputs, train_labels = data.load_data(data_path[0])
+    val_inputs, val_labels = data.load_data(data_path[1])
+    test_inputs, test_labels = data.load_data(data_path[2])
+    train_ds = TensorDataset(torch.from_numpy(train_inputs).float(), torch.from_numpy(train_labels).float())
+    val_ds = TensorDataset(torch.from_numpy(val_inputs).float(), torch.from_numpy(val_labels).float())
+    test_ds = TensorDataset(torch.from_numpy(test_inputs).float(), torch.from_numpy(test_labels).float())
 
-    dm = WBosonDataModule(
-        X, Y,
-        batch_size=BATCH_SIZE,
-        val_frac=0.2,
-        test_frac=0.1
-    )
+    dm = WBosonDataModule(train_ds=train_ds, val_ds=val_ds, test_ds=test_ds, batch_size=BATCH_SIZE)
     
     if train == True:
         print("Starting training...")
+        input_dim = train_inputs.shape[1]
         model = LightningWBoson(
             input_dim=input_dim,
             lr=LEARNING_RATE,
             loss_weights=LOSS_WEIGHTS
         )
 
-        ckpt = ModelCheckpoint(monitor="val_loss", mode="min", save_top_k=1, filename="reg-{epoch:02d}-{val_loss:.2f}")
+        ckpt = ModelCheckpoint(monitor="val_mae_loss", mode="min", save_top_k=1, filename="reg-{epoch:02d}-{val_mae_loss:.2f}")
         early_stopping = EarlyStopping(
-            monitor="val_loss",
+            monitor="val_mae_loss",
             patience=32,
             mode="min",
             verbose=False
