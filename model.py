@@ -14,15 +14,15 @@ class WBosonRegressor(nn.Module):
         super().__init__()
         blocks = []
         dim = input_dim
-        for _ in range(2):
-            blocks.append(ResidualBlock(dim, 256, dropout=0.25))
+        for _ in range(3):
+            blocks.append(ResidualBlock(dim, 256, dropout=0.5))
             dim = 256
-            blocks.append(ResidualBlock(dim, 512, dropout=0.25))
+            blocks.append(ResidualBlock(dim, 512, dropout=0.5))
             dim = 512
         for _ in range(3):
-            blocks.append(ResidualBlock(dim, 128, dropout=0.25))
+            blocks.append(ResidualBlock(dim, 128, dropout=0.5))
             dim = 128
-            blocks.append(ResidualBlock(dim, 64, dropout=0.25))
+            blocks.append(ResidualBlock(dim, 64, dropout=0.5))
             dim = 64
         self.trunk = nn.Sequential(*blocks)
         self.to_128 = DenseDropoutBlock(dim, 128, dropout=0.0)

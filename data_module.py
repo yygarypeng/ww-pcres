@@ -22,7 +22,7 @@ class ArrayDataset(Dataset):
 
 
 class WBosonDataModule(L.LightningDataModule):
-    def __init__(self, X, Y, batch_size=512, num_workers=4, val_frac=0.1, test_frac=0.1):
+    def __init__(self, X, Y, batch_size=512, num_workers=4, val_frac=0.05, test_frac=0.05):
         super().__init__()
         self.X = X
         self.Y = Y
@@ -43,13 +43,16 @@ class WBosonDataModule(L.LightningDataModule):
         )
 
     def train_dataloader(self):
+        print(f"Using training dataloader with {len(self.train_ds)} samples.")
         return DataLoader(self.train_ds, batch_size=self.batch_size, shuffle=True,
                             num_workers=self.num_workers, pin_memory=True)
 
     def val_dataloader(self):
+        print(f"Using validation dataloader with {len(self.val_ds)} samples.")
         return DataLoader(self.val_ds, batch_size=self.batch_size, shuffle=False,
                             num_workers=self.num_workers, pin_memory=True)
 
     def test_dataloader(self):
+        print(f"Using test dataloader with {len(self.test_ds)} samples.")
         return DataLoader(self.test_ds, batch_size=self.batch_size, shuffle=False,
                             num_workers=self.num_workers, pin_memory=True)
