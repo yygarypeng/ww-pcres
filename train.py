@@ -19,7 +19,7 @@ import load_data as data
 BATCH_SIZE = 512
 EPOCHS = 2048
 LEARNING_RATE = 1e-5
-LOSS_WEIGHTS = {"mae": 1.0, "w_mass_mmd0": 10.0, "w_mass_mmd1": 10.0}
+LOSS_WEIGHTS = {"mae": 1.0, "w_mass_mmd0": 12.0, "w_mass_mmd1": 12.0}
 
 # ====== main parameters ======
 project_name = "hww_pcres_regressor"

@@ -45,7 +45,7 @@ def load_data(data_path):
 	jet_py = data["jets"]["py"]
 	jet_pz = data["jets"]["pz"]
 	jet_energy = data["jets"]["energy"]
-	jet_pt = data["jets"]["pt"]
+	# jet_pt = data["jets"]["pt"]
 	jet_btag = data["jets"]["btag"]
 	n_jets = data["jets"]["n_jets"]
 	n_bjets = data["jets"]["n_bjets"]
@@ -66,7 +66,6 @@ def load_data(data_path):
 		col(jet_py),
 		col(jet_pz),
 		col(jet_energy),
-		col(jet_pt),
 		col(jet_btag),
 		col(n_jets),
 		col(n_bjets),

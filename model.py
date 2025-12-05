@@ -15,13 +15,11 @@ class WBosonRegressor(nn.Module):
         blocks = []
         dim = input_dim
         
-        blocks.append(ResidualBlock(dim, 1024, dropout=0.5))
-        dim = 1024
         blocks.append(ResidualBlock(dim, 512, dropout=0.5))
         dim = 512
         blocks.append(ResidualBlock(dim, 256, dropout=0.5))
         dim = 256
-        for _ in range(5):
+        for _ in range(9):
             blocks.append(ResidualBlock(dim, 128, dropout=0.5))
             dim = 128
             blocks.append(ResidualBlock(dim, 128, dropout=0.5))
