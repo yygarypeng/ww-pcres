@@ -31,11 +31,13 @@ class ResidualBlock(nn.Module):
         # two pre-activation dense blocks
         self.block1 = DenseDropoutBlock(in_dim, out_dim, dropout)
         self.block2 = DenseDropoutBlock(out_dim, out_dim, dropout)
+        self.block3 = DenseDropoutBlock(out_dim, out_dim, dropout)
 
     def forward(self, x):
         identity = self.proj(x)
         y = self.block1(x)
         y = self.block2(y)
+        # y = self.block3(y)
         return identity + y
 
 class WBosonFourVectorLayer(nn.Module):

@@ -16,19 +16,19 @@ from data_module import WBosonDataModule
 import load_data as data
 
 # ====== Hyperparameters constants ======
-BATCH_SIZE = 512
+BATCH_SIZE = 1024
 EPOCHS = 2048
 LEARNING_RATE = 1e-5
-LOSS_WEIGHTS = {"mae": 1.0, "w_mass_mmd0": 12.0, "w_mass_mmd1": 12.0}
+LOSS_WEIGHTS = {"mae": 1.0, "w_mass_mmd0": 10.0, "w_mass_mmd1": 10.0}
 
 # ====== main parameters ======
 project_name = "hww_pcres_regressor"
 saved_path = f"/root/work/hww_pcres_regressor/{project_name}"
 ckpt_path = glob.glob(saved_path)
 data_path = [
-    "/root/data/danning_h5/ypeng/mc20_qe_v4_recotruth_ggF-VBF_train.h5",
-    "/root/data/danning_h5/ypeng/mc20_qe_v4_recotruth_ggF-VBF_validate.h5",
-    "/root/data/danning_h5/ypeng/mc20_qe_v4_recotruth_ggF-VBF_test.h5"
+    "/root/data/danning_h5/ypeng/mc20_qe_v4_recotruth_ggF_train.h5",
+    "/root/data/danning_h5/ypeng/mc20_qe_v4_recotruth_ggF_validate.h5",
+    "/root/data/danning_h5/ypeng/mc20_qe_v4_recotruth_ggF_test.h5"
 ]
 
 def main(train=True):

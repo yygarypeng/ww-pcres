@@ -17,29 +17,29 @@ class WBosonRegressor(nn.Module):
         
         blocks.append(ResidualBlock(dim, 512, dropout=0.5))
         dim = 512
-        blocks.append(ResidualBlock(dim, 256, dropout=0.5))
-        dim = 256
-        for _ in range(9):
+        # blocks.append(ResidualBlock(dim, 256, dropout=0.5))
+        # dim = 256
+        for _ in range(15):
             blocks.append(ResidualBlock(dim, 128, dropout=0.5))
             dim = 128
             blocks.append(ResidualBlock(dim, 128, dropout=0.5))
             dim = 128
-        blocks.append(ResidualBlock(dim, 256, dropout=0.5))
-        dim = 256
+        # blocks.append(ResidualBlock(dim, 256, dropout=0.5))
+        # dim = 256
         blocks.append(ResidualBlock(dim, 512, dropout=0.5))
         dim = 512
         
         self.trunk = nn.Sequential(*blocks)
         self.to_128 = DenseDropoutBlock(dim, 128, dropout=0.0)
-        self.to_64 = DenseDropoutBlock(128, 64, dropout=0.0)
-        self.nu_out = nn.Linear(64, 6)
+        self.to_32 = DenseDropoutBlock(128, 32, dropout=0.0)
+        self.nu_out = nn.Linear(32, 6)
         self.w_layer = WBosonFourVectorLayer()
 
     def forward(self, x):
         lep0, lep1 = x[..., :4], x[..., 4:8]
         h = self.trunk(x)
         h = self.to_128(h)
-        h = self.to_64(h)
+        h = self.to_32(h)
         nu_3mom = self.nu_out(h)
         return self.w_layer(lep0, lep1, nu_3mom)
 

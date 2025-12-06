@@ -1,6 +1,6 @@
 input_dim: 62
 loss_weights:
   mae: 1.0
-  w_mass_mmd0: 12.0
-  w_mass_mmd1: 12.0
+  w_mass_mmd0: 10.0
+  w_mass_mmd1: 10.0
 lr: 1.0e-05
