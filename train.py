@@ -16,7 +16,7 @@ from data_module import WBosonDataModule
 import load_data as data
 
 # ====== Hyperparameters constants ======
-BATCH_SIZE = 512
+BATCH_SIZE = 1024
 EPOCHS = 2048
 LEARNING_RATE = 1e-5
 LOSS_WEIGHTS = {"mae": 1.0, "w_mass_mmd0": 12.0, "w_mass_mmd1": 12.0}
