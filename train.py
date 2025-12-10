@@ -26,9 +26,9 @@ project_name = "hww_pcres_regressor"
 saved_path = f"/root/work/hww_pcres_regressor/{project_name}"
 ckpt_path = glob.glob(saved_path)
 data_path = [
-    "/root/data/danning_h5/ypeng/mc20_qe_v4_recotruth_ggF_train.h5",
-    "/root/data/danning_h5/ypeng/mc20_qe_v4_recotruth_ggF_validate.h5",
-    "/root/data/danning_h5/ypeng/mc20_qe_v4_recotruth_ggF_test.h5"
+    "/root/data/danning_h5/ypeng/mc20_qe_v4_recotruth_ggF-VBF_train.h5",
+    "/root/data/danning_h5/ypeng/mc20_qe_v4_recotruth_ggF-VBF_validate.h5",
+    "/root/data/danning_h5/ypeng/mc20_qe_v4_recotruth_ggF-VBF_test.h5"
 ]
 
 def main(train=True):
