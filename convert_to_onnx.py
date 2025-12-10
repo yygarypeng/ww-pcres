@@ -25,15 +25,16 @@ torch.onnx.export(
     onnx_path,
     input_names=['inputs'],
     export_params=True,
-    dynamo=True,
+    dynamo=False,
     do_constant_folding=True,
-    opset_version=15,
+    opset_version=17,
 )
 
 try:
-	import onnx
-	onnx_model = onnx.load(onnx_path)
-	onnx.checker.check_model(onnx_model)
-	print("ONNX model is valid!")
+    import onnx
+    onnx_model = onnx.load(onnx_path)
+    print(f"ONNX IR Version: {onnx_model.ir_version}")
+    onnx.checker.check_model(onnx_model)
+    print("ONNX model is valid!")
 except Exception as e:
 	print(f"ONNX validation error: {e}")
