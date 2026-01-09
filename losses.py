@@ -2,7 +2,7 @@ import torch
 import torch.nn.functional as F
 
 # RBF kernel widths
-SIGMA_LST = [0.05, 0.1, 0.5, 1.0, 5.0, 10.0]
+SIGMA_LST = [0.05, 0.07, 0.1, 0.3, 0.5, 0.7, 1.0, 5.0, 7.0]
 
 
 def compute_mmd(x, y, bandwidth_range=SIGMA_LST):
@@ -42,7 +42,7 @@ def invariant_mass(fourvec):
     """
     px, py, pz, E = fourvec[..., 0], fourvec[..., 1], fourvec[..., 2], fourvec[..., 3]
     mass2 = E * E - (px * px + py * py + pz * pz)
-    return torch.sqrt(torch.clamp(mass2.abs(), min=1e-10))
+    return torch.sqrt(torch.clamp(mass2, min=1e-10))
 
 
 def mae_loss(y_true, y_pred):
@@ -93,7 +93,7 @@ def higgs_mass_loss(y_pred):
     w0, w1 = y_pred[..., :4], y_pred[..., 4:8]
     higgs_4 = w0 + w1
     h_mass = invariant_mass(higgs_4)
-    return torch.clamp(torch.mean(h_mass - 125.0).abs(), min=1e-10)
+    return torch.clamp(torch.mean((h_mass - 125.0).abs()), min=1e-10)
 
 
 def nu_mass_loss(x_batch, y_pred):
