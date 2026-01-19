@@ -1,5 +1,6 @@
-input_dim: 62
+input_dim: 60
 loss_weights:
+  higgs_mass: 0.1
   mae: 1.0
   w_mass_mmd0: 10.0
   w_mass_mmd1: 10.0

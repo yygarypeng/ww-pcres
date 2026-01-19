@@ -2,7 +2,7 @@ import torch
 import torch.nn.functional as F
 
 # RBF kernel widths
-SIGMA_LST = [0.03, 0.05, 0.07, 0.1, 0.3, 0.5, 1.0, 5.0, 10.0, 50.0]
+SIGMA_LST = [0.05, 0.1, 0.5, 1.0, 5.0]
 
 
 def compute_mmd(x, y, bandwidth_range=SIGMA_LST):

@@ -16,20 +16,16 @@ from data_module import WBosonDataModule
 import load_data as data
 
 # ====== Hyperparameters constants ======
-BATCH_SIZE = 1024
+BATCH_SIZE = 512
 EPOCHS = 2048
 LEARNING_RATE = 1e-5
-LOSS_WEIGHTS = {"mae": 1.0, "w_mass_mmd0": 10.0, "w_mass_mmd1": 10.0}
+LOSS_WEIGHTS = {"mae": 1.0, "w_mass_mmd0": 10.0, "w_mass_mmd1": 10.0, "higgs_mass": 0.1}
 
 # ====== main parameters ======
 project_name = "hww_pcres_regressor"
 saved_path = f"/root/work/hww_pcres_regressor/{project_name}"
 ckpt_path = glob.glob(saved_path)
-data_path = [
-    "/root/data/danning_h5/ypeng/mc20_qe_v4_recotruth_ggF-VBF_train.h5",
-    "/root/data/danning_h5/ypeng/mc20_qe_v4_recotruth_ggF-VBF_validate.h5",
-    "/root/data/danning_h5/ypeng/mc20_qe_v4_recotruth_ggF-VBF_test.h5"
-]
+data_path = "/root/data/danning_h5/ypeng/mc20_qe_v4_recotruth_merged.h5"
 
 def main(train=True):
     if train == True:
@@ -41,19 +37,23 @@ def main(train=True):
     else:
         print("Evaluation mode, loading checkpoints...")
         
-    torch.set_float32_matmul_precision("medium")
-    train_inputs, train_labels = data.load_data(data_path[0])
-    val_inputs, val_labels = data.load_data(data_path[1])
-    test_inputs, test_labels = data.load_data(data_path[2])
-    train_ds = TensorDataset(torch.from_numpy(train_inputs).float(), torch.from_numpy(train_labels).float())
-    val_ds = TensorDataset(torch.from_numpy(val_inputs).float(), torch.from_numpy(val_labels).float())
-    test_ds = TensorDataset(torch.from_numpy(test_inputs).float(), torch.from_numpy(test_labels).float())
+    torch.set_default_dtype(torch.float32)
+    torch.set_float32_matmul_precision("medium") # "high" is more accurate but slower
+    llvv, ww = data.load_data(data_path) # llvv, WW
+    X = llvv.astype(np.float32)
+    Y = ww.astype(np.float32)
+    dm = WBosonDataModule(
+        X, Y,
+        batch_size=BATCH_SIZE,
+        val_frac=0.1,
+        test_frac=0.1,
+    )
+    dm.setup()
 
-    dm = WBosonDataModule(train_ds=train_ds, val_ds=val_ds, test_ds=test_ds, batch_size=BATCH_SIZE)
-    
     if train == True:
         print("Starting training...")
-        input_dim = train_inputs.shape[1]
+        input_dim = X.shape[1]
+        print(f"Input dimension: {input_dim}")
         model = LightningWBoson(
             input_dim=input_dim,
             lr=LEARNING_RATE,
