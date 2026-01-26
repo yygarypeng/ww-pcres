@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import pytorch_lightning as L
 
-from layers import DenseDropoutBlock, ResidualBlock, WBosonFourVectorLayer
+from layers import DenseDropoutBlock, ResidualBlock, WBosonFourVectorLayer, Standardization
 from losses import (
     mae_loss, neg_r2_loss, w_mass_mae_losses, w_mass_mmd_losses,
     higgs_mass_loss, nu_mass_loss, dinu_pt_loss
@@ -10,43 +10,45 @@ from losses import (
 
 
 class WBosonRegressor(nn.Module):
-    def __init__(self, input_dim):
+    def __init__(self, input_dim, std_mean_train, std_scale_train):
         super().__init__()
         blocks = []
         dim = input_dim
-
-        blocks.append(ResidualBlock(dim, 512, dropout=0.3))
+        
+        # do the normalization (need to use large batch size for stable stats)
+        blocks.append(Standardization(std_mean_train, std_scale_train))
+        
+        # deep residual blocks
+        blocks.append(ResidualBlock(dim, 512, dropout=0.1))
         dim = 512
-        for _ in range(14):
-            blocks.append(ResidualBlock(dim, 128, dropout=0.3))
+        for _ in range(17):
+            blocks.append(ResidualBlock(dim, 128, dropout=0.1))
             dim = 128
-            blocks.append(ResidualBlock(dim, 128, dropout=0.3))
+            blocks.append(ResidualBlock(dim, 128, dropout=0.1))
             dim = 128
-        blocks.append(ResidualBlock(dim, 256, dropout=0.3))
+        blocks.append(ResidualBlock(dim, 256, dropout=0.1))
         dim = 256
-        # blocks.append(ResidualBlock(dim, 256, dropout=0.3))
-        # dim = 256
         
         self.trunk = nn.Sequential(*blocks)
-        self.to_128 = DenseDropoutBlock(dim, 128, dropout=0.0)
-        self.to_64 = DenseDropoutBlock(128, 64, dropout=0.0)
+        self.to_256 = DenseDropoutBlock(dim, 256, dropout=0.0)
+        self.to_64 = DenseDropoutBlock(256, 64, dropout=0.0)
         self.nu_out = nn.Linear(64, 6)
         self.w_layer = WBosonFourVectorLayer()
 
     def forward(self, x):
         lep0, lep1 = x[..., :4], x[..., 4:8]
         h = self.trunk(x)
-        h = self.to_128(h)
+        h = self.to_256(h)
         h = self.to_64(h)
         nu_3mom = self.nu_out(h)
         return self.w_layer(lep0, lep1, nu_3mom)
 
 
 class LightningWBoson(L.LightningModule):
-    def __init__(self, input_dim, lr=1e-4, loss_weights=None):
+    def __init__(self, input_dim, std_mean_train, std_scale_train, lr=1e-4, loss_weights=None):
         super().__init__()
         self.save_hyperparameters()
-        self.model = WBosonRegressor(input_dim) # give a base model structure for forward() 
+        self.model = WBosonRegressor(input_dim, std_mean_train, std_scale_train) # give a base model structure for forward() 
         defaults = {
             "mae": 1.0, "nu_mass": 0.0, "higgs_mass": 0.0,
             "w0_mass_mae": 0.0, "w1_mass_mae": 0.0,

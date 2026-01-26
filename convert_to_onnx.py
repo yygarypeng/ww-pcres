@@ -15,7 +15,7 @@ print(f"Using checkpoint: {ckpt_path}")
 model = LightningWBoson.load_from_checkpoint(ckpt_path)
 model.eval()
 
-example_input = torch.randn(train.BATCH_SIZE, 10) # dummy input with batch size and 10 features (l0, l1, met)
+example_input = torch.randn(train.BATCH_SIZE, 72) # dummy input
 example_input = example_input.to(device=model.device)
 
 onnx_path = "./hww_pcres_regressor/hww_pcrec_regressor.onnx"
@@ -27,7 +27,7 @@ torch.onnx.export(
     export_params=True,
     dynamo=True,
     do_constant_folding=True,
-    opset_version=15,
+    opset_version=17,
 )
 
 try:

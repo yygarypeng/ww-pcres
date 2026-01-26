@@ -16,10 +16,10 @@ from data_module import WBosonDataModule
 import load_data as data
 
 # ====== Hyperparameters constants ======
-BATCH_SIZE = 512
+BATCH_SIZE = 256
 EPOCHS = 2048
 LEARNING_RATE = 1e-5
-LOSS_WEIGHTS = {"mae": 1.0, "w_mass_mmd0": 10.0, "w_mass_mmd1": 10.0, "higgs_mass": 0.1}
+LOSS_WEIGHTS = {"mae": 1.0, "w_mass_mmd0": 10.0, "w_mass_mmd1": 10.0, "higgs_mass": 0.5}
 
 # ====== main parameters ======
 project_name = "hww_pcres_regressor"
@@ -39,7 +39,7 @@ def main(train=True):
         
     torch.set_default_dtype(torch.float32)
     torch.set_float32_matmul_precision("medium") # "high" is more accurate but slower
-    llvv, ww = data.load_data(data_path) # llvv, WW
+    llvv, ww, (std_mean_train, std_scale_train), _ = data.load_data(data_path) # llvv, WW
     X = llvv.astype(np.float32)
     Y = ww.astype(np.float32)
     dm = WBosonDataModule(
@@ -56,6 +56,7 @@ def main(train=True):
         print(f"Input dimension: {input_dim}")
         model = LightningWBoson(
             input_dim=input_dim,
+            std_mean_train=std_mean_train, std_scale_train=std_scale_train,
             lr=LEARNING_RATE,
             loss_weights=LOSS_WEIGHTS
         )

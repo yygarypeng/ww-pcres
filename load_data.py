@@ -1,6 +1,8 @@
 import numpy as np
 import h5py
 
+from sklearn.preprocessing import StandardScaler
+
 def load_particles_from_h5(filename):
     result = {}
 
@@ -37,6 +39,16 @@ def load_data(data_path):
 
     def col(a):
         return a.reshape(a.shape[0], -1)
+    
+    def deta(eta1, eta2):
+        return np.abs(eta1 - eta2)
+
+    def dphi_pi(phi1, phi2):
+        phi_diff = phi1 - phi2
+        phi_diff = np.where(phi_diff < 0.0, -phi_diff, phi_diff)
+        phi_diff = np.where(phi_diff > 2.0 * np.pi, phi_diff - 2.0 * np.pi, phi_diff)
+        phi_diff = np.where(phi_diff >= np.pi, 2.0 * np.pi - phi_diff, phi_diff)
+        return np.divide(phi_diff, np.pi)
 
     # Collect all training and target objects from all categories
     all_train_objs = []
@@ -55,10 +67,24 @@ def load_data(data_path):
         lep_neg_py = category_data["neg_lep"]["py"]
         lep_neg_pz = category_data["neg_lep"]["pz"]
         lep_neg_energy = category_data["neg_lep"]["energy"]
+        
+        lep_pos_pt = category_data["pos_lep"]["pt"]
+        lep_neg_pt = category_data["neg_lep"]["pt"]
+        lep_pos_eta = category_data["pos_lep"]["eta"]
+        lep_neg_eta = category_data["neg_lep"]["eta"]
+        lep_pos_phi = category_data["pos_lep"]["phi"]
+        lep_neg_phi = category_data["neg_lep"]["phi"]
 
         met_px = category_data["met"]["px"]
         met_py = category_data["met"]["py"]
-
+        met_pt = category_data["met"]["pt"]
+        met_phi = category_data["met"]["phi"]
+        
+        dphi_l1met = dphi_pi(lep_pos_phi, met_phi)
+        dphi_l2met = dphi_pi(lep_neg_phi, met_phi)
+        dphi_l1l2 = dphi_pi(lep_pos_phi, lep_neg_phi)
+        deta_l1l2 = deta(lep_pos_eta, lep_neg_eta)  
+        
         jet_px = category_data["jets"]["px"]
         jet_py = category_data["jets"]["py"]
         jet_pz = category_data["jets"]["pz"]
@@ -78,7 +104,19 @@ def load_data(data_path):
             col(lep_neg_pz),
             col(lep_neg_energy),
             col(met_px),
-            col(met_py),
+            col(met_py), # 10
+            col(lep_pos_pt),
+            col(lep_neg_pt),
+            col(lep_pos_eta),
+            col(lep_neg_eta),
+            col(lep_pos_phi),
+            col(lep_neg_phi),
+            col(met_pt),
+            col(met_phi),
+            col(dphi_l1met),
+            col(dphi_l2met),
+            col(dphi_l1l2),
+            col(deta_l1l2),
             col(jet_px),
             col(jet_py),
             col(jet_pz),
@@ -122,8 +160,14 @@ def load_data(data_path):
     target_obj = target_obj[valid_idx]
 
     print("Removed", (~valid_idx).sum(), "rows with NaN or infinite values")
+    
+    _ = StandardScaler().fit_transform(train_obj)
+    std_mean_train, std_scale_train = StandardScaler().fit(train_obj).mean_, StandardScaler().fit(train_obj).scale_
+    _ = StandardScaler().fit_transform(target_obj)
+    std_mean_target, std_scale_target = StandardScaler().fit(target_obj).mean_, StandardScaler().fit(target_obj).scale_
 
-    return train_obj, target_obj
+
+    return train_obj, target_obj, (std_mean_train, std_scale_train), (std_mean_target, std_scale_target)
 
 if __name__ == "__main__":
     from matplotlib import pyplot as plt

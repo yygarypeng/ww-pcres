@@ -1,7 +1,70 @@
-input_dim: 60
+input_dim: 72
 loss_weights:
-  higgs_mass: 0.1
+  higgs_mass: 0.5
   mae: 1.0
   w_mass_mmd0: 10.0
   w_mass_mmd1: 10.0
 lr: 1.0e-05
+std_mean_train: !!python/object/apply:numpy._core.multiarray._reconstruct
+  args:
+  - &id001 !!python/name:numpy.ndarray ''
+  - !!python/tuple
+    - 0
+  - !!binary |
+    Yg==
+  state: !!python/tuple
+  - 1
+  - !!python/tuple
+    - 72
+  - &id002 !!python/object/apply:numpy.dtype
+    args:
+    - f8
+    - false
+    - true
+    state: !!python/tuple
+    - 3
+    - <
+    - null
+    - null
+    - null
+    - -1
+    - -1
+    - 0
+  - false
+  - !!binary |
+    GZ8BHdaTxr8gfev0N4mOPwHiMUm5j9U/MzOFWj2QU0Cm2F5rpKi0v27uDc4JbGK/aQf3hTcp3j8y
+    UDASg5BTQIwfmnA2dJa/UUKXxC3/27+vzoGeOaZFQEisCmtDqEVAkPneTLl5ej/9jFxMOwB6P52v
+    0OJuWGs/gEU9Owkpbj9AsOYbVPtJQAotyY7/IZG/KFoW5VmV4z/EUY2nyJHjP3M8jZhfh9M/Hw8G
+    rDX/3T8YaScKiCvCP4H1DQz0KLI/5Aa8qCTggb9bYQWVqNE7v8bUPgsaJGQ/Fa0Jb0/IYL//eor6
+    /opAv/wUg2F0By4/h8uXS7qyI78/2XRB4WkkP2WW2YgYwcA/FfYPVkDVsz+9AVfWnKFtP/VaA3uE
+    OXE/ntY9MV1dXL+jsWMfMNs9P9CDZP4WXzw/sGlD+Eg4UD/BGxgiiToCP3v1zFLUrQU/s5Xb6obq
+    07/OJracWNSiv+w4uQqx9KC/XpqfkfWrWj+1nGLAdJNgv/MJuy8qZnG/vbBvzXvEY79QLWqc4A5k
+    v/V6K9v7PjO/w4wsHMc/QL+fGo5aD8VbQB8bsyGpMTtAYlXq8WQ7GkBJPeYG2sL6P9p+LOxLmNk/
+    UkSpIq58tz+SYWlQwliVP7maBbuwoXo/hegzqJltYT/f3/gEVvBBP5jEdz46ZpQ/5j1wwd8ygz9Y
+    lccewhNoPz392tWdNE0/Go+d496OMT/tOQjerPwPP+VexFGW0Os+AAAAAAAAAAAAAAAAAAAAAITl
+    aUF4QMY+
+std_scale_train: !!python/object/apply:numpy._core.multiarray._reconstruct
+  args:
+  - *id001
+  - !!python/tuple
+    - 0
+  - !!binary |
+    Yg==
+  state: !!python/tuple
+  - 1
+  - !!python/tuple
+    - 72
+  - *id002
+  - false
+  - !!binary |
+    TxWvmeN9QUCmKzSUM4RBQJaPBPuAyVVATdu1Q6FQT0CzHpTgFoRBQHhkTmaLgkFAhcGV+67JVUCu
+    XYrjElNPQNC4nkyqYkZAzifEqTODRkC2eu7mJwI4QAwhUijqBzhAELFHU/Y/8j+smSg9wDnyP/ZF
+    56MKFf0/XrucVfEM/T/Tsq4k+T5CQOfvSKHxBf0/shnzId+c0j+gRv12P6HSP6Cfw4Ze7c8/j2gV
+    vmj81j9fUUKS4o9OQJ8aA6vghjVASfbxoGNWIUAoZDZEqY4PQLWcfBL8UP0/ht1Wm3ZK6z+hySha
+    CYDcP5RBFY2tX8g/CNzukhiMuT8BhyMhFVCxP5lt+P5poE5AiZ78FcWJNUD2j8ICwmYhQCIAusPr
+    3g9AR7fpOEXS/T8OXtNGxoLrP5pmy5Ir/dg/Y6O2f8axyj9apg0gUxe/P6pmu8Big5I/I1mmQzL0
+    ZkCWEUW5hU5RQDOXkW7O6TxAEtuiR9GbKkDC1igx/5oYQDasPoa5uQVAuDmIMq+t9T+LlwvNLMbq
+    P/CuL/g3Lt8/DwJt7Rl20T9nzY+fkEhlQGo+NZrCrVFA6xBWwuHJPkDp9KBQIr8sQOAx+ZaawBpA
+    TnexCz/YB0BHAPD76bf3P1+91pw0Tew/bQQhlk9p4D+vUd/CgAvSPyFR/N6o4sE/PkAVU3mruD9d
+    kDWhbberPw74rGamjp4/CQOGaDrCkD9F0a5tFv5/P9RBfHl61W0/AAAAAAAA8D8AAAAAAADwP4Vv
+    KWE0r1o/

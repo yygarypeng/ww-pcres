@@ -31,7 +31,6 @@ class ResidualBlock(nn.Module):
         # two pre-activation dense blocks
         self.block1 = DenseDropoutBlock(in_dim, out_dim, dropout)
         self.block2 = DenseDropoutBlock(out_dim, out_dim, dropout)
-        self.block3 = DenseDropoutBlock(out_dim, out_dim, dropout)
 
     def forward(self, x):
         identity = self.proj(x)
@@ -47,8 +46,8 @@ class WBosonFourVectorLayer(nn.Module):
     def forward(self, lep0, lep1, nu_3mom):
         nu0_3, nu1_3 = nu_3mom[..., :3], nu_3mom[..., 3:]
         # neutrino energies as |p| for (approx) massless
-        nu0_E = torch.sqrt(torch.clamp(torch.sum(nu0_3 ** 2, dim=-1, keepdim=True), min=1e-10))
-        nu1_E = torch.sqrt(torch.clamp(torch.sum(nu1_3 ** 2, dim=-1, keepdim=True), min=1e-10))
+        nu0_E = torch.sqrt(torch.clamp(torch.sum(nu0_3 ** 2, dim=-1, keepdim=True), min=1e-16))
+        nu1_E = torch.sqrt(torch.clamp(torch.sum(nu1_3 ** 2, dim=-1, keepdim=True), min=1e-16))
         nu0_4 = torch.cat([nu0_3, nu0_E], dim=-1)
         nu1_4 = torch.cat([nu1_3, nu1_E], dim=-1)
         # output concat: [ (lep0 + nu0_4), (lep1 + nu1_4) ] => shape (..., 8)
@@ -61,3 +60,14 @@ class WBosonFourVectorLayer(nn.Module):
         # m_h = 125.0
         # nu1_e = torch.sqrt(torch.clamp(torch.sum(h_3[..., :3]**2, dim=-1) + m_h**2, min=1e-10)) - (lep0[..., 3] + nu0_4[..., 3]) - lep1[..., 3]
         return torch.cat([lep0 + nu0_4, lep1 + nu1_4], dim=-1)
+    
+class Standardization(nn.Module):
+    def __init__(self, mean, std, eps=1e-16):
+        super().__init__()
+        self.register_buffer("mean", torch.as_tensor(mean, dtype=torch.float32))
+        self.register_buffer("std", torch.as_tensor(std, dtype=torch.float32))
+        self.eps = eps
+
+    def forward(self, x):
+        return (x - self.mean) / (self.std + self.eps)
+
