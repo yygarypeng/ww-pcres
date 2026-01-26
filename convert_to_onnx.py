@@ -12,11 +12,11 @@ if not ckpt_files:
 ckpt_path = ckpt_files[0]  # Use the first checkpoint found
 print(f"Using checkpoint: {ckpt_path}")
 
-model = LightningWBoson.load_from_checkpoint(ckpt_path)
+model = LightningWBoson.load_from_checkpoint(ckpt_path, map_location="cpu")
 model.eval()
+model.to(torch.device("cpu"))
 
-example_input = torch.randn(train.BATCH_SIZE, 72) # dummy input
-example_input = example_input.to(device=model.device)
+example_input = torch.randn(train.BATCH_SIZE, 72, device="cpu") # dummy input
 
 onnx_path = "./hww_pcres_regressor/hww_pcrec_regressor.onnx"
 torch.onnx.export(
@@ -25,7 +25,8 @@ torch.onnx.export(
     onnx_path,
     input_names=['inputs'],
     export_params=True,
-    dynamo=True,
+    training=torch.onnx.TrainingMode.EVAL,
+    dynamo=False,
     do_constant_folding=True,
     opset_version=17,
 )
