@@ -94,6 +94,7 @@ def load_data(data_path):
         n_bjets = category_data["jets"]["n_bjets"]
 
         # pack them
+        # all training mass-like objects are in GeV unit
         train_obj = np.concatenate([
             col(lep_pos_px),
             col(lep_pos_py),
@@ -104,7 +105,7 @@ def load_data(data_path):
             col(lep_neg_pz),
             col(lep_neg_energy),
             col(met_px),
-            col(met_py), # 10
+            col(met_py),
             col(lep_pos_pt),
             col(lep_neg_pt),
             col(lep_pos_eta),
@@ -113,9 +114,11 @@ def load_data(data_path):
             col(lep_neg_phi),
             col(met_pt),
             col(met_phi),
-            col(dphi_l1met),
+            # dphi has normalized to pi; ie. range [0, 1]
+            col(dphi_l1met), # l1 -> pos_lep; l2 -> neg_lep 
             col(dphi_l2met),
             col(dphi_l1l2),
+            # deta has absolute value; ie, range [0, inf)
             col(deta_l1l2),
             col(jet_px),
             col(jet_py),
