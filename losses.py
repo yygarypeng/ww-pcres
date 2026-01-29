@@ -42,7 +42,7 @@ def invariant_mass(fourvec):
     """
     px, py, pz, E = fourvec[..., 0], fourvec[..., 1], fourvec[..., 2], fourvec[..., 3]
     mass2 = E * E - (px * px + py * py + pz * pz)
-    return torch.sqrt(torch.clamp(mass2, min=1e-10))
+    return torch.sqrt(mass2.abs().clamp(min=1e-10))
 
 
 def mae_loss(y_true, y_pred):
