@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import pytorch_lightning as L
 
-from layers import DenseDropoutBlock, ResidualBlock, WBosonFourVectorLayer, Standardization
+from layers import DenseDropoutBlock, ResidualBlock, WBosonFourVectorLayer, Standardization, FeatureAttention
 from losses import (
     mae_loss, neg_r2_loss, w_mass_mae_losses, w_mass_mmd_losses,
     higgs_mass_loss, nu_mass_loss, dinu_pt_loss
@@ -30,6 +30,7 @@ class WBosonRegressor(nn.Module):
         dim = 256
         
         self.trunk = nn.Sequential(*blocks)
+        self.attention = FeatureAttention(dim)
         self.to_256 = DenseDropoutBlock(dim, 256, dropout=0.0)
         self.to_64 = DenseDropoutBlock(256, 64, dropout=0.0)
         self.nu_out = nn.Linear(64, 6)
@@ -100,4 +101,5 @@ class LightningWBoson(L.LightningModule):
         return total
 
     def configure_optimizers(self):
-        return torch.optim.Adam(self.parameters(), lr=self.lr)
+        # return torch.optim.Adam(self.parameters(), lr=self.lr)
+        return torch.optim.AdamW(self.parameters(), lr=self.hparams.lr, weight_decay=1e-4)

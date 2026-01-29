@@ -5,17 +5,17 @@ import torch.nn as nn
 class DenseDropoutBlock(nn.Module):
     """
     Pre-activation block:
-        BN(in_dim) -> SiLU -> Linear(in_dim -> out_dim) -> Dropout
+        LN(in_dim) -> SiLU -> Linear(in_dim -> out_dim) -> Dropout
     """
     def __init__(self, in_dim, out_dim, dropout=0.0):
         super().__init__()
-        self.bn = nn.BatchNorm1d(in_dim)
+        self.ln = nn.LayerNorm(in_dim)
         self.act = nn.SiLU()
         self.fc = nn.Linear(in_dim, out_dim)
         self.drop = nn.Dropout(dropout) if dropout and dropout > 0 else nn.Identity()
 
     def forward(self, x):
-        y = self.bn(x)
+        y = self.ln(x)
         y = self.act(y)
         y = self.fc(y)
         y = self.drop(y)
@@ -36,7 +36,6 @@ class ResidualBlock(nn.Module):
         identity = self.proj(x)
         y = self.block1(x)
         y = self.block2(y)
-        # y = self.block3(y)
         return identity + y
 
 class WBosonFourVectorLayer(nn.Module):
@@ -50,15 +49,6 @@ class WBosonFourVectorLayer(nn.Module):
         nu1_E = torch.sqrt(torch.clamp(torch.sum(nu1_3 ** 2, dim=-1, keepdim=True), min=1e-16))
         nu0_4 = torch.cat([nu0_3, nu0_E], dim=-1)
         nu1_4 = torch.cat([nu1_3, nu1_E], dim=-1)
-        # output concat: [ (lep0 + nu0_4), (lep1 + nu1_4) ] => shape (..., 8)
-        # # TODO: higgs constraint
-        # # if nu_1 is [px, py] only, 
-        # # compute pz and energy from higgs mass and massless neutrino constraints
-        # w0_3 = lep0[..., :3] + nu0_4[..., :3]
-        # w1_3 = lep1[..., :3] + nu1_4[..., :3]
-        # h_3 = w0_3 + w1_3
-        # m_h = 125.0
-        # nu1_e = torch.sqrt(torch.clamp(torch.sum(h_3[..., :3]**2, dim=-1) + m_h**2, min=1e-10)) - (lep0[..., 3] + nu0_4[..., 3]) - lep1[..., 3]
         return torch.cat([lep0 + nu0_4, lep1 + nu1_4], dim=-1)
     
 class Standardization(nn.Module):
@@ -71,3 +61,14 @@ class Standardization(nn.Module):
     def forward(self, x):
         return (x - self.mean) / (self.std + self.eps)
 
+class FeatureAttention(nn.Module):
+    def __init__(self, dim, reduction=4):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(dim, dim // reduction),
+            nn.SiLU(),
+            nn.Linear(dim // reduction, dim // reduction),
+            nn.SiLU(),
+            nn.Linear(dim // reduction, dim),
+            nn.Sigmoid()
+        )

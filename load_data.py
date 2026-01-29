@@ -183,6 +183,3 @@ if __name__ == "__main__":
     plt.xlabel("W mass [GeV]")
     plt.ylabel("Entries")
     plt.legend()
-    plt.savefig("w_mass.png")
-    # print("Train objects:", train_obj)
-    # print("Target objects:", target_obj)

@@ -42,7 +42,7 @@ def invariant_mass(fourvec):
     """
     px, py, pz, E = fourvec[..., 0], fourvec[..., 1], fourvec[..., 2], fourvec[..., 3]
     mass2 = E * E - (px * px + py * py + pz * pz)
-    return torch.sqrt(torch.clamp(mass2, min=1e-10))
+    return torch.sqrt(mass2.abs().clamp(min=1e-16))
 
 
 def mae_loss(y_true, y_pred):
@@ -94,7 +94,7 @@ def higgs_mass_loss(y_pred):
     w0, w1 = y_pred[..., :4], y_pred[..., 4:8]
     higgs_4 = w0 + w1
     h_mass = invariant_mass(higgs_4)
-    return torch.clamp(torch.mean(h_mass - 125.0).abs(), min=1e-10)
+    return torch.clamp(torch.mean(h_mass - 125.0).abs(), min=1e-16)
 
 
 def nu_mass_loss(x_batch, y_pred):
