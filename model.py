@@ -97,4 +97,4 @@ class LightningWBoson(L.LightningModule):
 
     def configure_optimizers(self):
         # return torch.optim.AdamW(self.parameters(), lr=self.lr)
-        return torch.optim.AdamW(self.parameters(), lr=self.lr, weight_decay=1e-4)
+        return torch.optim.AdamW(self.parameters(), lr=self.lr, weight_decay=5e-4)

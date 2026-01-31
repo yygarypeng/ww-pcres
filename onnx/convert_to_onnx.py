@@ -1,40 +1,71 @@
 import glob
 import torch
+import sys
+sys.path.append('..')
+
 from model import LightningWBoson
 import train
 
-# https://docs.pytorch.org/docs/2.8/onnx.html
+# -----------------------
+# Config
+# -----------------------
+INPUT_DIM = 10          # feature dimension
+EXPORT_BATCH = 1        # dummy batch size (can be anything)
+ONNX_PATH = "./hww_pcres_regressor.onnx"
 
-# Find the checkpoint
-ckpt_files = glob.glob(f"./hww_pcres_regressor/logs/version_0/checkpoints/*")
-if not ckpt_files: 
-    raise FileNotFoundError(f"No checkpoint files found in checkpoints")
-ckpt_path = ckpt_files[0]  # Use the first checkpoint found
+# -----------------------
+# Find checkpoint
+# -----------------------
+ckpt_files = glob.glob("../hww_pcres_regressor/logs/version_0/checkpoints/*")
+if not ckpt_files:
+    raise FileNotFoundError("No checkpoint files found")
+
+ckpt_path = ckpt_files[0]
 print(f"Using checkpoint: {ckpt_path}")
 
-model = LightningWBoson.load_from_checkpoint(ckpt_path)
+# -----------------------
+# Load model
+# -----------------------
+model = LightningWBoson.load_from_checkpoint(
+    ckpt_path,
+    map_location="cpu"
+)
 model.eval()
+model.to("cpu")
 
-example_input = torch.randn(train.BATCH_SIZE, 10) # dummy input with batch size and 10 features (l0, l1, met)
-example_input = example_input.to(device=model.device)
+# -----------------------
+# Dummy input (batch=1)
+# -----------------------
+example_input = torch.randn(EXPORT_BATCH, INPUT_DIM, device="cpu")
 
-onnx_path = "./hww_pcres_regressor/hww_pcrec_regressor.onnx"
+# -----------------------
+# Export to ONNX
+# -----------------------
 torch.onnx.export(
     model,
     example_input,
-    onnx_path,
-    input_names=['inputs'],
+    ONNX_PATH,
+    input_names=["inputs"],
+    output_names=["outputs"],
     export_params=True,
-    dynamo=False,
+    training=torch.onnx.TrainingMode.EVAL,
     do_constant_folding=True,
-    opset_version=17,
+    opset_version=11,
+    dynamic_axes={
+        "inputs": {0: "batch_size"},
+        "outputs": {0: "batch_size"},
+    },
 )
 
+print(f"ONNX model exported to {ONNX_PATH}")
+
+# -----------------------
+# Validate ONNX
+# -----------------------
 try:
     import onnx
-    onnx_model = onnx.load(onnx_path)
-    print(f"ONNX IR Version: {onnx_model.ir_version}")
+    onnx_model = onnx.load(ONNX_PATH)
     onnx.checker.check_model(onnx_model)
-    print("ONNX model is valid!")
+    print("ONNX model is valid and has dynamic batch size!")
 except Exception as e:
-	print(f"ONNX validation error: {e}")
+    print(f"ONNX validation error: {e}")
