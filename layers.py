@@ -52,3 +52,39 @@ class WBosonFourVectorLayer(nn.Module):
         nu1_4 = torch.cat([nu1_3, nu1_E], dim=-1)
         # output concat: [ (lep0 + nu0_4), (lep1 + nu1_4) ] => shape (..., 8)
         return torch.cat([lep0 + nu0_4, lep1 + nu1_4], dim=-1)
+
+
+class SEBlock(nn.Module):
+    def __init__(self, dim, reduction=16):
+        super().__init__()
+        self.fc = nn.Sequential(
+            nn.Linear(dim, dim // reduction, bias=False), # tuen off bias for signal preserving
+            nn.SiLU(),
+            nn.Linear(dim // reduction, dim, bias=False),
+            nn.Sigmoid()
+        )
+        self.norm = nn.LayerNorm(dim)
+
+    def forward(self, x):
+        # x: (B, D)
+        w = self.fc(x)
+        return self.norm(x + x * w)
+
+
+class FeatureAttention(nn.Module):
+    def __init__(self, dim):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(dim, dim),
+
+            ResidualBlock(dim, dim),
+            SEBlock(dim),
+            ResidualBlock(dim, dim),
+
+            nn.Linear(dim, dim),
+        )
+        
+        self.norm = nn.LayerNorm(dim)
+
+    def forward(self, x):
+        return self.norm(x * self.net(x))

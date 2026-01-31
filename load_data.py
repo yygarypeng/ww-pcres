@@ -48,18 +48,18 @@ def load_data(data_path):
 	del (cut_pre_pt_lead, cut_pre_pt_sub, cut_pre_dilep_m, cut_pre_pt_miss)
 
 	# training objects
-	lead_lep_px = truth_lead_lep["px"][pre_cut]
-	lead_lep_py = truth_lead_lep["py"][pre_cut]
-	lead_lep_pz = truth_lead_lep["pz"][pre_cut]
-	lead_lep_energy = truth_lead_lep["energy"][pre_cut]
-	sublead_lep_px = truth_sublead_lep["px"][pre_cut]
-	sublead_lep_py = truth_sublead_lep["py"][pre_cut]
-	sublead_lep_pz = truth_sublead_lep["pz"][pre_cut]
-	sublead_lep_energy = truth_sublead_lep["energy"][pre_cut]
-	lead_nu_px = truth_lead_nu["px"][pre_cut]
-	lead_nu_py = truth_lead_nu["py"][pre_cut]
-	sublead_nu_px = truth_sublead_nu["px"][pre_cut]
-	sublead_nu_py = truth_sublead_nu["py"][pre_cut]
+	lead_lep_px = truth_lead_lep["px"]
+	lead_lep_py = truth_lead_lep["py"]
+	lead_lep_pz = truth_lead_lep["pz"]
+	lead_lep_energy = truth_lead_lep["energy"]
+	sublead_lep_px = truth_sublead_lep["px"]
+	sublead_lep_py = truth_sublead_lep["py"]
+	sublead_lep_pz = truth_sublead_lep["pz"]
+	sublead_lep_energy = truth_sublead_lep["energy"]
+	lead_nu_px = truth_lead_nu["px"]
+	lead_nu_py = truth_lead_nu["py"]
+	sublead_nu_px = truth_sublead_nu["px"]
+	sublead_nu_py = truth_sublead_nu["py"]
 	met_px = lead_nu_px + sublead_nu_px
 	met_py = lead_nu_py + sublead_nu_py
 	# pack them
@@ -85,16 +85,16 @@ def load_data(data_path):
 	#  pack them
 	target_obj = np.column_stack(
 		(
-			w_lead["px"][pre_cut],
-			w_lead["py"][pre_cut],
-			w_lead["pz"][pre_cut],
-			w_lead["energy"][pre_cut],
-			w_sublead["px"][pre_cut],
-			w_sublead["py"][pre_cut],
-			w_sublead["pz"][pre_cut],
-			w_sublead["energy"][pre_cut],
-			w_lead["m"][pre_cut],
-			w_sublead["m"][pre_cut],
+			w_lead["px"],
+			w_lead["py"],
+			w_lead["pz"],
+			w_lead["energy"],
+			w_sublead["px"],
+			w_sublead["py"],
+			w_sublead["pz"],
+			w_sublead["energy"],
+			w_lead["m"],
+			w_sublead["m"],
 		)
 	)
 	print("Target objects shape:", target_obj.shape)

@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import pytorch_lightning as L
 
-from layers import DenseDropoutBlock, ResidualBlock, WBosonFourVectorLayer
+from layers import DenseDropoutBlock, ResidualBlock, WBosonFourVectorLayer, FeatureAttention
 from losses import (
     mae_loss, neg_r2_loss, w_mass_mae_losses, w_mass_mmd_losses,
     higgs_mass_loss, nu_mass_loss, dinu_pt_loss
@@ -14,20 +14,17 @@ class WBosonRegressor(nn.Module):
         super().__init__()
         blocks = []
         dim = input_dim
-        blocks.append(ResidualBlock(dim, 1024, dropout=0.3))
-        dim = 1024
-        blocks.append(ResidualBlock(dim, 512, dropout=0.3))
+        blocks.append(ResidualBlock(dim, 512, dropout=0.1))
         dim = 512
-        for _ in range(8):
-            blocks.append(ResidualBlock(dim, 128, dropout=0.3))
+        for _ in range(17):
+            blocks.append(ResidualBlock(dim, 128, dropout=0.1))
             dim = 128
-            blocks.append(ResidualBlock(dim, 128, dropout=0.3))
+            blocks.append(ResidualBlock(dim, 128, dropout=0.1))
             dim = 128
-        blocks.append(ResidualBlock(dim, 256, dropout=0.3))
+        blocks.append(ResidualBlock(dim, 256, dropout=0.1))
         dim = 256
-        blocks.append(ResidualBlock(dim, 512, dropout=0.3))
-        dim = 512
         self.trunk = nn.Sequential(*blocks)
+        self.attn = FeatureAttention(dim)
         self.to_128 = DenseDropoutBlock(dim, 128, dropout=0.0)
         self.to_32 = DenseDropoutBlock(128, 32, dropout=0.0)
         self.nu_out = nn.Linear(32, 6)
@@ -36,6 +33,7 @@ class WBosonRegressor(nn.Module):
     def forward(self, x):
         lep0, lep1 = x[..., :4], x[..., 4:8]
         h = self.trunk(x)
+        h = self.attn(h)
         h = self.to_128(h)
         h = self.to_32(h)
         nu_3mom = self.nu_out(h)
