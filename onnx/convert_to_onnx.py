@@ -9,14 +9,15 @@ import train
 # -----------------------
 # Config
 # -----------------------
-INPUT_DIM = 72          # feature dimension
+fold = "fold0"
+INPUT_DIM = 26          # feature dimension
 EXPORT_BATCH = 1        # dummy batch size (can be anything)
-ONNX_PATH = "./hww_pcres_regressor.onnx"
+ONNX_PATH = f"./hww_pcres_regressor_reco_{fold}.onnx"
 
 # -----------------------
 # Find checkpoint
 # -----------------------
-ckpt_files = glob.glob("../hww_pcres_regressor/logs/version_0/checkpoints/*")
+ckpt_files = glob.glob(f"../hww_pcres_regressor_kfold/{fold}/version_0/checkpoints/*")
 if not ckpt_files:
     raise FileNotFoundError("No checkpoint files found")
 
@@ -28,7 +29,9 @@ print(f"Using checkpoint: {ckpt_path}")
 # -----------------------
 model = LightningWBoson.load_from_checkpoint(
     ckpt_path,
-    map_location="cpu"
+    map_location="cpu",
+    weights_only=False, 
+    strict=False
 )
 model.eval()
 model.to("cpu")

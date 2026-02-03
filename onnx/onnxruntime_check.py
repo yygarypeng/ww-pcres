@@ -16,7 +16,8 @@ torch.manual_seed(0)
 
 
 # Path to the ONNX model
-onnx_path = "./hww_pcres_regressor.onnx"
+fold = "fold0"
+onnx_path = f"./hww_pcres_regressor_reco_{fold}.onnx"
 print(f"Loading ONNX model from {onnx_path}")
 # Load the ONNX model
 # print(onnxruntime.get_available_providers()) # debug: check available providers
@@ -27,7 +28,7 @@ ort_session = onnxruntime.InferenceSession(
 
 # Create sample input (match the dimensions used during export `example_input`)
 batch_size = train.BATCH_SIZE
-num_features = 72
+num_features = 26
 test_input = np.random.randn(batch_size, num_features).astype(np.float32)
 
 # Run inference with ONNX Runtime
@@ -43,13 +44,13 @@ print(f"ONNX model output shape: {ort_result.shape}")
 
 try:
     # Find the checkpoint (search all versions)
-    ckpt_files = glob.glob("../hww_pcres_regressor/logs/**/checkpoints/*.ckpt")
+    ckpt_files = glob.glob(f"../hww_pcres_regressor_kfold/{fold}/**/checkpoints/*.ckpt")
     if ckpt_files:
         ckpt_path = ckpt_files[0]
         print(f"\nComparing with original PyTorch model from {ckpt_path}")
 
         # Load the PyTorch model on CPU
-        pytorch_model = LightningWBoson.load_from_checkpoint(ckpt_path, map_location=torch.device('cpu'))
+        pytorch_model = LightningWBoson.load_from_checkpoint(ckpt_path, map_location=torch.device('cpu'), weights_only=False, strict=False)
         pytorch_model.eval()
 
         torch_input = torch.tensor(test_input, dtype=torch.float32)

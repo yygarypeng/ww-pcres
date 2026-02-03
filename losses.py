@@ -49,6 +49,9 @@ def mae_loss(y_true, y_pred):
     # do not consider mass targets in y_true
     return F.l1_loss(y_pred[..., :8], y_true[..., :8])
 
+def huber_loss(y_true, y_pred):
+    # do not consider mass targets in y_true
+    return F.huber_loss(y_pred[..., :8], y_true[..., :8])
 
 def neg_r2_loss(y_true, y_pred):
     y_t = y_true[..., :8]

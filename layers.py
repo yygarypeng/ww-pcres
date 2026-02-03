@@ -9,17 +9,15 @@ class DenseDropoutBlock(nn.Module):
     """
     def __init__(self, in_dim, out_dim, dropout=0.0):
         super().__init__()
-        self.ln = nn.LayerNorm(in_dim)
-        self.act = nn.SiLU()
-        self.fc = nn.Linear(in_dim, out_dim)
-        self.drop = nn.Dropout(dropout) if dropout and dropout > 0 else nn.Identity()
+        self.net = nn.Sequential(
+            nn.LayerNorm(in_dim),
+            nn.SiLU(),
+            nn.Linear(in_dim, out_dim),
+            nn.Dropout(dropout) if dropout and dropout > 0 else nn.Identity(),
+        )
 
     def forward(self, x):
-        y = self.ln(x)
-        y = self.act(y)
-        y = self.fc(y)
-        y = self.drop(y)
-        return y
+        return self.net(x)
 
 class ResidualBlock(nn.Module):
     def __init__(self, in_dim, out_dim, dropout=0.0):
@@ -62,13 +60,16 @@ class Standardization(nn.Module):
         return (x - self.mean) / (self.std + self.eps)
 
 class FeatureAttention(nn.Module):
-    def __init__(self, dim, reduction=4):
+    def __init__(self, dim, reduction=16):
         super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(dim, dim // reduction),
+        self.fc = nn.Sequential(
+            nn.Linear(dim, dim // reduction, bias=False), # tuen off bias for signal preserving
             nn.SiLU(),
-            nn.Linear(dim // reduction, dim // reduction),
-            nn.SiLU(),
-            nn.Linear(dim // reduction, dim),
+            nn.Linear(dim // reduction, dim, bias=False),
             nn.Sigmoid()
         )
+        self.norm = nn.LayerNorm(dim)
+    def forward(self, x):
+        # x: (B, D)
+        w = self.fc(x)
+        return self.norm(x + x * w)

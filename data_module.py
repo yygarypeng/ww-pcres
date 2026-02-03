@@ -2,13 +2,13 @@ import os
 import numpy as np
 
 import torch
-from torch.utils.data import Dataset, DataLoader, random_split
+from torch.utils.data import Dataset, DataLoader, random_split, Subset
 import pytorch_lightning as L
+
 
 class ArrayDataset(Dataset):
     def __init__(self, X, Y):
         super().__init__()
-        
         self.X = torch.as_tensor(X, dtype=torch.float32)
         self.Y = torch.as_tensor(Y, dtype=torch.float32)
 
@@ -20,81 +20,111 @@ class ArrayDataset(Dataset):
 
 
 class WBosonDataModule(L.LightningDataModule):
+    """
+    Supports BOTH:
+        1) Random split via val_frac / test_frac
+        2) Explicit KFold splits via train_idx / val_idx
+    """
+
     def __init__(
-        self, 
-        X, Y, 
-        batch_size=512, 
-        val_frac=0.1, test_frac=0.1, 
-        num_workers=None, 
-        pin_memory=True,
+        self,
+        X,
+        Y,
+        batch_size=512,
+        val_frac=0.1,
+        test_frac=0.1,
+        train_idx=None,
+        val_idx=None,
+        test_idx=None,
+        num_workers=None,
+        pin_memory=False, # avoid seg faults
         prefetch_factor=4,
     ):
         super().__init__()
+
         self.X = X
         self.Y = Y
         self.batch_size = batch_size
-        
-        # Set reasonable default for num_workers
+
+        self.val_frac = val_frac
+        self.test_frac = test_frac
+
+        self.train_idx = train_idx
+        self.val_idx = val_idx
+        self.test_idx = test_idx
+
+        self.pin_memory = pin_memory
+        self.prefetch_factor = prefetch_factor
+
         if num_workers is None:
-            # Use 80% of available cores to prevent system overload
             self.num_workers = max(1, int(os.cpu_count() * 0.8))
             print(f"Setting num_workers to {self.num_workers}")
         else:
             self.num_workers = num_workers
-            
-        self.val_frac = val_frac
-        self.test_frac = test_frac
-        self.pin_memory = pin_memory
-        self.prefetch_factor = prefetch_factor
 
     def setup(self, stage=None):
-        # the `stage` argument is used to specify which stage of the training process is being set up
-        # it'll be used when calling the trainer.fit(), etc.
         ds = ArrayDataset(self.X, self.Y)
-        self.std_ds = ds # save the standardized dataset for later use (e.g. inverse transform)
-        
-        n = len(ds)
-        n_val = int(self.val_frac * n)
-        n_test = int(self.test_frac * n)
-        n_train = n - n_val - n_test
-        
-        self.train_ds, self.val_ds, self.test_ds = random_split(
-            ds, [n_train, n_val, n_test],
-            generator=torch.Generator().manual_seed(114)
-        )
+        self.std_ds = ds  # keep for (inverse) transform.
+
+        # -------- KFold / explicit split --------
+        if self.train_idx is not None and self.val_idx is not None:
+            print("Using explicit (KFold) dataset split")
+
+            self.train_ds = Subset(ds, self.train_idx)
+            self.val_ds = Subset(ds, self.val_idx)
+
+            if self.test_idx is not None:
+                self.test_ds = Subset(ds, self.test_idx)
+            else:
+                self.test_ds = None
+
+        # -------- Random split (original behavior) --------
+        else:
+            print("Using random split (val_frac / test_frac)")
+
+            n = len(ds)
+            n_val = int(self.val_frac * n)
+            n_test = int(self.test_frac * n)
+            n_train = n - n_val - n_test
+
+            self.train_ds, self.val_ds, self.test_ds = random_split(
+                ds,
+                [n_train, n_val, n_test],
+                generator=torch.Generator().manual_seed(114),
+            )
 
     def train_dataloader(self):
-        print("Creating train dataloader")
         return DataLoader(
-            self.train_ds, 
-            batch_size=self.batch_size, 
-            shuffle=True, # turn on during training
-            num_workers=self.num_workers, 
+            self.train_ds,
+            batch_size=self.batch_size,
+            shuffle=True,
+            num_workers=self.num_workers,
             pin_memory=self.pin_memory,
-            persistent_workers=(self.num_workers > 0),
+            persistent_workers=False,
             prefetch_factor=self.prefetch_factor if self.num_workers > 0 else None,
         )
 
     def val_dataloader(self):
-        print("Creating val dataloader")
         return DataLoader(
-            self.val_ds, 
-            batch_size=self.batch_size, 
+            self.val_ds,
+            batch_size=self.batch_size,
             shuffle=False,
-            num_workers=self.num_workers, 
+            num_workers=self.num_workers,
             pin_memory=self.pin_memory,
-            persistent_workers=(self.num_workers > 0),
+            persistent_workers=False,
             prefetch_factor=self.prefetch_factor if self.num_workers > 0 else None,
         )
 
     def test_dataloader(self):
-        print("Creating test dataloader")
+        if self.test_ds is None:
+            return None
+
         return DataLoader(
-            self.test_ds, 
-            batch_size=self.batch_size, 
+            self.test_ds,
+            batch_size=self.batch_size,
             shuffle=False,
-            num_workers=self.num_workers, 
+            num_workers=self.num_workers,
             pin_memory=self.pin_memory,
-            persistent_workers=(self.num_workers > 0),
+            persistent_workers=False,
             prefetch_factor=self.prefetch_factor if self.num_workers > 0 else None,
         )

@@ -1,0 +1,56 @@
+input_dim: 26
+loss_weights:
+  higgs_mass: 0.5
+  huber: 1.0
+  w_mass_mmd0: 5.0
+  w_mass_mmd1: 5.0
+lr: 1.0e-05
+std_mean_train: !!python/object/apply:numpy._core.multiarray._reconstruct
+  args:
+  - &id001 !!python/name:numpy.ndarray ''
+  - !!python/tuple
+    - 0
+  - !!binary |
+    Yg==
+  state: !!python/tuple
+  - 1
+  - !!python/tuple
+    - 26
+  - &id002 !!python/object/apply:numpy.dtype
+    args:
+    - f8
+    - false
+    - true
+    state: !!python/tuple
+    - 3
+    - <
+    - null
+    - null
+    - null
+    - -1
+    - -1
+    - 0
+  - false
+  - !!binary |
+    GZ8BHdaTxr8gfev0N4mOPwHiMUm5j9U/MzOFWj2QU0Cm2F5rpKi0v27uDc4JbGK/aQf3hTcp3j8y
+    UDASg5BTQIwfmnA2dJa/UUKXxC3/278oWhblWZXjP8RRjafIkeM/czyNmF+H0z8fDwasNf/dPxhp
+    JwqIK8I/gfUNDPQosj/kBryoJOCBv2WW2YgYwcA/FfYPVkDVsz+9AVfWnKFtP7OV2+qG6tO/zia2
+    nFjUor/sOLkKsfSgv58ajloPxVtAHxuzIakxO0BiVerxZDsaQA==
+std_scale_train: !!python/object/apply:numpy._core.multiarray._reconstruct
+  args:
+  - *id001
+  - !!python/tuple
+    - 0
+  - !!binary |
+    Yg==
+  state: !!python/tuple
+  - 1
+  - !!python/tuple
+    - 26
+  - *id002
+  - false
+  - !!binary |
+    TxWvmeN9QUCmKzSUM4RBQJaPBPuAyVVATdu1Q6FQT0CzHpTgFoRBQHhkTmaLgkFAhcGV+67JVUCu
+    XYrjElNPQNC4nkyqYkZAzifEqTODRkCyGfMh35zSP6BG/XY/odI/oJ/Dhl7tzz+PaBW+aPzWP19R
+    QpLij05AnxoDq+CGNUBJ9vGgY1YhQJlt+P5poE5AiZ78FcWJNUD2j8ICwmYhQCNZpkMy9GZAlhFF
+    uYVOUUAzl5Fuzuk8QGfNj5+QSGVAaj41msKtUUDrEFbC4ck+QA==

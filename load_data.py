@@ -85,11 +85,12 @@ def load_data(data_path):
         dphi_l1l2 = dphi_pi(lep_pos_phi, lep_neg_phi)
         deta_l1l2 = deta(lep_pos_eta, lep_neg_eta)  
         
-        jet_px = category_data["jets"]["px"]
-        jet_py = category_data["jets"]["py"]
-        jet_pz = category_data["jets"]["pz"]
-        jet_energy = category_data["jets"]["energy"]
-        jet_btag = category_data["jets"]["btag"]
+        # only select first 3 jets (leading/subleading/subsubleading)
+        jet_px = category_data["jets"]["px"][:, 0:3]
+        jet_py = category_data["jets"]["py"][:, 0:3]
+        jet_pz = category_data["jets"]["pz"][:, 0:3]
+        jet_energy = category_data["jets"]["energy"][:, 0:3]
+        jet_btag = category_data["jets"]["btag"][:, 0:3]
         n_jets = category_data["jets"]["n_jets"]
         n_bjets = category_data["jets"]["n_bjets"]
 
@@ -106,25 +107,25 @@ def load_data(data_path):
             col(lep_neg_energy),
             col(met_px),
             col(met_py),
-            col(lep_pos_pt),
-            col(lep_neg_pt),
-            col(lep_pos_eta),
-            col(lep_neg_eta),
-            col(lep_pos_phi),
-            col(lep_neg_phi),
-            col(met_pt),
-            col(met_phi),
+            # col(lep_pos_pt),
+            # col(lep_neg_pt),
+            # col(lep_pos_eta),
+            # col(lep_neg_eta),
+            # col(lep_pos_phi),
+            # col(lep_neg_phi),
+            # col(met_pt),
+            # col(met_phi),
             # dphi has normalized to pi; ie. range [0, 1]
             col(dphi_l1met), # l1 -> pos_lep; l2 -> neg_lep 
             col(dphi_l2met),
             col(dphi_l1l2),
             # deta has absolute value; ie, range [0, inf)
-            col(deta_l1l2),
+            col(deta_l1l2), # 14
             col(jet_px),
             col(jet_py),
             col(jet_pz),
             col(jet_energy),
-            col(jet_btag),
+            # col(jet_btag),# check definitin!!
             # col(n_jets),
             # col(n_bjets),
         ], axis=-1)
@@ -175,7 +176,7 @@ def load_data(data_path):
 if __name__ == "__main__":
     from matplotlib import pyplot as plt
     data_path = "/root/data/danning_h5/ypeng/mc20_qe_v4_recotruth_merged.h5"
-    train_obj, target_obj = load_data(data_path)
+    train_obj, target_obj, _, _ = load_data(data_path)
     w_pos_mass = target_obj[:, 8]
     w_neg_mass = target_obj[:, 9]
     plt.hist(w_pos_mass, bins=50, range=(0, 120), histtype='step', label='W+ mass')

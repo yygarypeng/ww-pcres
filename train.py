@@ -11,6 +11,7 @@ from pytorch_lightning import Trainer
 from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 from pytorch_lightning.loggers import CSVLogger
 
+
 from model import LightningWBoson
 from data_module import WBosonDataModule
 import load_data as data
@@ -19,10 +20,10 @@ import load_data as data
 BATCH_SIZE = 256
 EPOCHS = 2048
 LEARNING_RATE = 1e-5
-LOSS_WEIGHTS = {"mae": 1.0, "w_mass_mmd0": 10.0, "w_mass_mmd1": 10.0, "higgs_mass": 0.5}
+LOSS_WEIGHTS = {"huber": 1.0, "w_mass_mmd0": 5.0, "w_mass_mmd1": 5.0, "higgs_mass": 0.5}
 
 # ====== main parameters ======
-project_name = "hww_pcres_regressor"
+project_name = "hww_pcres_regressor_nofold"
 saved_path = f"/root/work/hww_pcres_regressor/{project_name}"
 ckpt_path = glob.glob(saved_path)
 data_path = "/root/data/danning_h5/ypeng/mc20_qe_v4_recotruth_merged.h5"
@@ -61,9 +62,9 @@ def main(train=True):
             loss_weights=LOSS_WEIGHTS
         )
 
-        ckpt = ModelCheckpoint(monitor="val_mae_loss", mode="min", save_top_k=1, filename="reg-{epoch:02d}-{val_mae_loss:.2f}")
+        ckpt = ModelCheckpoint(monitor="val_huber_loss", mode="min", save_top_k=1, filename="reg-{epoch:02d}-{val_huber_loss:.2f}")
         early_stopping = EarlyStopping(
-            monitor="val_mae_loss",
+            monitor="val_huber_loss",
             patience=32,
             mode="min",
             verbose=False
