@@ -20,7 +20,7 @@ import load_data as data
 BATCH_SIZE = 256
 EPOCHS = 2048
 LEARNING_RATE = 1e-5
-LOSS_WEIGHTS = {"huber": 1.0, "w_mass_mmd0": 5.0, "w_mass_mmd1": 5.0, "higgs_mass": 0.5}
+LOSS_WEIGHTS = {"huber": 1.0, "w_mass_mmd0": 5.0, "w_mass_mmd1": 5.0, "higgs_mass": 0.5, "aux_mom_mmd0": 1.0, "aux_mom_mmd1": 1.0}
 
 # ====== main parameters ======
 project_name = "hww_pcres_regressor_nofold"

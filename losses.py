@@ -12,6 +12,14 @@ def compute_mmd(x, y, bandwidth_range=SIGMA_LST):
     """
     x = x.reshape(x.shape[0], -1)
     y = y.reshape(y.shape[0], -1)
+    
+    with torch.no_grad(): # a heuristic way to set bandwidths
+        dists = torch.cdist(y, y, p=2)
+        median_dist = torch.median(dists)
+        # print("Median distance: ", median_dist.item()) # debug
+        # bandwidth_range = [0.03*median_dist, 0.07*median_dist, 0.3*median_dist, 0.7*median_dist, 3*median_dist, 7*median_dist]
+        bandwidth_range = [s * median_dist for s in bandwidth_range]
+    
     xx, yy, xy = torch.mm(x, x.t()), torch.mm(y, y.t()), torch.mm(x, y.t())
     rx = xx.diag().unsqueeze(0).expand_as(xx)
     ry = yy.diag().unsqueeze(0).expand_as(yy)
@@ -114,6 +122,16 @@ def nu_mass_loss(x_batch, y_pred):
     return torch.mean(nu0_mass + nu1_mass)
 
 
+def aux_mom_mmd_loss(y_true, y_pred, epoch):
+    """
+    Returns: (mmd_w0, mmd_w1) comparing predicted momentum distributions to truth.
+    """
+    w0_pred, w1_pred = y_pred[..., :4], y_pred[..., 4:8]
+    w0_true, w1_true = y_true[..., :4], y_true[..., 4:8]
+    w = min(epoch / 30.0, 1.0) # linearly increase weight over epochs
+
+    return w*compute_mmd(w0_pred, w0_true, [0.1, 0.5, 1.0, 5.0]), w*compute_mmd(w1_pred, w1_true, [0.1, 0.5, 1.0, 5.0])
+
 def dinu_pt_loss(x_batch, y_pred):
     """
     Di-neutrino pT consistency with MET in inputs:
@@ -125,3 +143,56 @@ def dinu_pt_loss(x_batch, y_pred):
     nn_px_diff = torch.clamp((nn_4[..., 0] - x_batch[..., 8]).abs(), min=1e-10)
     nn_py_diff = torch.clamp((nn_4[..., 1] - x_batch[..., 9]).abs(), min=1e-10)
     return torch.mean(nn_px_diff + nn_py_diff)
+
+def gaussian_log_prob(y, mean, log_std):
+    var = torch.exp(2.0 * log_std)
+    return -0.5 * ((y - mean) ** 2 / var + 2.0 * log_std + torch.log(2 * torch.pi))
+
+def laplace_log_prob(y, mean, log_b):
+    b = torch.exp(log_b)
+    return -torch.abs(y - mean) / b - log_b - torch.log(2.0)
+
+def gaussian_laplace_mixture_nll(
+    y_true,
+    mean1, log_std1,
+    mean2, log_b2,
+    logit_pi
+):
+    """
+    Gaussian + Laplace mixture NLL
+    
+    Args:
+        y_true: (B, D)
+        mean1, log_std1: Gaussian parameters
+        mean2, log_b2: Laplace parameters
+        logit_pi: (B, 1) or (B, D) mixture logits
+    
+    Returns:
+        scalar NLL
+    """
+
+    # log probabilities per dimension
+    log_p_gauss = gaussian_log_prob(y_true[:, :8], mean1, log_std1)
+    log_p_laplace = laplace_log_prob(y_true[:, :8], mean2, log_b2)
+
+    # sum over dimensions
+    log_p_gauss = log_p_gauss.sum(dim=-1)
+    log_p_laplace = log_p_laplace.sum(dim=-1)
+
+    # mixture weights
+    log_pi = F.logsigmoid(logit_pi.squeeze(-1))
+    log_1m_pi = F.logsigmoid(-logit_pi.squeeze(-1))
+
+    # log-sum-exp for numerical stability
+    log_mix = torch.logsumexp(
+        torch.stack([
+            log_pi + log_p_gauss,
+            log_1m_pi + log_p_laplace
+        ], dim=0),
+        dim=0
+    )
+
+    return -log_mix.mean()
+
+    
+    

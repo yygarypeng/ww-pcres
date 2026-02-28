@@ -30,15 +30,17 @@ class WBosonDataModule(L.LightningDataModule):
         self,
         X,
         Y,
+        seed=114,
         batch_size=512,
         val_frac=0.1,
         test_frac=0.1,
         train_idx=None,
         val_idx=None,
         test_idx=None,
-        num_workers=None,
-        pin_memory=False, # avoid seg faults
-        prefetch_factor=4,
+        num_workers=4,
+        persistent_workers=True,
+        pin_memory=True,
+        prefetch_factor=2,
     ):
         super().__init__()
 
@@ -55,12 +57,15 @@ class WBosonDataModule(L.LightningDataModule):
 
         self.pin_memory = pin_memory
         self.prefetch_factor = prefetch_factor
+        self.persistent_workers = persistent_workers
+        self.seed = seed
 
         if num_workers is None:
             self.num_workers = max(1, int(os.cpu_count() * 0.8))
-            print(f"Setting num_workers to {self.num_workers}")
+            print(f"Automatically setting num_workers to {self.num_workers}")
         else:
             self.num_workers = num_workers
+            print(f"Using {self.num_workers} num of workers in data loading.")
 
     def setup(self, stage=None):
         ds = ArrayDataset(self.X, self.Y)
@@ -90,7 +95,7 @@ class WBosonDataModule(L.LightningDataModule):
             self.train_ds, self.val_ds, self.test_ds = random_split(
                 ds,
                 [n_train, n_val, n_test],
-                generator=torch.Generator().manual_seed(114),
+                generator=torch.Generator().manual_seed(self.seed),
             )
 
     def train_dataloader(self):
@@ -100,7 +105,7 @@ class WBosonDataModule(L.LightningDataModule):
             shuffle=True,
             num_workers=self.num_workers,
             pin_memory=self.pin_memory,
-            persistent_workers=False,
+            persistent_workers=self.persistent_workers,
             prefetch_factor=self.prefetch_factor if self.num_workers > 0 else None,
         )
 
@@ -111,7 +116,7 @@ class WBosonDataModule(L.LightningDataModule):
             shuffle=False,
             num_workers=self.num_workers,
             pin_memory=self.pin_memory,
-            persistent_workers=False,
+            persistent_workers=self.persistent_workers,
             prefetch_factor=self.prefetch_factor if self.num_workers > 0 else None,
         )
 
@@ -125,6 +130,6 @@ class WBosonDataModule(L.LightningDataModule):
             shuffle=False,
             num_workers=self.num_workers,
             pin_memory=self.pin_memory,
-            persistent_workers=False,
+            persistent_workers=self.persistent_workers,
             prefetch_factor=self.prefetch_factor if self.num_workers > 0 else None,
         )

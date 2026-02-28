@@ -1,11 +1,13 @@
 import os
-import glob
+import argparse
+
 import numpy as np
 import torch
+import wandb
 
 from pytorch_lightning import Trainer
 from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
-from pytorch_lightning.loggers import CSVLogger
+from pytorch_lightning.loggers import CSVLogger, WandbLogger
 from sklearn.model_selection import train_test_split
 
 from model import LightningWBoson
@@ -21,6 +23,8 @@ LOSS_WEIGHTS = {
     "w_mass_mmd0": 5.0,
     "w_mass_mmd1": 5.0,
     "higgs_mass": 0.5,
+    "aux_mom_mmd0": 0.0,
+    "aux_mom_mmd1": 0.0,
 }
 
 # ====== main parameters ======
@@ -53,7 +57,7 @@ def main(train=True):
     # prepare train/test splits
     input_idx, testing_idx = train_test_split(np.arange(X.shape[0]), test_size=0.01, random_state=SEED)
 
-    # ---------- EVAL ----------
+    # ---------- eval ----------
     if not train:
         print("Loading model from checkpoint for evaluation.")
         _train_idx, _val_idx = train_test_split(input_idx, test_size=0.5, random_state=SEED)
@@ -67,10 +71,10 @@ def main(train=True):
         print("Setting up testing data module...")
         return dm
 
-	# ---------- TRAIN ----------
+	# ---------- train ----------
     if train:
         print("Starting 2-fold training...")
-
+        
         # Split only the training portion
         X = X[input_idx]
         Y = Y[input_idx]
@@ -107,35 +111,54 @@ def main(train=True):
 			)
 
             ckpt = ModelCheckpoint(
-                monitor="val_huber_loss",
+                monitor="val_loss",
                 mode="min",
                 save_top_k=1,
-                filename=f"{{epoch:03d}}-{{val_huber_loss:.4f}}-fold{fold}",
+                filename=f"{{epoch:03d}}-{{val_loss:.4f}}-fold{fold}",
             )
 
             early_stopping = EarlyStopping(
-                monitor="val_huber_loss",
+                monitor="val_loss",
                 patience=32,
                 mode="min",
             )
 
+            csv_logger = CSVLogger(
+                save_dir=saved_path,
+                name=f"fold{fold}",
+            )
+            step_per_epoch = len(train_idx) // BATCH_SIZE
+            
+            if args.wandb:
+                wandb_logger = WandbLogger(
+                    project=project_name,
+                    name=f"fold{fold}",
+                    save_dir=saved_path,
+                    log_model=True,
+                )
+                
+                wandb_logger.watch(model, log="all", log_freq=step_per_epoch, log_graph=False)
+
             trainer = Trainer(
                 max_epochs=EPOCHS,
-                accelerator="auto",
-                devices="auto",
+                accelerator="gpu" if torch.cuda.is_available() else "cpu",
+                devices=1 if torch.cuda.is_available() else None,
                 callbacks=[ckpt, early_stopping],
-                logger=CSVLogger(
-                    save_dir=saved_path,
-                    name=f"fold{fold}",
-                ),
-                log_every_n_steps=1,
+                logger=[csv_logger, wandb_logger] if args.wandb else [csv_logger],
+                log_every_n_steps=step_per_epoch,
             )
 
             trainer.fit(model, datamodule=dm)
+            if args.wandb:
+                wandb_logger.experiment.finish()
 
 
 if __name__ == "__main__":
     from time import time
+    argparser = argparse.ArgumentParser()
+    argparser.add_argument('--wandb', '-w', action='store_true', help='Enable wandb logging and training mode')
+    args = argparser.parse_args()
+    
     t0 = time()
     main(train=True)
     print(f"Total time: {time() - t0:.1f} seconds.")

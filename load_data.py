@@ -96,6 +96,7 @@ def load_data(data_path):
 
         # pack them
         # all training mass-like objects are in GeV unit
+        
         train_obj = np.concatenate([
             col(lep_pos_px),
             col(lep_pos_py),

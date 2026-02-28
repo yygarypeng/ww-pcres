@@ -5,7 +5,7 @@ import pytorch_lightning as L
 from layers import DenseDropoutBlock, ResidualBlock, WBosonFourVectorLayer, Standardization, FeatureAttention
 from losses import (
     huber_loss, neg_r2_loss, w_mass_mae_losses, w_mass_mmd_losses,
-    higgs_mass_loss, nu_mass_loss, dinu_pt_loss
+    higgs_mass_loss, nu_mass_loss, dinu_pt_loss, aux_mom_mmd_loss
 )
 
 
@@ -55,7 +55,8 @@ class LightningWBoson(L.LightningModule):
             "huber": 1.0, "nu_mass": 0.0, "higgs_mass": 0.0,
             "w0_mass_mae": 0.0, "w1_mass_mae": 0.0,
             "w_mass_mmd0": 0.0, "w_mass_mmd1": 0.0,
-            "dinu_pt": 0.0, "neg_r2": 0.0,
+            "dinu_pt": 0.0, "neg_r2": 0.0, 
+            "aux_mom_mmd0": 0.0, "aux_mom_mmd1": 0.0,
         }
         self.loss_weights = {**defaults, **(loss_weights or {})}
         self.lr = lr
@@ -65,6 +66,8 @@ class LightningWBoson(L.LightningModule):
 
     def _compute_losses(self, x, y, y_pred):
         higgs_scale = min(1.0, self.current_epoch / 30.0)
+        mmd_w0, mmd_w1 = aux_mom_mmd_loss(y, y_pred, self.current_epoch)
+        huber_scale = torch.log((mmd_w0 + mmd_w1) / 2.0 + 1)
         losses = {
             "huber": huber_loss(y, y_pred),
             "nu_mass": nu_mass_loss(x, y_pred),
@@ -75,14 +78,16 @@ class LightningWBoson(L.LightningModule):
             "w_mass_mmd1": w_mass_mmd_losses(y, y_pred)[1],
             "dinu_pt": dinu_pt_loss(x, y_pred),
             "neg_r2": neg_r2_loss(y, y_pred),
+            "aux_mom_mmd0": aux_mom_mmd_loss(y, y_pred, self.current_epoch)[0],
+            "aux_mom_mmd1": aux_mom_mmd_loss(y, y_pred, self.current_epoch)[1],
         }
         total = sum(self.loss_weights[k] * v for k, v in losses.items())
         return total.mean(), losses
 
     def _log_losses(self, prefix, losses, total):
-        self.log(f"{prefix}loss", total, prog_bar=False, on_step=False, on_epoch=True)
+        self.log(f"{prefix}loss", total.detach(), prog_bar=False, on_step=False, on_epoch=True)
         for k, v in losses.items():
-            self.log(f"{prefix}{k}_loss", v, prog_bar=False, on_step=False, on_epoch=True)
+            self.log(f"{prefix}{k}_loss", v.detach(), prog_bar=False, on_step=False, on_epoch=True)
 
     def training_step(self, batch, batch_idx):
         x, y = batch
@@ -104,4 +109,4 @@ class LightningWBoson(L.LightningModule):
 
     def configure_optimizers(self):
         # return torch.optim.Adam(self.parameters(), lr=self.lr)
-        return torch.optim.AdamW(self.parameters(), lr=self.hparams.lr, weight_decay=5e-4, foreach=False)
+        return torch.optim.AdamW(self.parameters(), lr=self.hparams.lr, weight_decay=1e-4)
