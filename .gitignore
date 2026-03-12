@@ -1,6 +1,6 @@
 visualize.ipynb
-Figure
-hww_pcres_regressor/
+Figure/
+hww_pcres_regressor_nofold/
 hww_pcres_regressor_kfold/
 record
 log
