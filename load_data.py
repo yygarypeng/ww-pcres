@@ -3,6 +3,8 @@ import h5py
 
 from sklearn.preprocessing import StandardScaler
 
+from physics import pt, eta, phi, deta, dphi, dr
+
 def load_particles_from_h5(filename):
     result = {}
 
@@ -40,16 +42,6 @@ def load_data(data_path):
     def col(a):
         return a.reshape(a.shape[0], -1)
     
-    def deta(eta1, eta2):
-        return np.abs(eta1 - eta2)
-
-    def dphi_pi(phi1, phi2):
-        phi_diff = phi1 - phi2
-        phi_diff = np.where(phi_diff < 0.0, -phi_diff, phi_diff)
-        phi_diff = np.where(phi_diff > 2.0 * np.pi, phi_diff - 2.0 * np.pi, phi_diff)
-        phi_diff = np.where(phi_diff >= np.pi, 2.0 * np.pi - phi_diff, phi_diff)
-        return np.divide(phi_diff, np.pi)
-
     # Collect all training and target objects from all categories
     all_train_objs = []
     all_target_objs = []
@@ -74,16 +66,28 @@ def load_data(data_path):
         lep_neg_eta = category_data["neg_lep"]["eta"]
         lep_pos_phi = category_data["pos_lep"]["phi"]
         lep_neg_phi = category_data["neg_lep"]["phi"]
+        
+        dilep_px = lep_pos_px + lep_neg_px
+        dilep_py = lep_pos_py + lep_neg_py
+        dilep_pz = lep_pos_pz + lep_neg_pz
+        dilep_energy = lep_pos_energy + lep_neg_energy
+        dilep_pt = pt(dilep_px, dilep_py)
+        dilep_eta = eta(dilep_px, dilep_py, dilep_pz)
+        dilep_phi = phi(dilep_px, dilep_py)
+        m_ll = np.sqrt(dilep_energy**2 - dilep_px**2 - dilep_py**2 - dilep_pz**2)
 
         met_px = category_data["met"]["px"]
         met_py = category_data["met"]["py"]
         met_pt = category_data["met"]["pt"]
         met_phi = category_data["met"]["phi"]
         
-        dphi_l1met = dphi_pi(lep_pos_phi, met_phi)
-        dphi_l2met = dphi_pi(lep_neg_phi, met_phi)
-        dphi_l1l2 = dphi_pi(lep_pos_phi, lep_neg_phi)
-        deta_l1l2 = deta(lep_pos_eta, lep_neg_eta)  
+        dphi_llmet = dphi(dilep_phi, met_phi)
+        dphi_l1met = dphi(lep_pos_phi, met_phi)
+        dphi_l2met = dphi(lep_neg_phi, met_phi)
+        dphi_l1l2 = dphi(lep_pos_phi, lep_neg_phi)
+        deta_l1l2 = deta(lep_pos_eta, lep_neg_eta)
+        dr_l1l2 = dr(deta_l1l2, dphi_l1l2)
+        
         
         # only select first 3 jets (leading/subleading/subsubleading)
         jet_px = category_data["jets"]["px"][:, 0:3]
@@ -98,16 +102,38 @@ def load_data(data_path):
         # all training mass-like objects are in GeV unit
         
         train_obj = np.concatenate([
-            col(lep_pos_px),
-            col(lep_pos_py),
-            col(lep_pos_pz),
-            col(lep_pos_energy),
-            col(lep_neg_px),
-            col(lep_neg_py),
-            col(lep_neg_pz),
-            col(lep_neg_energy),
-            col(met_px),
-            col(met_py),
+            col(lep_pos_px), #0
+            col(lep_pos_py), #1
+            col(lep_pos_pz), #2
+            col(lep_pos_energy), #3
+            col(lep_neg_px), #4
+            col(lep_neg_py), #5
+            col(lep_neg_pz), #6
+            col(lep_neg_energy), #7
+            col(jet_px[:, 0]), #8
+            col(jet_py[:, 0]), #9
+            col(jet_pz[:, 0]), #10
+            col(jet_energy[:, 0]), #11
+            col(jet_px[:, 1]), #12
+            col(jet_py[:, 1]), #13
+            col(jet_pz[:, 1]), #14
+            col(jet_energy[:, 1]), #15
+            col(jet_px[:, 2]), #16
+            col(jet_py[:, 2]), #17
+            col(jet_pz[:, 2]), #18
+            col(jet_energy[:, 2]), #19
+            col(met_px), #20
+            col(met_py), #21
+            col(dilep_px), #22
+            col(dilep_py), #23
+            col(dilep_pz), #24
+            col(dilep_energy), #25
+            col(deta_l1l2), #26
+            col(dphi_llmet), #27
+            col(dphi_l1met), #28 (l1 -> pos_lep; l2 -> neg_lep)
+            col(dphi_l2met), #29
+            col(dphi_l1l2), #30
+            col(dr_l1l2), #31
             # col(lep_pos_pt),
             # col(lep_neg_pt),
             # col(lep_pos_eta),
@@ -116,16 +142,6 @@ def load_data(data_path):
             # col(lep_neg_phi),
             # col(met_pt),
             # col(met_phi),
-            # dphi has normalized to pi; ie. range [0, 1]
-            col(dphi_l1met), # l1 -> pos_lep; l2 -> neg_lep 
-            col(dphi_l2met),
-            col(dphi_l1l2),
-            # deta has absolute value; ie, range [0, inf)
-            col(deta_l1l2), # 14
-            col(jet_px),
-            col(jet_py),
-            col(jet_pz),
-            col(jet_energy),
             # col(jet_btag),# check definitin!!
             # col(n_jets),
             # col(n_bjets),
@@ -155,7 +171,6 @@ def load_data(data_path):
     print("Training objects shape:", train_obj.shape)
     print("Target objects shape:", target_obj.shape)
 
-    # After concatenating all categories, add this before the return statement:
     # Remove rows with NaN or infinite values
     valid_train = np.isfinite(train_obj).all(axis=1)
     valid_target = np.isfinite(target_obj).all(axis=1)
@@ -176,6 +191,7 @@ def load_data(data_path):
 
 if __name__ == "__main__":
     from matplotlib import pyplot as plt
+    import torch
     data_path = "/root/data/danning_h5/ypeng/mc20_qe_v4_recotruth_merged.h5"
     train_obj, target_obj, _, _ = load_data(data_path)
     w_pos_mass = target_obj[:, 8]
@@ -185,3 +201,9 @@ if __name__ == "__main__":
     plt.xlabel("W mass [GeV]")
     plt.ylabel("Entries")
     plt.legend()
+    train_obj = torch.tensor(train_obj)
+    print(torch.abs(train_obj[:, 8:12][:5]).sum(dim=1) == 0)
+    print(torch.abs(train_obj[:, 12:16][:5]).sum(dim=1) == 0)
+    print(torch.abs(train_obj[:, 16:20][:5]).sum(dim=1) == 0)
+    print(train_obj[:, 12:16][:5])
+    print(train_obj[:, 16:20][:5])

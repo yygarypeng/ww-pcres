@@ -3,22 +3,19 @@ import torch.nn.functional as F
 
 # RBF kernel widths
 SIGMA_LST = [0.05, 0.1, 0.5, 1.0, 5.0]
-
+TOR = 1e-16
 
 def compute_mmd(x, y, bandwidth_range=SIGMA_LST):
-    """
-    Maximum Mean Discrepancy (Gaussian kernel) between tensors x and y.
-    x, y: (...,) or (N,) shaped tensors.
-    """
     x = x.reshape(x.shape[0], -1)
     y = y.reshape(y.shape[0], -1)
     
     with torch.no_grad(): # a heuristic way to set bandwidths
         dists = torch.cdist(y, y, p=2)
         median_dist = torch.median(dists)
+        sel_dist = 1.0 if median_dist.item() == 0.0 else median_dist
         # print("Median distance: ", median_dist.item()) # debug
         # bandwidth_range = [0.03*median_dist, 0.07*median_dist, 0.3*median_dist, 0.7*median_dist, 3*median_dist, 7*median_dist]
-        bandwidth_range = [s * median_dist for s in bandwidth_range]
+        bandwidth_range = [s * sel_dist for s in bandwidth_range]
     
     xx, yy, xy = torch.mm(x, x.t()), torch.mm(y, y.t()), torch.mm(x, y.t())
     rx = xx.diag().unsqueeze(0).expand_as(xx)
@@ -32,9 +29,9 @@ def compute_mmd(x, y, bandwidth_range=SIGMA_LST):
     XY = torch.zeros_like(xy)
 
     for a in bandwidth_range:
-        XX += torch.exp(-0.5 * dxx / a**2)
-        YY += torch.exp(-0.5 * dyy / a**2)
-        XY += torch.exp(-0.5 * dxy / a**2)
+        XX += torch.exp(-0.5 * dxx / (a + TOR)**2)
+        YY += torch.exp(-0.5 * dyy / (a + TOR)**2)
+        XY += torch.exp(-0.5 * dxy / (a + TOR)**2)
         
     #     print("bandwidth: ", a)
     #     print("Tot:", torch.mean(XX + YY - 2. * XY))
@@ -43,14 +40,10 @@ def compute_mmd(x, y, bandwidth_range=SIGMA_LST):
     return torch.mean(XX + YY - 2. * XY)
 
 
-def invariant_mass(fourvec):
-    """
-    fourvec: (..., 4) where order is (px, py, pz, E)
-    returns: (...,) positive mass = sqrt(|E^2 - |p|^2|)
-    """
+def invariant_mass2(fourvec):
     px, py, pz, E = fourvec[..., 0], fourvec[..., 1], fourvec[..., 2], fourvec[..., 3]
-    mass2 = E * E - (px * px + py * py + pz * pz)
-    return torch.sqrt(mass2.abs().clamp(min=1e-16))
+    mass2 = E**2 - (px**2 + py**2 + pz**2)
+    return mass2
 
 
 def mae_loss(y_true, y_pred):
@@ -70,129 +63,53 @@ def neg_r2_loss(y_true, y_pred):
 
 
 def w_mass_mae_losses(y_true, y_pred):
-    """
-    Returns: (w0_mae, w1_mae) using true W masses at y_true[..., 8], y_true[..., 9]
-    """
     w0_pred, w1_pred = y_pred[..., :4], y_pred[..., 4:8]
     w0_true_mass, w1_true_mass = y_true[..., 8], y_true[..., 9]
 
-    w0_mass = invariant_mass(w0_pred)
-    w1_mass = invariant_mass(w1_pred)
-
+    w0_mass2 = invariant_mass2(w0_pred)
+    w1_mass2 = invariant_mass2(w1_pred)
     return (
-        torch.mean(torch.abs(w0_mass - w0_true_mass)),
-        torch.mean(torch.abs(w1_mass - w1_true_mass)),
+        F.huber_loss(w0_mass2, w0_true_mass**2),
+        F.huber_loss(w1_mass2, w1_true_mass**2)
     )
 
 
 def w_mass_mmd_losses(y_true, y_pred):
-    """
-    Returns: (mmd_w0, mmd_w1) comparing predicted mass distributions to truth.
-    """
     w0_pred, w1_pred = y_pred[..., :4], y_pred[..., 4:8]
     w0_true_mass, w1_true_mass = y_true[..., 8], y_true[..., 9]
 
-    w0_mass = invariant_mass(w0_pred)
-    w1_mass = invariant_mass(w1_pred)
-
-    return compute_mmd(w0_mass, w0_true_mass), compute_mmd(w1_mass, w1_true_mass)
+    w0_mass2 = invariant_mass2(w0_pred)
+    w1_mass2 = invariant_mass2(w1_pred)
+    return compute_mmd(w0_mass2, w0_true_mass**2), compute_mmd(w1_mass2, w1_true_mass**2)
 
 
 def higgs_mass_loss(y_pred):
-    """
-    Higgs mass from sum of two W four-vectors; target 125.0 (GeV)
-    """
     w0, w1 = y_pred[..., :4], y_pred[..., 4:8]
     higgs_4 = w0 + w1
-    h_mass = invariant_mass(higgs_4)
-    return torch.clamp(torch.mean(h_mass - 125.0).abs(), min=1e-16)
+    h_mass = torch.sqrt(invariant_mass2(higgs_4).abs()) # less likely < 0, so take abs() not square
+    return F.huber_loss(h_mass, torch.full_like(h_mass, 125.0))
 
 
 def nu_mass_loss(x_batch, y_pred):
-    """
-    n0_4vect = y_pred[..., :4] - x_batch[..., :4]
-    n1_4vect = y_pred[..., 4:8] - x_batch[..., 4:8]
-    penalize neutrino invariant mass (prefer ~0)
-    """
     n0_4 = y_pred[..., :4] - x_batch[..., :4]
     n1_4 = y_pred[..., 4:8] - x_batch[..., 4:8]
 
-    nu0_mass = invariant_mass(n0_4)
-    nu1_mass = invariant_mass(n1_4)
-    return torch.mean(nu0_mass + nu1_mass)
-
+    nu0_mass2 = invariant_mass2(n0_4)
+    nu1_mass2 = invariant_mass2(n1_4)
+    # return torch.mean(nu0_mass2 + nu1_mass2)
+    return F.huber_loss(nu0_mass2, torch.zeros_like(nu0_mass2)) + F.huber_loss(nu1_mass2, torch.zeros_like(nu1_mass2))
 
 def aux_mom_mmd_loss(y_true, y_pred, epoch):
-    """
-    Returns: (mmd_w0, mmd_w1) comparing predicted momentum distributions to truth.
-    """
     w0_pred, w1_pred = y_pred[..., :4], y_pred[..., 4:8]
     w0_true, w1_true = y_true[..., :4], y_true[..., 4:8]
-    w = min(epoch / 30.0, 1.0) # linearly increase weight over epochs
-
-    return w*compute_mmd(w0_pred, w0_true, [0.1, 0.5, 1.0, 5.0]), w*compute_mmd(w1_pred, w1_true, [0.1, 0.5, 1.0, 5.0])
+    return compute_mmd(w0_pred, w0_true, [0.1, 0.5, 1.0, 5.0]), compute_mmd(w1_pred, w1_true, [0.1, 0.5, 1.0, 5.0])
 
 def dinu_pt_loss(x_batch, y_pred):
-    """
-    Di-neutrino pT consistency with MET in inputs:
-    x[..., 8] = MET px, x[..., 9] = MET py  (as in your TF code)
-    """
     n0_4 = y_pred[..., :4] - x_batch[..., :4]
     n1_4 = y_pred[..., 4:8] - x_batch[..., 4:8]
     nn_4 = n0_4 + n1_4
-    nn_px_diff = torch.clamp((nn_4[..., 0] - x_batch[..., 8]).abs(), min=1e-10)
-    nn_py_diff = torch.clamp((nn_4[..., 1] - x_batch[..., 9]).abs(), min=1e-10)
-    return torch.mean(nn_px_diff + nn_py_diff)
-
-def gaussian_log_prob(y, mean, log_std):
-    var = torch.exp(2.0 * log_std)
-    return -0.5 * ((y - mean) ** 2 / var + 2.0 * log_std + torch.log(2 * torch.pi))
-
-def laplace_log_prob(y, mean, log_b):
-    b = torch.exp(log_b)
-    return -torch.abs(y - mean) / b - log_b - torch.log(2.0)
-
-def gaussian_laplace_mixture_nll(
-    y_true,
-    mean1, log_std1,
-    mean2, log_b2,
-    logit_pi
-):
-    """
-    Gaussian + Laplace mixture NLL
-    
-    Args:
-        y_true: (B, D)
-        mean1, log_std1: Gaussian parameters
-        mean2, log_b2: Laplace parameters
-        logit_pi: (B, 1) or (B, D) mixture logits
-    
-    Returns:
-        scalar NLL
-    """
-
-    # log probabilities per dimension
-    log_p_gauss = gaussian_log_prob(y_true[:, :8], mean1, log_std1)
-    log_p_laplace = laplace_log_prob(y_true[:, :8], mean2, log_b2)
-
-    # sum over dimensions
-    log_p_gauss = log_p_gauss.sum(dim=-1)
-    log_p_laplace = log_p_laplace.sum(dim=-1)
-
-    # mixture weights
-    log_pi = F.logsigmoid(logit_pi.squeeze(-1))
-    log_1m_pi = F.logsigmoid(-logit_pi.squeeze(-1))
-
-    # log-sum-exp for numerical stability
-    log_mix = torch.logsumexp(
-        torch.stack([
-            log_pi + log_p_gauss,
-            log_1m_pi + log_p_laplace
-        ], dim=0),
-        dim=0
-    )
-
-    return -log_mix.mean()
-
-    
-    
+    # Penalize mismatch in the 2D MET vector magnitude (rotation-invariant in x-y plane).
+    dpx = nn_4[..., 0] - x_batch[..., 20]
+    dpy = nn_4[..., 1] - x_batch[..., 21]
+    dpt = torch.sqrt(dpx**2 + dpy**2 + TOR)
+    return F.huber_loss(dpt, torch.zeros_like(dpt))

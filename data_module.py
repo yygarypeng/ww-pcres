@@ -38,7 +38,7 @@ class WBosonDataModule(L.LightningDataModule):
         val_idx=None,
         test_idx=None,
         num_workers=4,
-        persistent_workers=True,
+        persistent_workers=False,
         pin_memory=True,
         prefetch_factor=2,
     ):

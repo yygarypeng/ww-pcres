@@ -1,0 +1,21 @@
+parameters:
+  loss_weights:
+    huber: 2.0
+    w_mass_mmd0: 10.0
+    w_mass_mmd1: 10.0
+    dinu_pt: 1.0
+    # apply warmup 
+    # after warmup, effective_weights will increase with extra weight `current_epoch/warmup_epochs`)
+    higgs_mass: 10.0
+    nu_mass: 100000.0
+  batch_size: 256
+  epochs: 1024
+  learning_rate: 5.0e-5
+  warmup_epochs: 32
+  d_model: 64
+  n_heads: 8
+  num_blocks: 16
+
+paths:
+  saved_path: "/root/work/hww_pcres_regressor/hww_pcres_regressor_nofold"
+  data_path: "/root/data/danning_h5/ypeng/mc20_qe_v4_recotruth_merged.h5"
