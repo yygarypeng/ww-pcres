@@ -81,13 +81,13 @@ def load_data(data_path):
         met_pt = category_data["met"]["pt"]
         met_phi = category_data["met"]["phi"]
         
+        dphi_ll = dphi(lep_pos_phi, lep_neg_phi)
         dphi_llmet = dphi(dilep_phi, met_phi)
         dphi_l1met = dphi(lep_pos_phi, met_phi)
         dphi_l2met = dphi(lep_neg_phi, met_phi)
-        dphi_l1l2 = dphi(lep_pos_phi, lep_neg_phi)
-        deta_l1l2 = deta(lep_pos_eta, lep_neg_eta)
-        dr_l1l2 = dr(deta_l1l2, dphi_l1l2)
         
+        deta_ll = deta(lep_pos_eta, lep_neg_eta)
+        dr_ll = dr(deta_ll, dphi_ll)
         
         # only select first 3 jets (leading/subleading/subsubleading)
         jet_px = category_data["jets"]["px"][:, 0:3]
@@ -128,12 +128,12 @@ def load_data(data_path):
             col(dilep_py), #23
             col(dilep_pz), #24
             col(dilep_energy), #25
-            col(deta_l1l2), #26
+            col(deta_ll), #26
             col(dphi_llmet), #27
             col(dphi_l1met), #28 (l1 -> pos_lep; l2 -> neg_lep)
             col(dphi_l2met), #29
-            col(dphi_l1l2), #30
-            col(dr_l1l2), #31
+            col(dphi_ll), #30
+            col(dr_ll), #31
             # col(lep_pos_pt),
             # col(lep_neg_pt),
             # col(lep_pos_eta),

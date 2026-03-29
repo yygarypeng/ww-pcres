@@ -1,20 +1,22 @@
 parameters:
   loss_weights:
-    huber: 2.0
-    w_mass_mmd0: 10.0
-    w_mass_mmd1: 10.0
-    dinu_pt: 1.0
-    # apply warmup 
-    # after warmup, effective_weights will increase with extra weight `current_epoch/warmup_epochs`)
-    higgs_mass: 10.0
-    nu_mass: 100000.0
+    huber: 1.0
+    w_mass_mmd0: 2.5
+    w_mass_mmd1: 2.5
+    dinu_pt: 0.0
+    higgs_mass: 2.0
+    nu_mass: 0.0
   batch_size: 256
   epochs: 1024
-  learning_rate: 5.0e-5
-  warmup_epochs: 32
+  learning_rate: 1.0e-4
   d_model: 64
   n_heads: 8
-  num_blocks: 16
+  num_blocks: 5
+  # dataloader settings (set num_workers > 0 only if stable)
+  num_workers: 2
+  persistent_workers: false
+  pin_memory: true
+  prefetch_factor: 2
 
 paths:
   saved_path: "/root/work/hww_pcres_regressor/hww_pcres_regressor_nofold"

@@ -14,7 +14,6 @@ def compute_mmd(x, y, bandwidth_range=SIGMA_LST):
         median_dist = torch.median(dists)
         sel_dist = 1.0 if median_dist.item() == 0.0 else median_dist
         # print("Median distance: ", median_dist.item()) # debug
-        # bandwidth_range = [0.03*median_dist, 0.07*median_dist, 0.3*median_dist, 0.7*median_dist, 3*median_dist, 7*median_dist]
         bandwidth_range = [s * sel_dist for s in bandwidth_range]
     
     xx, yy, xy = torch.mm(x, x.t()), torch.mm(y, y.t()), torch.mm(x, y.t())
@@ -96,7 +95,6 @@ def nu_mass_loss(x_batch, y_pred):
 
     nu0_mass2 = invariant_mass2(n0_4)
     nu1_mass2 = invariant_mass2(n1_4)
-    # return torch.mean(nu0_mass2 + nu1_mass2)
     return F.huber_loss(nu0_mass2, torch.zeros_like(nu0_mass2)) + F.huber_loss(nu1_mass2, torch.zeros_like(nu1_mass2))
 
 def aux_mom_mmd_loss(y_true, y_pred, epoch):

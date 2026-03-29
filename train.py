@@ -30,10 +30,13 @@ def main(train=True, arg=None):
     EPOCHS = _param["epochs"]
     LEARNING_RATE = _param["learning_rate"]
     LOSS_WEIGHTS = _param["loss_weights"]
-    WARMUP_EPOCHS = _param["warmup_epochs"]
     D_MODEL = _param["d_model"]
     N_HEADS = _param["n_heads"]
     NUM_BLOCKS = _param["num_blocks"]
+    NUM_WORKERS = _param.get("num_workers", 0)
+    PERSISTENT_WORKERS = _param.get("persistent_workers", False)
+    PIN_MEMORY = _param.get("pin_memory", torch.cuda.is_available())
+    PREFETCH_FACTOR = _param.get("prefetch_factor", 2)
 
     saved_path = _cfg["paths"]["saved_path"]
     data_path = _cfg["paths"]["data_path"]
@@ -55,8 +58,12 @@ def main(train=True, arg=None):
     dm = WBosonDataModule(
         X, Y,
         batch_size=BATCH_SIZE,
-        val_frac=0.01,
+        val_frac=0.05,
         test_frac=0.01,
+        num_workers=NUM_WORKERS,
+        persistent_workers=PERSISTENT_WORKERS,
+        pin_memory=PIN_MEMORY,
+        prefetch_factor=PREFETCH_FACTOR,
     )
     dm.setup()
 
@@ -69,7 +76,6 @@ def main(train=True, arg=None):
             std_mean_train=std_mean_train, std_scale_train=std_scale_train,
             lr=LEARNING_RATE,
             loss_weights=LOSS_WEIGHTS,
-            warmup_epochs=WARMUP_EPOCHS,
             d_model=D_MODEL,
             num_heads=N_HEADS,
             num_blocks=NUM_BLOCKS
@@ -78,7 +84,7 @@ def main(train=True, arg=None):
         ckpt = ModelCheckpoint(monitor="val_loss", mode="min", save_top_k=1, filename="reg-{epoch:02d}-{val_loss:.2f}")
         early_stopping = EarlyStopping(
             monitor="val_loss",
-            patience=32,
+            patience=128,
             mode="min",
             verbose=False
         )

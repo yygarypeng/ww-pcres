@@ -6,83 +6,91 @@ import torch.nn.functional as F
 class Standardization(nn.Module):
     def __init__(self, mean, std, eps=1e-16):
         super().__init__()
-        self.register_buffer("mean", torch.as_tensor(mean, dtype=torch.float32).clamp_min(eps))
+        self.register_buffer("mean", torch.as_tensor(mean, dtype=torch.float32))
         self.register_buffer("std", torch.as_tensor(std, dtype=torch.float32).clamp_min(eps))
 
     def forward(self, x):
         return (x - self.mean) / (self.std)
 
+class _AttnFFN(nn.Module):
+    def __init__(self, d_model, ffn_dim, dropout=0.3):
+        super().__init__()
+        self.ffn = nn.Sequential(
+            nn.LayerNorm(d_model),
+            nn.Linear(d_model, ffn_dim),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(ffn_dim, d_model),
+        )
+
+    def forward(self, x):
+        x = self.ffn(x)
+        return x
+    
+class CrossAttentionBlock(nn.Module):
+    def __init__(self, d_model, nhead, dropout=0.3):
+        super().__init__()
+        self.norm_q = nn.LayerNorm(d_model)
+        self.norm_kv = nn.LayerNorm(d_model)
+
+        self.mha = nn.MultiheadAttention(d_model, nhead, dropout=dropout, batch_first=True)
+        self.dropout = nn.Dropout(dropout) if dropout and dropout > 0 else nn.Identity()
+        
+        self.ffn = _AttnFFN(d_model, d_model * 4, dropout)
+        
+    def forward(self, queries, context, key_padding_mask=None):
+        res = queries
+        q = self.norm_q(queries)
+        kv = self.norm_kv(context)
+        
+        attn_out, _ = self.mha(query=q, key=kv, value=kv, key_padding_mask=key_padding_mask)
+        x = res + self.dropout(attn_out)
+        
+        x = x + self.dropout(self.ffn(x))
+        return x
+    
 class SelfAttentionBlock(nn.Module):
     def __init__(self, d_model, nhead, dropout=0.3):
         super().__init__()
-        self.norm1 = nn.LayerNorm(d_model)
+        self.attn_norm = nn.LayerNorm(d_model)
+        self.ffn_norm = nn.LayerNorm(d_model)
+        self.dropout = nn.Dropout(dropout) if dropout and dropout > 0 else nn.Identity()
         self.mha = nn.MultiheadAttention(d_model, nhead, dropout=dropout, batch_first=True)
-        
-        self.norm2 = nn.LayerNorm(d_model)
-        self.ffn = nn.Sequential(
-            nn.GELU(),
-            nn.Linear(d_model, 4 * d_model),
-            nn.Dropout(dropout),
-            nn.GELU(),
-            nn.Linear(4 * d_model, d_model),
-            # nn.Dropout(dropout),
-        )
-        
+        self.ffn = _AttnFFN(d_model, d_model * 4, dropout)
 
     def forward(self, x, key_padding_mask=None):
         res = x
-        x = self.norm1(x)
+        x = self.attn_norm(x)
         x, _ = self.mha(x, x, x, key_padding_mask=key_padding_mask)
-        x = res + x
+        x = res + self.dropout(x)
         
-        x = x + self.ffn(self.norm2(x))
+        res = x
+        x = self.ffn_norm(x)
+        x = self.ffn(x)
+        x = res + self.dropout(x)
         return x
 
-class DenseDropoutBlock(nn.Module):
-    """
-    Pre-activation block:
-        LN(in_dim) -> GELU -> Linear(in_dim -> out_dim) -> Dropout
-    P0st-activation block:
-        Linear(in_dim -> out_dim) -> LN(out_dim) -> GELU -> Dropout
-    """
-    def __init__(self, in_dim, out_dim, dropout=0.0, post_act=False):
-        super().__init__()
-        if not post_act:
-            # pre-activation for deeper networks (more stable gradients)
-            self.net = nn.Sequential(
-                nn.LayerNorm(in_dim),
-                nn.GELU(),
-                nn.Linear(in_dim, out_dim),
-                nn.Dropout(dropout) if dropout and dropout > 0 else nn.Identity(),
-            )
-        else:
-            # post-activation for better interpretability
-            self.net = nn.Sequential(
-                nn.Linear(in_dim, out_dim),
-                nn.LayerNorm(out_dim),
-                nn.GELU(),
-                nn.Dropout(dropout) if dropout and dropout > 0 else nn.Identity(),
-            )
-
-    def forward(self, x):
-        return self.net(x)
-
 class ResidualBlock(nn.Module):
-    def __init__(self, in_dim, out_dim, dropout=0.0):
+    def __init__(self, in_dim, out_dim, dropout=0.1):
         super().__init__()
-
-        # projection only when needed
-        self.proj = nn.Linear(in_dim, out_dim, bias=False) if in_dim != out_dim else nn.Identity()
-
-        # two pre-activation dense blocks
-        self.block1 = DenseDropoutBlock(in_dim, out_dim, dropout)
-        self.block2 = DenseDropoutBlock(out_dim, out_dim, dropout=0.0)
+        self.shortcut = (
+            nn.Identity() if in_dim == out_dim
+            else nn.Linear(in_dim, out_dim)
+        )
+        self.residual = nn.Sequential(
+            nn.LayerNorm(in_dim),
+            nn.GELU(),
+            nn.Linear(in_dim, out_dim),
+            nn.Dropout(dropout) if dropout and dropout > 0 else nn.Identity(),
+            # nn.GELU(),
+            # nn.Linear(out_dim, out_dim),
+            # nn.Dropout(dropout) if dropout and dropout > 0 else nn.Identity(),
+        )
 
     def forward(self, x):
-        identity = self.proj(x)
-        y = self.block1(x)
-        y = self.block2(y)
-        return identity + y 
+        x_shortcut = self.shortcut(x)
+        y = self.residual(x)
+        return x_shortcut + y
 
 class WBosonFourVectorLayer(nn.Module):
     """
@@ -96,22 +104,3 @@ class WBosonFourVectorLayer(nn.Module):
         nu0_4 = torch.cat([nu0_3, nu0_E], dim=-1)
         nu1_4 = torch.cat([nu1_3, nu1_E], dim=-1)
         return torch.cat([lep0 + nu0_4, lep1 + nu1_4], dim=-1)
-
-class FeatureImportance(nn.Module):
-    def __init__(self, dim, reduction=16):
-        super().__init__()
-
-        self.norm = nn.LayerNorm(dim)
-        # post-activation gating
-        hidden = max(dim // reduction, 8)
-        self.gate = nn.Sequential(
-            nn.GELU(),
-            nn.Linear(dim, hidden),
-            nn.GELU(),
-            nn.Linear(hidden, dim),
-            nn.Tanh(),
-        )
-
-    def forward(self, x):
-        gate = self.gate(self.norm(x))
-        return x * (1.0 + gate)
