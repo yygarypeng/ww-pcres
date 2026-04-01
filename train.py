@@ -38,6 +38,12 @@ def main(train=True, arg=None):
     PIN_MEMORY = _param.get("pin_memory", torch.cuda.is_available())
     PREFETCH_FACTOR = _param.get("prefetch_factor", 2)
 
+    # some stable settings for dataloader and numpy
+    os.environ["OMP_NUM_THREADS"] = str(NUM_WORKERS + 2)
+    os.environ["MKL_NUM_THREADS"] = str(NUM_WORKERS + 2)
+    os.environ["OPENBLAS_NUM_THREADS"] = str(NUM_WORKERS + 2)
+    os.environ["NUMEXPR_NUM_THREADS"] = str(NUM_WORKERS + 2)
+
     saved_path = _cfg["paths"]["saved_path"]
     data_path = _cfg["paths"]["data_path"]
     

@@ -11,7 +11,7 @@ parameters:
   learning_rate: 1.0e-4
   d_model: 64
   n_heads: 8
-  num_blocks: 5
+  num_blocks: 4
   # dataloader settings (set num_workers > 0 only if stable)
   num_workers: 2
   persistent_workers: false
@@ -19,5 +19,5 @@ parameters:
   prefetch_factor: 2
 
 paths:
-  saved_path: "/root/work/hww_pcres_regressor/hww_pcres_regressor_nofold"
+  saved_path: "/root/work/ww-pcres/hww_pcres_regressor_nofold"
   data_path: "/root/data/danning_h5/ypeng/mc20_qe_v4_recotruth_merged.h5"
