@@ -46,16 +46,16 @@ class WBosonRegressor(nn.Module):
         # self.tokens_norm = nn.LayerNorm(d_model)
         # self-attention blocks for global context refinement
         self.sa_blocks = nn.ModuleList([
-            SelfAttentionBlock(d_model, num_heads, dropout=0.3) for _ in range(4)
+            SelfAttentionBlock(d_model, num_heads, dropout=0.5) for _ in range(4)
         ])
         print(f"Using {len(self.sa_blocks)} SA blocks.")
         
         # residual decoder blocks
         _dim = 512 if d_model * self.num_tokens >= 512 else d_model * self.num_tokens
         blocks = [nn.Linear(d_model * self.num_tokens, _dim)] # reduce dimension after flattening
-        blocks.append(ResidualBlock(_dim, 128, dropout=0.3))
-        blocks.extend([ResidualBlock(128, 128, dropout=0.3) for _ in range(num_blocks)])
-        blocks.append(ResidualBlock(128, 256, dropout=0.3))
+        blocks.append(ResidualBlock(_dim, 128, dropout=0.5))
+        blocks.extend([ResidualBlock(128, 128, dropout=0.5) for _ in range(num_blocks)])
+        blocks.append(ResidualBlock(128, 256, dropout=0.5))
         self.trunk = nn.Sequential(*blocks)
 
         # nu momentum regression head
