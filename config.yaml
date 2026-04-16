@@ -3,6 +3,8 @@ parameters:
     huber: 1.0
     w_mass_mmd0: 2.5
     w_mass_mmd1: 2.5
+    w0_mass_mae: 0.0
+    w1_mass_mae: 0.0
     dinu_pt: 0.0
     higgs_mass: 2.0
     nu_mass: 0.0
@@ -11,12 +13,11 @@ parameters:
   learning_rate: 1.0e-4
   d_model: 64
   n_heads: 8
-  num_blocks: 4
   # dataloader settings (set num_workers > 0 only if stable)
-  num_workers: 6
+  num_workers: 4
   persistent_workers: true
   pin_memory: true
-  prefetch_factor: 4
+  prefetch_factor: 2
 
 paths:
   saved_path: "/root/work/ww-pcres/hww_pcres_regressor_nofold"

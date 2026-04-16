@@ -2,7 +2,7 @@ import torch
 import torch.nn.functional as F
 
 # RBF kernel widths
-SIGMA_LST = [0.05, 0.1, 0.5, 1.0, 5.0]
+SIGMA_LST = [0.05, 0.1, 0.5, 1.0]
 TOR = 1e-16
 
 def compute_mmd(x, y, bandwidth_range=SIGMA_LST):
@@ -38,12 +38,10 @@ def compute_mmd(x, y, bandwidth_range=SIGMA_LST):
     
     return torch.mean(XX + YY - 2. * XY)
 
-
 def invariant_mass2(fourvec):
     px, py, pz, E = fourvec[..., 0], fourvec[..., 1], fourvec[..., 2], fourvec[..., 3]
     mass2 = E**2 - (px**2 + py**2 + pz**2)
     return mass2
-
 
 def mae_loss(y_true, y_pred):
     # do not consider mass targets in y_true
@@ -61,53 +59,55 @@ def neg_r2_loss(y_true, y_pred):
     return ss_res / ss_tot - 1.0
 
 
+def w_4vec_construct(w_4vec_loge):
+    w_3 = w_4vec_loge[..., :3]
+    w_logE = torch.exp(w_4vec_loge[..., 3])
+    return torch.cat([w_3, w_logE.reshape(-1, 1)], dim=-1)
+
 def w_mass_mae_losses(y_true, y_pred):
-    w0_pred, w1_pred = y_pred[..., :4], y_pred[..., 4:8]
+    w0_pred, w1_pred = w_4vec_construct(y_pred[..., :4]), w_4vec_construct(y_pred[..., 4:8])
     w0_true_mass, w1_true_mass = y_true[..., 8], y_true[..., 9]
 
     w0_mass2 = invariant_mass2(w0_pred)
     w1_mass2 = invariant_mass2(w1_pred)
     return (
-        F.huber_loss(w0_mass2, w0_true_mass**2),
-        F.huber_loss(w1_mass2, w1_true_mass**2)
+        F.l1_loss(w0_mass2, w0_true_mass**2),
+        F.l1_loss(w1_mass2, w1_true_mass**2)
     )
 
-
 def w_mass_mmd_losses(y_true, y_pred):
-    w0_pred, w1_pred = y_pred[..., :4], y_pred[..., 4:8]
+    w0_pred, w1_pred = w_4vec_construct(y_pred[..., :4]), w_4vec_construct(y_pred[..., 4:8])
     w0_true_mass, w1_true_mass = y_true[..., 8], y_true[..., 9]
 
     w0_mass2 = invariant_mass2(w0_pred)
     w1_mass2 = invariant_mass2(w1_pred)
     return compute_mmd(w0_mass2, w0_true_mass**2), compute_mmd(w1_mass2, w1_true_mass**2)
 
-
 def higgs_mass_loss(y_pred):
-    w0, w1 = y_pred[..., :4], y_pred[..., 4:8]
+    w0, w1 = w_4vec_construct(y_pred[..., :4]), w_4vec_construct(y_pred[..., 4:8])
     higgs_4 = w0 + w1
     h_mass = torch.sqrt(invariant_mass2(higgs_4).abs()) # less likely < 0, so take abs() not square
-    return F.huber_loss(h_mass, torch.full_like(h_mass, 125.0))
-
+    return F.l1_loss(h_mass, torch.full_like(h_mass, 125.0))
 
 def nu_mass_loss(x_batch, y_pred):
-    n0_4 = y_pred[..., :4] - x_batch[..., :4]
-    n1_4 = y_pred[..., 4:8] - x_batch[..., 4:8]
+    n0_4 = w_4vec_construct(y_pred[..., :4]) - x_batch[..., :4]
+    n1_4 = w_4vec_construct(y_pred[..., 4:8]) - x_batch[..., 4:8]
 
     nu0_mass2 = invariant_mass2(n0_4)
     nu1_mass2 = invariant_mass2(n1_4)
     return F.huber_loss(nu0_mass2, torch.zeros_like(nu0_mass2)) + F.huber_loss(nu1_mass2, torch.zeros_like(nu1_mass2))
 
 def aux_mom_mmd_loss(y_true, y_pred, epoch):
-    w0_pred, w1_pred = y_pred[..., :4], y_pred[..., 4:8]
-    w0_true, w1_true = y_true[..., :4], y_true[..., 4:8]
+    w0_pred, w1_pred = w_4vec_construct(y_pred[..., :4]), w_4vec_construct(y_pred[..., 4:8])
+    w0_true, w1_true = w_4vec_construct(y_true[..., :4]), w_4vec_construct(y_true[..., 4:8])
     return compute_mmd(w0_pred, w0_true, [0.1, 0.5, 1.0, 5.0]), compute_mmd(w1_pred, w1_true, [0.1, 0.5, 1.0, 5.0])
 
 def dinu_pt_loss(x_batch, y_pred):
-    n0_4 = y_pred[..., :4] - x_batch[..., :4]
-    n1_4 = y_pred[..., 4:8] - x_batch[..., 4:8]
+    n0_4 = w_4vec_construct(y_pred[..., :4]) - x_batch[..., :4]
+    n1_4 = w_4vec_construct(y_pred[..., 4:8]) - x_batch[..., 4:8]
     nn_4 = n0_4 + n1_4
     # Penalize mismatch in the 2D MET vector magnitude (rotation-invariant in x-y plane).
-    dpx = nn_4[..., 0] - x_batch[..., 20]
-    dpy = nn_4[..., 1] - x_batch[..., 21]
+    dpx = nn_4[..., 0] - x_batch[..., 16]
+    dpy = nn_4[..., 1] - x_batch[..., 17]
     dpt = torch.sqrt(dpx**2 + dpy**2 + TOR)
     return F.huber_loss(dpt, torch.zeros_like(dpt))

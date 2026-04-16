@@ -118,33 +118,13 @@ def load_data(data_path):
             col(jet_py[:, 1]), #13
             col(jet_pz[:, 1]), #14
             col(jet_energy[:, 1]), #15
-            col(jet_px[:, 2]), #16
-            col(jet_py[:, 2]), #17
-            col(jet_pz[:, 2]), #18
-            col(jet_energy[:, 2]), #19
-            col(met_px), #20
-            col(met_py), #21
-            col(dilep_px), #22
-            col(dilep_py), #23
-            col(dilep_pz), #24
-            col(dilep_energy), #25
-            col(deta_ll), #26
-            col(dphi_llmet), #27
-            col(dphi_l1met), #28 (l1 -> pos_lep; l2 -> neg_lep)
-            col(dphi_l2met), #29
-            col(dphi_ll), #30
-            col(dr_ll), #31
-            # col(lep_pos_pt),
-            # col(lep_neg_pt),
-            # col(lep_pos_eta),
-            # col(lep_neg_eta),
-            # col(lep_pos_phi),
-            # col(lep_neg_phi),
-            # col(met_pt),
-            # col(met_phi),
-            # col(jet_btag),# check definitin!!
-            # col(n_jets),
-            # col(n_bjets),
+            col(met_px), #16
+            col(met_py), #17
+            col(deta_ll), #18
+            col(dphi_llmet), #19
+            col(dphi_l1met), #20 (l1 -> pos_lep; l2 -> neg_lep)
+            col(dphi_l2met), #21
+            col(dphi_ll), #22
         ], axis=-1)
         
         # target objects
@@ -152,11 +132,11 @@ def load_data(data_path):
 			col(category_data["truth_pos_w"]["px"]),
 			col(category_data["truth_pos_w"]["py"]),
 			col(category_data["truth_pos_w"]["pz"]),
-			col(category_data["truth_pos_w"]["energy"]),
+			col(np.log(category_data["truth_pos_w"]["energy"])),
 			col(category_data["truth_neg_w"]["px"]),
 			col(category_data["truth_neg_w"]["py"]),
 			col(category_data["truth_neg_w"]["pz"]),
-			col(category_data["truth_neg_w"]["energy"]),
+			col(np.log(category_data["truth_neg_w"]["energy"])),
 			col(category_data["truth_pos_w"]["m"]),
 			col(category_data["truth_neg_w"]["m"]),
         ], axis=-1)

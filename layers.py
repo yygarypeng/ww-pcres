@@ -17,8 +17,8 @@ class _AttnFFN(nn.Module):
         super().__init__()
         self.ffn = nn.Sequential(
             nn.LayerNorm(d_model),
-            nn.Linear(d_model, ffn_dim),
             nn.GELU(),
+            nn.Linear(d_model, ffn_dim),
             nn.Dropout(dropout),
             nn.Linear(ffn_dim, d_model),
         )
@@ -82,9 +82,6 @@ class ResidualBlock(nn.Module):
             nn.GELU(),
             nn.Linear(in_dim, out_dim),
             nn.Dropout(dropout) if dropout and dropout > 0 else nn.Identity(),
-            # nn.GELU(),
-            # nn.Linear(out_dim, out_dim),
-            # nn.Dropout(dropout) if dropout and dropout > 0 else nn.Identity(),
         )
 
     def forward(self, x):
@@ -93,14 +90,13 @@ class ResidualBlock(nn.Module):
         return x_shortcut + y
 
 class WBosonFourVectorLayer(nn.Module):
-    """
-    Compute W four-vectors from leptons and predicted neutrino 3-momenta.
-    """
     def forward(self, lep0, lep1, nu_3mom):
         nu0_3, nu1_3 = nu_3mom[..., :3], nu_3mom[..., 3:]
         # neutrino energies as |p| for (approx) massless
         nu0_E = torch.sqrt(torch.clamp(torch.sum(nu0_3 ** 2, dim=-1, keepdim=True), min=1e-16))
         nu1_E = torch.sqrt(torch.clamp(torch.sum(nu1_3 ** 2, dim=-1, keepdim=True), min=1e-16))
-        nu0_4 = torch.cat([nu0_3, nu0_E], dim=-1)
-        nu1_4 = torch.cat([nu1_3, nu1_E], dim=-1)
-        return torch.cat([lep0 + nu0_4, lep1 + nu1_4], dim=-1)
+        w0_3 = lep0[..., :3] + nu0_3
+        w1_3 = lep1[..., :3] + nu1_3
+        w0_logE = torch.log(lep0[..., 3].reshape(-1, 1) + nu0_E)
+        w1_logE = torch.log(lep1[..., 3].reshape(-1, 1) + nu1_E)
+        return torch.cat([w0_3, w0_logE, w1_3, w1_logE], dim=-1)

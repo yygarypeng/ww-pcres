@@ -18,7 +18,7 @@ def load_config(config_path="config.yaml"):
     if not os.path.exists(config_path):
         raise FileNotFoundError(f"Config file not found at: {config_path}")
 
-    with open(config_path, 'r') as file:
+    with open(config_path, "r") as file:
         config = yaml.safe_load(file)
     return config
 
@@ -32,7 +32,6 @@ def main(train=True, arg=None):
     LOSS_WEIGHTS = _param["loss_weights"]
     D_MODEL = _param["d_model"]
     N_HEADS = _param["n_heads"]
-    NUM_BLOCKS = _param["num_blocks"]
     NUM_WORKERS = _param.get("num_workers", 0)
     PERSISTENT_WORKERS = _param.get("persistent_workers", False)
     PIN_MEMORY = _param.get("pin_memory", torch.cuda.is_available())
@@ -55,7 +54,7 @@ def main(train=True, arg=None):
             print("No existing checkpoint found, starting fresh...")
     else:
         print("Evaluation mode, loading checkpoints...")
-    
+
     torch.set_default_dtype(torch.float32)
     torch.set_float32_matmul_precision("medium") # "high" is more accurate but slower
     llvv, ww, (std_mean_train, std_scale_train), _ = data.load_data(data_path) # llvv, WW
@@ -83,14 +82,13 @@ def main(train=True, arg=None):
             lr=LEARNING_RATE,
             loss_weights=LOSS_WEIGHTS,
             d_model=D_MODEL,
-            num_heads=N_HEADS,
-            num_blocks=NUM_BLOCKS
+            num_heads=N_HEADS
         )
 
         ckpt = ModelCheckpoint(monitor="val_loss", mode="min", save_top_k=1, filename="reg-{epoch:02d}-{val_loss:.2f}")
         early_stopping = EarlyStopping(
             monitor="val_loss",
-            patience=128,
+            patience=64,
             mode="min",
             verbose=False
         )
@@ -110,7 +108,7 @@ def main(train=True, arg=None):
             print("Wandb logging disabled, only using CSVLogger.")
                 
         csv_logger = CSVLogger(save_dir=saved_path, name="logs")
-        
+
         trainer = Trainer(
             max_epochs=EPOCHS,
             accelerator="gpu" if torch.cuda.is_available() else "cpu",
@@ -128,7 +126,7 @@ if __name__ == "__main__":
     from time import time
     t0 = time()
     argparser = argparse.ArgumentParser()
-    argparser.add_argument('--wandb', '-w', action='store_true', help='Enable wandb logging and training mode')
+    argparser.add_argument("--wandb", "-w", action="store_true", help="Enable wandb logging and training mode")
     args = argparser.parse_args()
     main(train=True, arg=args)
     t1 = time()

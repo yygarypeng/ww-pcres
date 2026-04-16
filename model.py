@@ -14,7 +14,7 @@ class WBosonRegressor(nn.Module):
     def __init__(
             self, 
             input_dim,
-            d_model, num_heads, num_blocks,
+            d_model, num_heads,
             std_mean_train, std_scale_train
         ):
         super().__init__()
@@ -24,27 +24,13 @@ class WBosonRegressor(nn.Module):
         
         # self-attention to capture global feature interactions
         self.lep_embed = nn.Linear(4, d_model)
+        # self.lep1_embed = nn.Linear(4, d_model)
         self.jet_embed = nn.Linear(4, d_model)
+        # self.jet1_embed = nn.Linear(4, d_model)
         self.met_embed = nn.Linear(2, d_model)
-        self.dilep_embed = nn.Linear(4, d_model)
-        hl_input_dim = input_dim - (4 + 4 + 4*3 + 2 + 4)
+        hl_input_dim = input_dim - (4*2 + 4*2 + 2)
         self.hl_embed = nn.Linear(hl_input_dim, d_model)
-        # addtional tokens for global context
-        # self.px_embed = nn.Linear(7, d_model)
-        # self.py_embed = nn.Linear(7, d_model)
-        # self.pz_embed = nn.Linear(6, d_model)
-        # self.energy_embed = nn.Linear(6, d_model)
-        # self.dphi_embed = nn.Linear(4, d_model)
-        # self.dlong_ll_embed = nn.Linear(2, d_model) # dilep longitundal features: dilep_eta and dr_ll
-        
-        # number of tokens = 8 objects + 6 additional tokens
-        # self.num_tokens = 8 + 6
-        self.num_tokens = 8
-        # # type embedding
-        # self.type_embed = nn.Embedding(self.num_tokens, d_model) # [num_tokens, d_model]
-        # token normalization
-        # self.tokens_norm = nn.LayerNorm(d_model)
-        # self-attention blocks for global context refinement
+        self.num_tokens = 6
         self.sa_blocks = nn.ModuleList([
             SelfAttentionBlock(d_model, num_heads, dropout=0.5) for _ in range(4)
         ])
@@ -54,7 +40,7 @@ class WBosonRegressor(nn.Module):
         _dim = 512 if d_model * self.num_tokens >= 512 else d_model * self.num_tokens
         blocks = [nn.Linear(d_model * self.num_tokens, _dim)] # reduce dimension after flattening
         blocks.append(ResidualBlock(_dim, 128, dropout=0.5))
-        blocks.extend([ResidualBlock(128, 128, dropout=0.5) for _ in range(num_blocks)])
+        blocks.append(ResidualBlock(128, 128, dropout=0.5))
         blocks.append(ResidualBlock(128, 256, dropout=0.5))
         self.trunk = nn.Sequential(*blocks)
 
@@ -79,32 +65,17 @@ class WBosonRegressor(nn.Module):
         key_mask = torch.zeros((batch_size, self.num_tokens), dtype=torch.bool, device=x.device)
         key_mask[:, 2] = (x[:, 8:12].abs().sum(dim=1) == 0)
         key_mask[:, 3] = (x[:, 12:16].abs().sum(dim=1) == 0)
-        key_mask[:, 4] = (x[:, 16:20].abs().sum(dim=1) == 0)
 
         # embedding to get initial context
         l0 = self.lep_embed(x_std[:, 0:4])
         l1 = self.lep_embed(x_std[:, 4:8])
         j0 = self.jet_embed(x_std[:, 8:12])
         j1 = self.jet_embed(x_std[:, 12:16])
-        j2 = self.jet_embed(x_std[:, 16:20])
-        met = self.met_embed(x_std[:, 20:22])
-        dilep = self.dilep_embed(x_std[:, 22:26])
-        hl = self.hl_embed(x_std[:, 26:])
-        # additional tokens
-        # px = self.px_embed(x_std[:, [0, 4, 8, 12, 16, 20, 22]])
-        # py = self.py_embed(x_std[:, [1, 5, 9, 13, 17, 21, 23]])
-        # pz = self.pz_embed(x_std[:, [2, 6, 10, 14, 18, 24]])
-        # energy = self.energy_embed(x_std[:, [3, 7, 11, 15, 19, 25]])
-        # dphi = self.dphi_embed(x_std[:, [27, 28, 29, 30]])
-        # dlong_ll = self.dlong_ll_embed(x_std[:, [26, 31]])
-
-        # token type embedding
-        # type_ids = torch.arange(self.num_tokens, device=x.device) # [num_tokens]
-        # type_embed = self.type_embed(type_ids) # [num_tokens, d_model]
-        # Combine into Context: [Batch, 8 + 6, d_model]
+        met = self.met_embed(x_std[:, 16:18])
+        hl = self.hl_embed(x_std[:, 18:26])
+        
         context = torch.stack([
-            l0, l1, j0, j1, j2, met, dilep, hl, 
-            # px, py, pz, energy, dphi, dlong_ll
+            l0, l1, j0, j1, met, hl, 
         ], dim=1)
         
         for refiner in self.sa_blocks:
@@ -130,7 +101,7 @@ class LightningWBoson(L.LightningModule):
     def __init__(
             self, 
             input_dim,
-            d_model, num_heads, num_blocks,
+            d_model, num_heads,
             std_mean_train, std_scale_train, 
             lr=1e-4, loss_weights=None
         ):
@@ -138,7 +109,7 @@ class LightningWBoson(L.LightningModule):
         self.save_hyperparameters()
         self.model = WBosonRegressor(
             input_dim, 
-            d_model, num_heads, num_blocks,
+            d_model, num_heads,
             std_mean_train, std_scale_train,
         ) # give a base model structure for forward() 
         defaults = {
@@ -196,29 +167,14 @@ class LightningWBoson(L.LightningModule):
 
     def test_step(self, batch, batch_idx):
         _ = self._shared_step(batch, batch_idx, stage="test_")
-
-    # def configure_optimizers(self):
-    #     return torch.optim.AdamW(self.parameters(), lr=self.hparams.lr, weight_decay=5.0e-4)
     
     def configure_optimizers(self):
-            # AdamW optimizer with weight decay
             optimizer = torch.optim.AdamW(
                 self.parameters(), 
                 lr=self.hparams.lr, 
-                weight_decay=0.001
+                weight_decay=1e-4
             )
-            
-            # # Cosine annealing scheduler
-            # scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-            #     optimizer, 
-            #     T_max=400, 
-            #     eta_min=1e-6
-            # )
             
             return {
                 "optimizer": optimizer,
-                # "lr_scheduler": {
-                #     "scheduler": scheduler,
-                #     "interval": "epoch",
-                # },
             }

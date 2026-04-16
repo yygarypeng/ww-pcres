@@ -143,7 +143,7 @@ def plot_1d_hist(
         fig.savefig(savepath, bbox_inches="tight")
     plt.show()
 
-def plot_2d_hist(pred, truth, name, bins_edges=np.linspace(-200, 200, 51), log=False, unit="GeV", color="black", vmax=1e3, offset=0.5, savepath=None):
+def plot_2d_hist(pred, truth, name, bins_edges=np.linspace(-200, 200, 51), log=False, unit="GeV", color="black", vmax=1e2, offset=0.5, savepath=None):
     err = 0.2
     cor_mask = np.abs(_rel_err_func(pred, truth)) <= err # set 20% relative error cut
     fig, ax = plt.subplots()
