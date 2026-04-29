@@ -1,9 +1,7 @@
-import os
 import argparse
 
 import numpy as np
 import torch
-import wandb
 
 from pytorch_lightning import Trainer
 from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
@@ -13,11 +11,14 @@ from sklearn.model_selection import train_test_split
 from model import LightningWBoson
 from data_module import WBosonDataModule
 import load_data as data
+from train import clean_training_output, prime_csv_metric_header
 
 # ====== Hyperparameters constants ======
 BATCH_SIZE = 256
 EPOCHS = 1024
 LEARNING_RATE = 1e-5
+D_MODEL = 256
+N_HEADS = 16
 LOSS_WEIGHTS = {
     "huber": 1.0,
     "w_mass_mmd0": 5.0,
@@ -33,23 +34,20 @@ saved_path = f"/root/work/hww_pcres_regressor/{project_name}"
 data_path = "/root/data/danning_h5/ypeng/mc20_qe_v4_recotruth_merged.h5"
 SEED = 114
 
-def main(train=True):
+def main(train=True, arg=None):
+    run_saved_path = arg.saved_path if arg is not None and arg.saved_path else saved_path
+    run_data_path = arg.data_path if arg is not None and arg.data_path else data_path
+    use_wandb = bool(arg is not None and arg.wandb)
 
     # ---------- housekeeping ----------
-    if train == True:
-        if os.path.exists(saved_path):
-            print(f"Found existing checkpoint at {saved_path}, deleting...")
-            os.system(f"rm -rf {saved_path}")
-        else:
-            print("No existing checkpoint found, starting fresh...")
-    else:
+    if train != True:
         print("Evaluation mode, loading checkpoints...")
 
     torch.set_default_dtype(torch.float32)
     torch.set_float32_matmul_precision("medium")
 
     # ---------- load data ----------
-    llvv, ww, (std_mean_train, std_scale_train), _ = data.load_data(data_path)
+    llvv, ww, _, _ = data.load_data(run_data_path)
     X = llvv.astype(np.float32)
     Y = ww.astype(np.float32)
 
@@ -69,11 +67,13 @@ def main(train=True):
 			batch_size=BATCH_SIZE,
 		)
         print("Setting up testing data module...")
+        dm.setup()
         return dm
 
 	# ---------- train ----------
     if train:
         print("Starting 2-fold training...")
+        clean_training_output(run_saved_path)
         
         # Split only the training portion
         X = X[input_idx]
@@ -102,8 +102,15 @@ def main(train=True):
 
             input_dim = X.shape[1]
             print(f"Input dimension: {input_dim}")
+            (std_mean_train, std_scale_train), _ = data.compute_standardization_stats(
+                X,
+                Y,
+                train_indices=train_idx,
+            )
             model = LightningWBoson(
 				input_dim=input_dim,
+				d_model=D_MODEL,
+				num_heads=N_HEADS,
 				std_mean_train=std_mean_train,
 				std_scale_train=std_scale_train,
 				lr=LEARNING_RATE,
@@ -124,16 +131,18 @@ def main(train=True):
             )
 
             csv_logger = CSVLogger(
-                save_dir=saved_path,
+                save_dir=run_saved_path,
                 name=f"fold{fold}",
+                version=0,
             )
-            step_per_epoch = len(train_idx) // BATCH_SIZE
+            prime_csv_metric_header(csv_logger, model)
+            step_per_epoch = max(1, len(dm.train_dataloader()))
             
-            if args.wandb:
+            if use_wandb:
                 wandb_logger = WandbLogger(
                     project=project_name,
                     name=f"fold{fold}",
-                    save_dir=saved_path,
+                    save_dir=run_saved_path,
                     log_model=True,
                 )
                 
@@ -142,14 +151,14 @@ def main(train=True):
             trainer = Trainer(
                 max_epochs=EPOCHS,
                 accelerator="gpu" if torch.cuda.is_available() else "cpu",
-                devices=1 if torch.cuda.is_available() else None,
+                devices=1,
                 callbacks=[ckpt, early_stopping],
-                logger=[csv_logger, wandb_logger] if args.wandb else [csv_logger],
+                logger=[csv_logger, wandb_logger] if use_wandb else [csv_logger],
                 log_every_n_steps=step_per_epoch,
             )
 
             trainer.fit(model, datamodule=dm)
-            if args.wandb:
+            if use_wandb:
                 wandb_logger.experiment.finish()
 
 
@@ -157,8 +166,10 @@ if __name__ == "__main__":
     from time import time
     argparser = argparse.ArgumentParser()
     argparser.add_argument('--wandb', '-w', action='store_true', help='Enable wandb logging and training mode')
+    argparser.add_argument('--data-path', default=None, help='Override input HDF5 path')
+    argparser.add_argument('--saved-path', default=None, help='Override output directory')
     args = argparser.parse_args()
     
     t0 = time()
-    main(train=True)
+    main(train=True, arg=args)
     print(f"Total time: {time() - t0:.1f} seconds.")

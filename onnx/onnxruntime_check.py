@@ -1,83 +1,70 @@
-import glob
-import numpy as np
+import argparse
+from pathlib import Path
+import sys
 
+import numpy as np
 import onnxruntime
 import torch
-import sys
-sys.path.append('..')
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+sys.path.append(str(REPO_ROOT))
+
+from convert_to_onnx import find_checkpoint
 from model import LightningWBoson
-import train
+from train import load_config
 
 
-# Fix seeds so PyTorch vs. ONNX comparisons are repeatable
-np.random.seed(0)
-torch.manual_seed(0)
+def main():
+    parser = argparse.ArgumentParser(description="Compare ONNX Runtime output with PyTorch")
+    parser.add_argument("--config", "-c", default=str(REPO_ROOT / "config.yaml"), help="Path to YAML config file")
+    parser.add_argument("--checkpoint", help="Specific .ckpt file to compare against")
+    parser.add_argument("--onnx", default="hww_pcres_regressor.onnx", help="ONNX model path")
+    parser.add_argument("--batch-size", type=int, default=16, help="Random comparison batch size")
+    parser.add_argument("--seed", type=int, default=0, help="Random input seed")
+    args = parser.parse_args()
+
+    cfg = load_config(args.config)
+    ckpt_path = find_checkpoint(cfg["paths"]["saved_path"], args.checkpoint)
+    onnx_path = Path(args.onnx)
+    if not onnx_path.exists():
+        raise FileNotFoundError(f"ONNX model not found: {onnx_path}")
+
+    print(f"Loading ONNX model from {onnx_path}")
+    ort_session = onnxruntime.InferenceSession(str(onnx_path), providers=["CPUExecutionProvider"])
+
+    print(f"Comparing with PyTorch checkpoint: {ckpt_path}")
+    pytorch_model = LightningWBoson.load_from_checkpoint(
+        ckpt_path,
+        map_location=torch.device("cpu"),
+        weights_only=False,
+        strict=False,
+    )
+    pytorch_model.eval()
+
+    rng = np.random.default_rng(args.seed)
+    input_dim = int(pytorch_model.hparams.input_dim)
+    test_input = rng.standard_normal((args.batch_size, input_dim), dtype=np.float32)
+
+    input_name = ort_session.get_inputs()[0].name
+    ort_result = ort_session.run(None, {input_name: test_input})[0]
+
+    with torch.no_grad():
+        pytorch_output = pytorch_model(torch.tensor(test_input, dtype=torch.float32)).detach().cpu().numpy()
+
+    diff = pytorch_output - ort_result
+    max_abs_diff = float(np.max(np.abs(diff)))
+    max_rel_diff = float(np.max(np.abs(diff) / (np.abs(pytorch_output) + 1e-16)))
+    atol, rtol = 1e-3, 3e-3
+    allclose = np.allclose(pytorch_output, ort_result, atol=atol, rtol=rtol)
+
+    print(f"Input shape: {test_input.shape}")
+    print(f"ONNX output shape: {ort_result.shape}")
+    print(f"Maximum abs diff: {max_abs_diff}")
+    print(f"Maximum rel diff: {max_rel_diff}")
+    print(f"allclose(atol={atol}, rtol={rtol}): {allclose}")
+    if not allclose:
+        raise AssertionError("ONNX Runtime output differs from PyTorch beyond tolerance")
 
 
-# Path to the ONNX model
-fold = "fold0"
-onnx_path = f"./hww_pcres_regressor_reco_{fold}.onnx"
-print(f"Loading ONNX model from {onnx_path}")
-# Load the ONNX model
-# print(onnxruntime.get_available_providers()) # debug: check available providers
-ort_session = onnxruntime.InferenceSession(
-    onnx_path,
-    providers=["CPUExecutionProvider"]
-)
-
-# Create sample input (match the dimensions used during export `example_input`)
-batch_size = train.BATCH_SIZE
-num_features = 26
-test_input = np.random.randn(batch_size, num_features).astype(np.float32)
-
-# Run inference with ONNX Runtime
-# https://onnxruntime.ai/docs/get-started/with-python.html
-# print(ort_session.get_inputs()[0].name)  # debug: print input name
-input_name = ort_session.get_inputs()[0].name  # rely on exported name
-ort_inputs = {input_name: test_input}
-ort_outputs = ort_session.run(None, ort_inputs) # None: to get all output nodes
-ort_result = ort_outputs[0]
-
-print(f"Input shape: {test_input.shape}")
-print(f"ONNX model output shape: {ort_result.shape}")
-
-try:
-    # Find the checkpoint (search all versions)
-    ckpt_files = glob.glob(f"../hww_pcres_regressor_kfold/{fold}/**/checkpoints/*.ckpt")
-    if ckpt_files:
-        ckpt_path = ckpt_files[0]
-        print(f"\nComparing with original PyTorch model from {ckpt_path}")
-
-        # Load the PyTorch model on CPU
-        pytorch_model = LightningWBoson.load_from_checkpoint(ckpt_path, map_location=torch.device('cpu'), weights_only=False, strict=False)
-        pytorch_model.eval()
-
-        torch_input = torch.tensor(test_input, dtype=torch.float32)
-
-        with torch.no_grad():
-            pytorch_output = pytorch_model(torch_input).detach().cpu().numpy()
-
-        # Compare results
-        diff = pytorch_output - ort_result
-        max_abs_diff = float(np.max(np.abs(diff)))
-        max_rel_diff = float(np.max(np.abs(diff) / (np.abs(pytorch_output) + 1e-16)))
-        # Float32 + BatchNorm + sqrt operations yield ~1e-4 to 1e-3 relative noise between runtimes.
-        # Allow up to ~0.3% relative drift to avoid false alarms while still catching real regressions.
-        atol, rtol = 1e-3, 3e-3
-        allclose = np.allclose(pytorch_output, ort_result, atol=atol, rtol=rtol)
-        print(f"Maximum abs diff: {max_abs_diff}")
-        print(f"Maximum rel diff: {max_rel_diff}")
-        print(f"allclose(atol={atol}, rtol={rtol}): {allclose}")
-        if not allclose:
-            print("Differ!")
-        else:
-            print("Match and within tolerance!")
-            
-    else:
-        print("No PyTorch ckpt found for comparison.")
-        
-except Exception as e:
-    print(f"Could not compare with PyTorch model: {e}")
-
-print("\nONNX model inference finished.")
+if __name__ == "__main__":
+    main()

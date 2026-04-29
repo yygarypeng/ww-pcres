@@ -1,3 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
+set -euo pipefail
 
-taskset -c 12-15 python train.py -w &> record &
+taskset -c "${CPU_CORES:-10-15}" python train.py --config "${CONFIG:-config.yaml}" -w &> "${LOG_FILE:-record}" &

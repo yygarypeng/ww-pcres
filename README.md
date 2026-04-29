@@ -1,22 +1,43 @@
 # hww_pcres_regressor
 
-Physics-constrained residual regressor for reconstructing the two $W$ boson four-vectors from dilepton, MET, jet, and angular observables in $H \to WW$ events.
+PyTorch Lightning regressor for reconstructing the two W-boson four-vectors in
+H -> WW events. The model predicts neutrino momenta from leptons, MET, jets,
+and high-level event features, then builds W four-vectors with physics-aware
+layers and losses.
 
-## Repository overview
+## Layout
 
-The main training workflow is now config-driven:
-
-- `train.py`: primary training entry point.
-- `config.yaml`: training hyperparameters and filesystem paths.
+- `train.py`: main training script.
+- `config.yaml`: local run configuration.
+- `config.example.yaml`: template config for new users.
 - `load_data.py`: HDF5 loading and feature construction.
-- `data_module.py`: PyTorch Lightning data module.
-- `model.py`: Lightning model definition.
-- `two_fold_train.py`: older two-fold training script with hardcoded parameters.
-- `onnx/`: ONNX export and runtime validation scripts.
+- `data_module.py`: dataset split and dataloaders.
+- `model.py`, `layers.py`, `losses.py`, `physics.py`, `torchBoost.py`: model and physics code.
+- `plottingtool.py`, `ohbboosting.py`, `visualize.ipynb`: visualization and ROOT-based angular comparison helpers.
+- `onnx/`: supported ONNX export and validation workflow.
+- `archive/`: old experiments kept for reference, not the main workflow.
 
-## Configuration
+## Install
 
-Before training, update the paths in `config.yaml`:
+```bash
+pip install -r requirements.txt
+```
+
+Optional:
+
+```bash
+pip install wandb onnx onnxruntime
+```
+
+`ohbboosting.py` additionally requires ROOT and is only needed for ROOT-based visualization checks.
+
+## Configure
+
+```bash
+cp config.example.yaml config.yaml
+```
+
+Edit:
 
 ```yaml
 paths:
@@ -24,97 +45,56 @@ paths:
   data_path: "/path/to/training_data.h5"
 ```
 
-Key parameters are also defined in `config.yaml`, including:
+Category selection is intentionally simple. By default, all top-level HDF5 categories are loaded,
+concatenated, and then randomly split by `val_frac` and `test_frac`:
 
-- `batch_size`
-- `epochs`
-- `learning_rate`
-- `warmup_epochs`
-- `d_model`
-- `n_heads`
-- `num_blocks`
-- `loss_weights`
-
-Important: `train.py` deletes the entire directory specified by `saved_path` before starting a fresh training run. Point `saved_path` to a dedicated output directory, not a shared location.
-
-## Training
-
-Run standard training with:
-
-```bash
-python train.py
+```yaml
+data:
+  categories: null              # or ["ggF_train", "ggF_val", "ggF_test"]
+  val_frac: 0.05
+  test_frac: 0.01
 ```
 
-Enable Weights & Biases logging with:
+Use a dedicated `saved_path`. Training deletes that output directory before a fresh run, after data
+and model setup have succeeded.
+
+## Train
 
 ```bash
-python train.py --wandb
+python train.py --config config.yaml
 ```
 
-Outputs are written under `saved_path`, including:
-
-- Lightning checkpoints
-- CSV logs
-- optional Weights & Biases run metadata
-
-The trainer uses GPU automatically when CUDA is available; otherwise it falls back to CPU.
-
-## Two-fold training
-
-`two_fold_train.py` is still available for the older fold-based workflow:
+With Weights & Biases:
 
 ```bash
-python two_fold_train.py
-python two_fold_train.py --wandb
+python train.py --config config.yaml --wandb
 ```
 
-Unlike `train.py`, this script does not read `config.yaml`. Its paths and hyperparameters are defined directly inside the file.
+Outputs are written under `paths.saved_path`.
 
-## ONNX export
+## Data
 
-The ONNX utilities live in `onnx/`:
+The HDF5 file should contain top-level categories such as `ggF_train`, `ggF_val`, `ggF_test`, or
+`VBF_train`. The selected categories are loaded together before splitting. Each selected category
+needs these groups and fields:
 
-- `convert_to_onnx.py`: exports a checkpoint to ONNX.
-- `onnxruntime_check.py`: compares ONNX Runtime output against the PyTorch checkpoint.
+- `pos_lep`: `px`, `py`, `pz`, `energy`, `pt`, `eta`, `phi`
+- `neg_lep`: `px`, `py`, `pz`, `energy`, `pt`, `eta`, `phi`
+- `met`: `px`, `py`, `pt`, `phi`
+- `jets`: `px`, `py`, `pz`, `energy`
+- `truth_pos_w`: `px`, `py`, `pz`, `energy`, `m`
+- `truth_neg_w`: `px`, `py`, `pz`, `energy`, `m`
 
-Typical usage:
+The loader builds 26 input features and 10 targets. Non-finite rows are removed. Input
+standardization is fitted on the training split only.
 
-```bash
-cd onnx
-python convert_to_onnx.py
-python onnxruntime_check.py
-```
+## ONNX
 
-These scripts currently assume:
+ONNX export is a supported public workflow. See `onnx/README.md`.
 
-- checkpoints exist under `../hww_pcres_regressor_kfold/<fold>/...`
-- the selected `fold` matches the exported checkpoint
-- the hardcoded input dimension in the script matches the trained model
+## License
 
-If you trained with `train.py` or changed the feature set, update the ONNX scripts accordingly before exporting.
-
-## Data expectations
-
-`load_data.py` expects an HDF5 file with grouped particle records, including at least:
-
-- positive and negative lepton kinematics
-- MET features
-- jet features
-- truth $W^+$ and $W^-$ targets
-
-The loader constructs the training feature matrix and target tensor, removes non-finite rows, and computes standardization statistics used by the model.
-
-## Dependencies
-
-The code imports the following Python packages:
-
-- `torch`
-- `pytorch_lightning`
-- `numpy`
-- `pyyaml`
-- `h5py`
-- `scikit-learn`
-- `wandb` (optional, only when using `--wandb`)
+BSD-3-Clause. See `LICENSE`.
 
 ## Author
 

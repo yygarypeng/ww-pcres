@@ -4,6 +4,12 @@ hww_pcres_regressor_nofold/
 hww_pcres_regressor_kfold/
 record
 log
+wandb/
+lightning_logs/
+.agents/
+.continue/
+skills-lock.json
+torchboost_theta_phi_compare.png
 *npz
 *h5
 

@@ -1,13 +1,26 @@
 import torch
 import torch.nn.functional as F
+from torchBoost import Booster
 
-# RBF kernel widths
-SIGMA_LST = [0.05, 0.1, 0.5, 1.0]
 TOR = 1e-16
 
-def compute_mmd(x, y, bandwidth_range=SIGMA_LST):
+def compute_mmd(x, y, bandwidth_range=None):
+    if bandwidth_range is None:
+        bandwidth_range = [0.05, 0.1, 0.5, 1.0]
     x = x.reshape(x.shape[0], -1)
     y = y.reshape(y.shape[0], -1)
+
+    # Ignore samples with non-finite values so a single NaN does not poison
+    # the full pairwise kernel matrix.
+    finit_mask = torch.isfinite(x).all(dim=1) & torch.isfinite(y).all(dim=1)
+    x = x[finit_mask]
+    y = y[finit_mask]
+
+    if x.shape[0] == 0 or y.shape[0] == 0:
+        return (
+            torch.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0).sum()
+            + torch.nan_to_num(y, nan=0.0, posinf=0.0, neginf=0.0).sum()
+        ) * 0.0
     
     with torch.no_grad(): # a heuristic way to set bandwidths
         dists = torch.cdist(y, y, p=2)
@@ -22,6 +35,9 @@ def compute_mmd(x, y, bandwidth_range=SIGMA_LST):
     dxx = rx.t() + rx - 2. * xx
     dyy = ry.t() + ry - 2. * yy
     dxy = rx.t() + ry - 2. * xy
+    dxx = dxx.clamp_min(0.0)
+    dyy = dyy.clamp_min(0.0)
+    dxy = dxy.clamp_min(0.0)
     
     XX = torch.zeros_like(xx)
     YY = torch.zeros_like(yy)
@@ -55,13 +71,13 @@ def neg_r2_loss(y_true, y_pred):
     y_t = y_true[..., :8]
     y_p = y_pred[..., :8]
     ss_res = torch.sum((y_t - y_p) ** 2)
-    ss_tot = torch.sum((y_t - torch.mean(y_t)) ** 2)
+    ss_tot = torch.sum((y_t - torch.mean(y_t)) ** 2).clamp_min(TOR)
     return ss_res / ss_tot - 1.0
 
 
 def w_4vec_construct(w_4vec_loge):
     w_3 = w_4vec_loge[..., :3]
-    w_logE = torch.exp(w_4vec_loge[..., 3])
+    w_logE = torch.exp(torch.clamp(w_4vec_loge[..., 3], min=-20.0, max=20.0))
     return torch.cat([w_3, w_logE.reshape(-1, 1)], dim=-1)
 
 def w_mass_mae_losses(y_true, y_pred):
@@ -86,8 +102,11 @@ def w_mass_mmd_losses(y_true, y_pred):
 def higgs_mass_loss(y_pred):
     w0, w1 = w_4vec_construct(y_pred[..., :4]), w_4vec_construct(y_pred[..., 4:8])
     higgs_4 = w0 + w1
-    h_mass = torch.sqrt(invariant_mass2(higgs_4).abs()) # less likely < 0, so take abs() not square
-    return F.l1_loss(h_mass, torch.full_like(h_mass, 125.0))
+    h_mass2 = invariant_mass2(higgs_4).clamp_min(0.0)
+    h_mass = torch.sqrt(h_mass2 + 1e-6)
+    return F.huber_loss(h_mass, torch.full_like(h_mass, 125.0))
+
+
 
 def nu_mass_loss(x_batch, y_pred):
     n0_4 = w_4vec_construct(y_pred[..., :4]) - x_batch[..., :4]
@@ -97,17 +116,37 @@ def nu_mass_loss(x_batch, y_pred):
     nu1_mass2 = invariant_mass2(n1_4)
     return F.huber_loss(nu0_mass2, torch.zeros_like(nu0_mass2)) + F.huber_loss(nu1_mass2, torch.zeros_like(nu1_mass2))
 
-def aux_mom_mmd_loss(y_true, y_pred, epoch):
+def aux_mom_mmd_loss(y_true, y_pred):
     w0_pred, w1_pred = w_4vec_construct(y_pred[..., :4]), w_4vec_construct(y_pred[..., 4:8])
     w0_true, w1_true = w_4vec_construct(y_true[..., :4]), w_4vec_construct(y_true[..., 4:8])
-    return compute_mmd(w0_pred, w0_true, [0.1, 0.5, 1.0, 5.0]), compute_mmd(w1_pred, w1_true, [0.1, 0.5, 1.0, 5.0])
+    _sigma_lst = [0.1, 0.5, 1.0, 5.0]
+    return compute_mmd(w0_pred, w0_true, _sigma_lst), compute_mmd(w1_pred, w1_true, _sigma_lst)
 
 def dinu_pt_loss(x_batch, y_pred):
     n0_4 = w_4vec_construct(y_pred[..., :4]) - x_batch[..., :4]
     n1_4 = w_4vec_construct(y_pred[..., 4:8]) - x_batch[..., 4:8]
     nn_4 = n0_4 + n1_4
-    # Penalize mismatch in the 2D MET vector magnitude (rotation-invariant in x-y plane).
-    dpx = nn_4[..., 0] - x_batch[..., 16]
-    dpy = nn_4[..., 1] - x_batch[..., 17]
-    dpt = torch.sqrt(dpx**2 + dpy**2 + TOR)
-    return F.huber_loss(dpt, torch.zeros_like(dpt))
+    dinu_pxpy = nn_4[..., :2]
+    met_pxpy = x_batch[..., 16:18]
+    return F.huber_loss(dinu_pxpy, met_pxpy)
+
+def angular_loss_mmd(x_batch, y_true, y_pred):
+    lep = x_batch[..., :8]
+    true_w0, true_w1 = w_4vec_construct(y_true[..., :4]), w_4vec_construct(y_true[..., 4:8])
+    pred_w0, pred_w1 = w_4vec_construct(y_pred[..., :4]), w_4vec_construct(y_pred[..., 4:8])
+    true_w = torch.cat([true_w0, true_w1], dim=-1)
+    pred_w = torch.cat([pred_w0, pred_w1], dim=-1)
+
+    true_booster = Booster(lep, true_w)
+    pred_booster = Booster(lep, pred_w)
+    valid = true_booster.valid_rest_frame_mask() & pred_booster.valid_rest_frame_mask()
+    if valid.sum().item() == 0:
+        return torch.nan_to_num(y_pred, nan=0.0, posinf=0.0, neginf=0.0).sum() * 0.0
+
+    lep = lep[valid]
+    true_w = true_w[valid]
+    pred_w = pred_w[valid]
+    true_ang = torch.stack(Booster(lep, true_w).lep_theta_phi_in_w_rest(), dim=-1)
+    pred_ang = torch.stack(Booster(lep, pred_w).lep_theta_phi_in_w_rest(), dim=-1)
+    return compute_mmd(pred_ang, true_ang)
+    # return F.l1_loss(pred_ang, true_ang)

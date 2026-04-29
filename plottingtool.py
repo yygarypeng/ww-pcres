@@ -215,7 +215,7 @@ def plot_2d_res_hist(pred, truth, name_pos, name_neg, bins_edges=np.linspace(-20
         ax.hist2d(pred, truth, bins=[bins_edges, bins_edges], cmap="viridis", vmin=1, vmax=vmax)
     ax.set_xlabel(rf"$\Delta_\text{{res}}${name_pos} [{unit}]")
     ax.set_ylabel(rf"$\Delta_\text{{res}}${name_neg} [{unit}]")
-    txt = hep.atlas.label(ATLAS_LABEL_TEXT, data=True, loc=0, rlabel="", ax=ax)
+    txt = hep.atlas.label("   "+ATLAS_LABEL_TEXT, data=True, loc=0, rlabel="", ax=ax)
     txt[0].set_color(color)
     txt[1].set_color(color)
     ax.tick_params(axis="both", which="major", pad=10)

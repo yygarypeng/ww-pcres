@@ -1,0 +1,31 @@
+parameters:
+  seed: 114
+  batch_size: 256
+  epochs: 1024
+  learning_rate: 1.0e-4
+  gradient_clip_val: 1.0
+  d_model: 256
+  n_heads: 16
+  num_workers: 4
+  persistent_workers: true
+  pin_memory: true
+  prefetch_factor: 4
+  loss_weights:
+    huber: 1.0
+    w_mass_mmd0: 1.0
+    w_mass_mmd1: 1.0
+    w0_mass_mae: 0.001
+    w1_mass_mae: 0.001
+    dinu_pt: 0.01
+    higgs_mass: 1.0
+    nu_mass: 0.0
+    angular_loss_mmd: 10.0
+
+data:
+  categories: null
+  val_frac: 0.05
+  test_frac: 0.01
+
+paths:
+  saved_path: "/path/to/output_dir"
+  data_path: "/path/to/training_data.h5"

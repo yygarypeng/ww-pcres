@@ -3,7 +3,46 @@ import h5py
 
 from sklearn.preprocessing import StandardScaler
 
-from physics import pt, eta, phi, deta, dphi, dr
+from physics import pt, eta, phi, deta, dphi
+
+
+def select_categories(available_categories, categories=None):
+    """Select HDF5 categories. None means load all categories."""
+    available = list(available_categories)
+    if categories:
+        missing = sorted(set(categories) - set(available))
+        if missing:
+            raise ValueError(f"Requested HDF5 categories not found: {missing}. Available: {available}")
+        selected = list(categories)
+    else:
+        selected = available
+
+    if not selected:
+        raise ValueError(f"No HDF5 categories selected. Available: {available}")
+
+    return selected
+
+
+def compute_standardization_stats(train_obj, target_obj=None, train_indices=None):
+    """Fit standardization statistics, optionally on a training subset only."""
+    feature_source = train_obj if train_indices is None else train_obj[train_indices]
+    feature_scaler = StandardScaler().fit(feature_source)
+    feature_stats = (feature_scaler.mean_, feature_scaler.scale_)
+
+    if target_obj is None:
+        return feature_stats, None
+
+    target_source = target_obj if train_indices is None else target_obj[train_indices]
+    target_scaler = StandardScaler().fit(target_source)
+    target_stats = (target_scaler.mean_, target_scaler.scale_)
+    return feature_stats, target_stats
+
+
+def _safe_log_positive(values):
+    result = np.full_like(values, np.nan, dtype=np.float64)
+    valid = values > 0.0
+    result[valid] = np.log(values[valid])
+    return result
 
 def load_particles_from_h5(filename):
     result = {}
@@ -35,7 +74,10 @@ def load_particles_from_h5(filename):
 
     return result
 
-def load_data(data_path):
+def load_data(
+    data_path,
+    categories=None,
+):
     
     data = load_particles_from_h5(data_path)
 
@@ -46,8 +88,14 @@ def load_data(data_path):
     all_train_objs = []
     all_target_objs = []
     
-    # Iterate through all categories (ggF_train, ggF_test, VBF_train, etc.)
-    for category in data.keys():
+    selected_categories = select_categories(
+        data.keys(),
+        categories=categories,
+    )
+    print("Using HDF5 categories:", ", ".join(selected_categories))
+
+    # Iterate through selected categories (ggF_train, VBF_train, etc.)
+    for category in selected_categories:
         category_data = data[category]
         
         # training features
@@ -74,7 +122,8 @@ def load_data(data_path):
         dilep_pt = pt(dilep_px, dilep_py)
         dilep_eta = eta(dilep_px, dilep_py, dilep_pz)
         dilep_phi = phi(dilep_px, dilep_py)
-        m_ll = np.sqrt(dilep_energy**2 - dilep_px**2 - dilep_py**2 - dilep_pz**2)
+        m_ll2 = dilep_energy**2 - dilep_px**2 - dilep_py**2 - dilep_pz**2
+        m_ll = np.where(m_ll2 >= -1.0e-6, np.sqrt(np.clip(m_ll2, 0.0, None)), np.nan)
 
         met_px = category_data["met"]["px"]
         met_py = category_data["met"]["py"]
@@ -87,16 +136,10 @@ def load_data(data_path):
         dphi_l2met = dphi(lep_neg_phi, met_phi)
         
         deta_ll = deta(lep_pos_eta, lep_neg_eta)
-        dr_ll = dr(deta_ll, dphi_ll)
-        
-        # only select first 3 jets (leading/subleading/subsubleading)
-        jet_px = category_data["jets"]["px"][:, 0:3]
-        jet_py = category_data["jets"]["py"][:, 0:3]
-        jet_pz = category_data["jets"]["pz"][:, 0:3]
-        jet_energy = category_data["jets"]["energy"][:, 0:3]
-        jet_btag = category_data["jets"]["btag"][:, 0:3]
-        n_jets = category_data["jets"]["n_jets"]
-        n_bjets = category_data["jets"]["n_bjets"]
+        jet_px = category_data["jets"]["px"][:, 0:2]
+        jet_py = category_data["jets"]["py"][:, 0:2]
+        jet_pz = category_data["jets"]["pz"][:, 0:2]
+        jet_energy = category_data["jets"]["energy"][:, 0:2]
 
         # pack them
         # all training mass-like objects are in GeV unit
@@ -120,11 +163,15 @@ def load_data(data_path):
             col(jet_energy[:, 1]), #15
             col(met_px), #16
             col(met_py), #17
-            col(deta_ll), #18
-            col(dphi_llmet), #19
-            col(dphi_l1met), #20 (l1 -> pos_lep; l2 -> neg_lep)
-            col(dphi_l2met), #21
-            col(dphi_ll), #22
+            # high level features
+            col(m_ll), #18
+            col(dilep_pt), #19
+            col(met_pt), #20
+            col(deta_ll), #21
+            col(dphi_llmet), #22
+            col(dphi_l1met), #23 (l1 -> pos_lep; l2 -> neg_lep)
+            col(dphi_l2met), #24
+            col(dphi_ll), #25
         ], axis=-1)
         
         # target objects
@@ -132,11 +179,11 @@ def load_data(data_path):
 			col(category_data["truth_pos_w"]["px"]),
 			col(category_data["truth_pos_w"]["py"]),
 			col(category_data["truth_pos_w"]["pz"]),
-			col(np.log(category_data["truth_pos_w"]["energy"])),
+			col(_safe_log_positive(category_data["truth_pos_w"]["energy"])),
 			col(category_data["truth_neg_w"]["px"]),
 			col(category_data["truth_neg_w"]["py"]),
 			col(category_data["truth_neg_w"]["pz"]),
-			col(np.log(category_data["truth_neg_w"]["energy"])),
+			col(_safe_log_positive(category_data["truth_neg_w"]["energy"])),
 			col(category_data["truth_pos_w"]["m"]),
 			col(category_data["truth_neg_w"]["m"]),
         ], axis=-1)
@@ -161,29 +208,10 @@ def load_data(data_path):
 
     print("Removed", (~valid_idx).sum(), "rows with NaN or infinite values")
     
-    _ = StandardScaler().fit_transform(train_obj)
-    std_mean_train, std_scale_train = StandardScaler().fit(train_obj).mean_, StandardScaler().fit(train_obj).scale_
-    _ = StandardScaler().fit_transform(target_obj)
-    std_mean_target, std_scale_target = StandardScaler().fit(target_obj).mean_, StandardScaler().fit(target_obj).scale_
+    (std_mean_train, std_scale_train), (std_mean_target, std_scale_target) = compute_standardization_stats(
+        train_obj,
+        target_obj,
+    )
 
 
     return train_obj, target_obj, (std_mean_train, std_scale_train), (std_mean_target, std_scale_target)
-
-if __name__ == "__main__":
-    from matplotlib import pyplot as plt
-    import torch
-    data_path = "/root/data/danning_h5/ypeng/mc20_qe_v4_recotruth_merged.h5"
-    train_obj, target_obj, _, _ = load_data(data_path)
-    w_pos_mass = target_obj[:, 8]
-    w_neg_mass = target_obj[:, 9]
-    plt.hist(w_pos_mass, bins=50, range=(0, 120), histtype='step', label='W+ mass')
-    plt.hist(w_neg_mass, bins=50, range=(0, 120), histtype='bar', label='W- mass')
-    plt.xlabel("W mass [GeV]")
-    plt.ylabel("Entries")
-    plt.legend()
-    train_obj = torch.tensor(train_obj)
-    print(torch.abs(train_obj[:, 8:12][:5]).sum(dim=1) == 0)
-    print(torch.abs(train_obj[:, 12:16][:5]).sum(dim=1) == 0)
-    print(torch.abs(train_obj[:, 16:20][:5]).sum(dim=1) == 0)
-    print(train_obj[:, 12:16][:5])
-    print(train_obj[:, 16:20][:5])
