@@ -33,10 +33,10 @@ class WBosonRegressor(nn.Module):
         self.met_embed = nn.Linear(2, d_model)
         self.hl_embed = nn.Linear(self.hl_input_dim, d_model) if self.hl_input_dim > 0 else None
         self.num_tokens = 5 + int(self.hl_embed is not None)
-        self.role_embedding = nn.Parameter(torch.zeros(self.num_tokens, d_model))
-        nn.init.normal_(self.role_embedding, mean=0.0, std=0.02)
+        # self.role_embedding = nn.Parameter(torch.zeros(self.num_tokens, d_model))
+        # nn.init.normal_(self.role_embedding, mean=0.0, std=0.02)
         self.sa_blocks = nn.ModuleList([
-            SelfAttentionBlock(d_model, num_heads, dropout=0.5) for _ in range(3)
+            SelfAttentionBlock(d_model, num_heads, dropout=0.5) for _ in range(4)
         ])
         print(f"Using {len(self.sa_blocks)} SA blocks.")
         
@@ -45,15 +45,15 @@ class WBosonRegressor(nn.Module):
         blocks = [nn.Linear(d_model * self.num_tokens, _dim)] # reduce dimension after flattening
         blocks.append(ResidualBlock(_dim, 256, dropout=0.5))
         blocks.append(ResidualBlock(256, 128, dropout=0.5))
-        # blocks.append(ResidualBlock(128, 128, dropout=0.5))
+        blocks.append(ResidualBlock(128, 128, dropout=0.5))
         blocks.append(ResidualBlock(128, 128, dropout=0.5))
         
         self.trunk = nn.Sequential(*blocks)
-        self.pre_trunk_bn = nn.BatchNorm1d(d_model * self.num_tokens)
+        self.pre_trunk_bn = nn.LayerNorm(d_model * self.num_tokens)
 
         # nu momentum regression head
         self.nu_mom_head = nn.Sequential(
-            nn.BatchNorm1d(128),
+            nn.LayerNorm(128),
             nn.Linear(128, 32),
             nn.GELU(),
             nn.Linear(32, 6)
@@ -83,7 +83,7 @@ class WBosonRegressor(nn.Module):
             tokens.append(self.hl_embed(x_std[:, self.base_input_dim:]))
         
         context = torch.stack(tokens, dim=1)
-        context = context + self.role_embedding.unsqueeze(0)
+        # context = context + self.role_embedding.unsqueeze(0)
         context = context.masked_fill(key_mask.unsqueeze(-1), 0.0)
         
         for refiner in self.sa_blocks:

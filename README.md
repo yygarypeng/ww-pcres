@@ -72,6 +72,80 @@ python train.py --config config.yaml --wandb
 
 Outputs are written under `paths.saved_path`.
 
+## Parameter Scan
+
+`scan.py` expands the `scan.parameters` grid in the YAML config, writes one generated config per
+point, gives every run a unique `paths.saved_path`, and launches concurrent `train.py` processes.
+By default, scan runs use W&B and run test evaluation after training so `test_loss` and each
+`test_*_loss` metric are uploaded.
+
+The default scan varies these loss weights:
+
+```yaml
+scan:
+  strategy: random               # sample combinations from the full grid
+  seed: 114                      # reproducible random sampling
+  num_samples: 8                 # run 8 total combinations
+  max_parallel: 8                # run up to 8 jobs at the same time
+  max_retries: 1                 # retry failed jobs once
+  gpus: "0"                      # use "0,1,2" to round-robin across GPUs
+  parameters:
+    parameters.loss_weights.dinu_pt: [0.003, 0.01, 0.03]
+    parameters.loss_weights.angular_loss_mmd: [3.0, 10.0, 30.0]
+    parameters.loss_weights.higgs_mass: [1.0, 3.0, 5.0]
+```
+
+Run 8 sampled combinations on GPU 0 in the background:
+
+```bash
+./run_scan.sh
+```
+
+`run_scan.sh` stops the previous local `scans/latest` launcher if it is still running, replaces that
+workspace, writes the launcher log to `scans/latest/run_scan.log`, writes the PID to
+`scans/latest/run_scan.pid`, and uploads W&B runs to the `scan-pcres` project. The launcher resolves
+paths relative to the repository, so it can be called from another working directory.
+
+Run in the foreground instead:
+
+```bash
+BACKGROUND=0 ./run_scan.sh
+```
+
+Generate configs without launching training:
+
+```bash
+DRY_RUN=1 ./run_scan.sh
+```
+
+Run without W&B:
+
+```bash
+WANDB_MODE=disabled ./run_scan.sh
+```
+
+Common scan overrides:
+
+```bash
+EPOCHS=128 MAX_PARALLEL=4 MAX_RETRIES=1 GPU_IDS=0,1 ./run_scan.sh
+```
+
+Run `scan.py` directly:
+
+```bash
+python scan.py --config config.yaml --max-parallel 8 --gpus 0 --wandb-project scan-pcres
+```
+
+For a quick scouting scan, override epochs without editing the base config:
+
+```bash
+python scan.py --config config.yaml --max-parallel 8 --gpus 0 --override parameters.epochs=128
+```
+
+Generated configs, logs, and per-run outputs are written under `scans/<timestamp>/`. Use W&B to
+filter by flattened config keys such as `parameters.loss_weights.dinu_pt` and sort by `test_loss`
+or a specific `test_*_loss` metric.
+
 ## Data
 
 The HDF5 file should contain top-level categories such as `ggF_train`, `ggF_val`, `ggF_test`, or

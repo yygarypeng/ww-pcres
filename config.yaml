@@ -2,26 +2,26 @@ parameters:
   seed: 114
   loss_weights:
     huber: 1.0
-    w_mass_mmd0: 1.0
-    w_mass_mmd1: 1.0
-    w0_mass_mae: 0.001
-    w1_mass_mae: 0.001
+    w_mass_mmd0: 3.0
+    w_mass_mmd1: 3.0
+    w0_mass_mae: 5.0
+    w1_mass_mae: 5.0
     dinu_pt: 0.01
-    higgs_mass: 1.0
+    higgs_mass: 3.0
     nu_mass: 0.0
     angular_loss_mmd: 10.0
 
   batch_size: 256
   epochs: 1024
   learning_rate: 1.0e-4
-  gradient_clip_val: 1.0
-  d_model: 256
-  n_heads: 16
+  gradient_clip_val: 0.0
+  d_model: 128
+  n_heads: 8
   # dataloader settings (set num_workers > 0 only if stable)
-  num_workers: 6
+  num_workers: 10
   persistent_workers: true
   pin_memory: true
-  prefetch_factor: 4
+  prefetch_factor: 6
 
 data:
   categories: null
@@ -31,3 +31,15 @@ data:
 paths:
   saved_path: "/root/work/ww-pcres/hww_pcres_regressor_nofold"
   data_path: "/root/data/danning_h5/ypeng/mc20_qe_v4_recotruth_merged.h5"
+
+scan:
+  strategy: grid
+  seed: 114
+  # num_samples: 8 # for random search
+  max_parallel: 10
+  max_retries: 2
+  gpus: "0"
+  parameters:
+    parameters.loss_weights.dinu_pt: [0.003, 0.01, 0.03]
+    parameters.loss_weights.angular_loss_mmd: [3.0, 10.0, 30.0]
+    parameters.loss_weights.higgs_mass: [1.0, 3.0, 5.0]

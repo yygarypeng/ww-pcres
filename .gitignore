@@ -6,6 +6,7 @@ record
 log
 wandb/
 lightning_logs/
+scans/
 .agents/
 .continue/
 skills-lock.json

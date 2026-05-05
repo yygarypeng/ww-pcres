@@ -38,6 +38,17 @@ def load_config(config_path="config.yaml"):
     return config
 
 
+def flatten_config(config, prefix=""):
+    items = {}
+    for key, value in config.items():
+        full_key = f"{prefix}.{key}" if prefix else str(key)
+        if isinstance(value, dict):
+            items.update(flatten_config(value, full_key))
+        else:
+            items[full_key] = value
+    return items
+
+
 def prime_csv_metric_header(csv_logger, model):
     """Pre-register CSV columns to avoid Lightning header rewrite failures."""
     metric_keys = {"epoch", "step"}
@@ -135,13 +146,17 @@ def main(train=True, arg=None, config_path="config.yaml"):
         clean_training_output(saved_path)
         use_wandb = bool(arg is not None and arg.wandb)
         if use_wandb:
+            run_name = getattr(arg, "run_name", None) or os.path.basename(os.path.normpath(saved_path))
+            wandb_project = getattr(arg, "wandb_project", None) or "PCRES-regressor"
             wandb_logger = WandbLogger(
-                project="PCRES-regressor",
-                name=f"wandb-logs",
+                project=wandb_project,
+                name=run_name,
                 save_dir=saved_path,
                 log_model=True,
             )
-            wandb_logger.watch(model, log="all", log_freq=steps_per_epoch, log_graph=False)
+            wandb_logger.experiment.config.update(flatten_config(_cfg), allow_val_change=True)
+            if bool(getattr(arg, "watch_model", False)):
+                wandb_logger.watch(model, log="all", log_freq=steps_per_epoch, log_graph=False)
         else:
             wandb_logger = None
             print("Wandb logging disabled, only using CSVLogger.")
@@ -159,6 +174,19 @@ def main(train=True, arg=None, config_path="config.yaml"):
             gradient_clip_val=GRADIENT_CLIP_VAL,
         )
         trainer.fit(model, datamodule=dm)
+        if dm.test_ds is not None and len(dm.test_ds) > 0:
+            print("Running test evaluation with best checkpoint...")
+            test_trainer = Trainer(
+                accelerator="gpu" if torch.cuda.is_available() else "cpu",
+                devices=1,
+                logger=False,
+                enable_checkpointing=False,
+            )
+            test_trainer.test(model=model, datamodule=dm, ckpt_path=ckpt.best_model_path, weights_only=False)
+        else:
+            print("No test split available, skipping test evaluation.")
+        if use_wandb:
+            wandb_logger.experiment.finish()
     else:
         print("Loading model from checkpoint for evaluation... return datamodule")
         return dm
@@ -169,6 +197,9 @@ if __name__ == "__main__":
     argparser = argparse.ArgumentParser()
     argparser.add_argument("--config", "-c", default="config.yaml", help="Path to YAML config file")
     argparser.add_argument("--wandb", "-w", action="store_true", help="Enable wandb logging and training mode")
+    argparser.add_argument("--run-name", default=None, help="Optional run name for loggers")
+    argparser.add_argument("--wandb-project", default="PCRES-regressor", help="Weights & Biases project name")
+    argparser.add_argument("--watch-model", action="store_true", help="Log model gradients/parameters to wandb")
     args = argparser.parse_args()
     main(train=True, arg=args)
     t1 = time()

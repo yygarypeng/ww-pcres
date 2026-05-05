@@ -3,20 +3,24 @@ import torch.nn.functional as F
 from torchBoost import Booster
 
 TOR = 1e-16
+W_MASS_SCALE = 80.4
+H_MASS_SCALE = 125.0
+LOG_CUT = 20.0
 
-def compute_mmd(x, y, bandwidth_range=None):
+def compute_mmd(x, y, kernel="imq", bandwidth_range=None):
     if bandwidth_range is None:
         bandwidth_range = [0.05, 0.1, 0.5, 1.0]
     x = x.reshape(x.shape[0], -1)
     y = y.reshape(y.shape[0], -1)
 
-    # Ignore samples with non-finite values so a single NaN does not poison
+    # Ignore samples with non-finite values
     # the full pairwise kernel matrix.
     finit_mask = torch.isfinite(x).all(dim=1) & torch.isfinite(y).all(dim=1)
     x = x[finit_mask]
     y = y[finit_mask]
 
     if x.shape[0] == 0 or y.shape[0] == 0:
+        # TODO: check the stability 
         return (
             torch.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0).sum()
             + torch.nan_to_num(y, nan=0.0, posinf=0.0, neginf=0.0).sum()
@@ -25,7 +29,11 @@ def compute_mmd(x, y, bandwidth_range=None):
     with torch.no_grad(): # a heuristic way to set bandwidths
         dists = torch.cdist(y, y, p=2)
         median_dist = torch.median(dists)
-        sel_dist = 1.0 if median_dist.item() == 0.0 else median_dist
+        sel_dist = torch.where(
+            median_dist == 0.0,
+            torch.ones_like(median_dist),
+            median_dist,
+        )
         # print("Median distance: ", median_dist.item()) # debug
         bandwidth_range = [s * sel_dist for s in bandwidth_range]
     
@@ -43,21 +51,31 @@ def compute_mmd(x, y, bandwidth_range=None):
     YY = torch.zeros_like(yy)
     XY = torch.zeros_like(xy)
 
-    for a in bandwidth_range:
-        XX += torch.exp(-0.5 * dxx / (a + TOR)**2)
-        YY += torch.exp(-0.5 * dyy / (a + TOR)**2)
-        XY += torch.exp(-0.5 * dxy / (a + TOR)**2)
-        
-    #     print("bandwidth: ", a)
-    #     print("Tot:", torch.mean(XX + YY - 2. * XY))
-    # raise Exception("DEBUG: stop here")
+    def rbf_kernel(a, d):
+        return torch.exp(-0.5 * d / (a**2 + TOR))
+    def imq_kernel(a, d):
+        return a**2 / (a**2 + d + TOR)
     
+    if kernel == "rbf":
+        _ker = lambda a, d: rbf_kernel(a, d)
+    elif kernel == "imq":
+        _ker = lambda a, d: imq_kernel(a, d)
+    else:
+        raise ValueError(f"Unsupported kernel: {kernel}")
+    
+    for a in bandwidth_range:
+        XX += _ker(a, dxx)
+        YY += _ker(a, dyy)
+        XY += _ker(a, dxy)
+        # print("bandwidth: ", a)
+        # print("Tot:", torch.mean(XX + YY - 2. * XY))
+    # raise Exception("DEBUG: stop here")
     return torch.mean(XX + YY - 2. * XY)
 
 def invariant_mass2(fourvec):
     px, py, pz, E = fourvec[..., 0], fourvec[..., 1], fourvec[..., 2], fourvec[..., 3]
     mass2 = E**2 - (px**2 + py**2 + pz**2)
-    return mass2
+    return torch.clamp(mass2, min=TOR)
 
 def mae_loss(y_true, y_pred):
     # do not consider mass targets in y_true
@@ -77,7 +95,7 @@ def neg_r2_loss(y_true, y_pred):
 
 def w_4vec_construct(w_4vec_loge):
     w_3 = w_4vec_loge[..., :3]
-    w_logE = torch.exp(torch.clamp(w_4vec_loge[..., 3], min=-20.0, max=20.0))
+    w_logE = torch.exp(torch.clamp(w_4vec_loge[..., 3], min=-LOG_CUT, max=LOG_CUT))
     return torch.cat([w_3, w_logE.reshape(-1, 1)], dim=-1)
 
 def w_mass_mae_losses(y_true, y_pred):
@@ -86,9 +104,10 @@ def w_mass_mae_losses(y_true, y_pred):
 
     w0_mass2 = invariant_mass2(w0_pred)
     w1_mass2 = invariant_mass2(w1_pred)
+    mass2_scale = W_MASS_SCALE**2
     return (
-        F.l1_loss(w0_mass2, w0_true_mass**2),
-        F.l1_loss(w1_mass2, w1_true_mass**2)
+        F.l1_loss((w0_mass2 - w0_true_mass**2) / mass2_scale, torch.zeros_like(w0_mass2)),
+        F.l1_loss((w1_mass2 - w1_true_mass**2) / mass2_scale, torch.zeros_like(w1_mass2))
     )
 
 def w_mass_mmd_losses(y_true, y_pred):
@@ -102,13 +121,14 @@ def w_mass_mmd_losses(y_true, y_pred):
 def higgs_mass_loss(y_pred):
     w0, w1 = w_4vec_construct(y_pred[..., :4]), w_4vec_construct(y_pred[..., 4:8])
     higgs_4 = w0 + w1
-    h_mass2 = invariant_mass2(higgs_4).clamp_min(0.0)
-    h_mass = torch.sqrt(h_mass2 + 1e-6)
-    return F.huber_loss(h_mass, torch.full_like(h_mass, 125.0))
+    h_mass2 = invariant_mass2(higgs_4).clamp_min(TOR)
+    h_mass = torch.sqrt(h_mass2)
+    return F.huber_loss(h_mass, torch.full_like(h_mass, H_MASS_SCALE))
 
 
 
 def nu_mass_loss(x_batch, y_pred):
+    """This is just a monitor loss"""
     n0_4 = w_4vec_construct(y_pred[..., :4]) - x_batch[..., :4]
     n1_4 = w_4vec_construct(y_pred[..., 4:8]) - x_batch[..., 4:8]
 
@@ -117,10 +137,11 @@ def nu_mass_loss(x_batch, y_pred):
     return F.huber_loss(nu0_mass2, torch.zeros_like(nu0_mass2)) + F.huber_loss(nu1_mass2, torch.zeros_like(nu1_mass2))
 
 def aux_mom_mmd_loss(y_true, y_pred):
+    """This is just a monitor loss"""
     w0_pred, w1_pred = w_4vec_construct(y_pred[..., :4]), w_4vec_construct(y_pred[..., 4:8])
     w0_true, w1_true = w_4vec_construct(y_true[..., :4]), w_4vec_construct(y_true[..., 4:8])
     _sigma_lst = [0.1, 0.5, 1.0, 5.0]
-    return compute_mmd(w0_pred, w0_true, _sigma_lst), compute_mmd(w1_pred, w1_true, _sigma_lst)
+    return compute_mmd(w0_pred, w0_true, bandwidth_range=_sigma_lst), compute_mmd(w1_pred, w1_true, bandwidth_range=_sigma_lst)
 
 def dinu_pt_loss(x_batch, y_pred):
     n0_4 = w_4vec_construct(y_pred[..., :4]) - x_batch[..., :4]
@@ -140,13 +161,10 @@ def angular_loss_mmd(x_batch, y_true, y_pred):
     true_booster = Booster(lep, true_w)
     pred_booster = Booster(lep, pred_w)
     valid = true_booster.valid_rest_frame_mask() & pred_booster.valid_rest_frame_mask()
-    if valid.sum().item() == 0:
-        return torch.nan_to_num(y_pred, nan=0.0, posinf=0.0, neginf=0.0).sum() * 0.0
+    valid = valid.to(y_pred.dtype).unsqueeze(-1)
 
-    lep = lep[valid]
-    true_w = true_w[valid]
-    pred_w = pred_w[valid]
-    true_ang = torch.stack(Booster(lep, true_w).lep_theta_phi_in_w_rest(), dim=-1)
-    pred_ang = torch.stack(Booster(lep, pred_w).lep_theta_phi_in_w_rest(), dim=-1)
-    return compute_mmd(pred_ang, true_ang)
+    true_ang = torch.stack(true_booster.lep_theta_phi_in_w_rest(), dim=-1) * valid
+    pred_ang = torch.stack(pred_booster.lep_theta_phi_in_w_rest(), dim=-1) * valid
+    _sigma_lst = [0.01, 0.05, 0.1, 0.5, 1.0, 5.0]
+    return compute_mmd(pred_ang, true_ang, bandwidth_range=_sigma_lst)
     # return F.l1_loss(pred_ang, true_ang)
