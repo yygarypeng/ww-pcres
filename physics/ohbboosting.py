@@ -99,7 +99,8 @@ class Booster:
         neg_theta = theta(self.w_rest_ln)
         neg_phi = phi(self.w_rest_ln)
 
-        return (pos_theta, np.sin(pos_phi), np.cos(pos_phi)), (neg_theta, np.sin(neg_phi), np.cos(neg_phi))
+        # return (pos_theta, np.sin(pos_phi), np.cos(pos_phi)), (neg_theta, np.sin(neg_phi), np.cos(neg_phi))
+        return (pos_theta, pos_phi), (neg_theta, neg_phi)
 
     def lep_xi_in_w_rest(self):
         
@@ -134,7 +135,7 @@ if __name__ == "__main__":
     import time
     from matplotlib import pyplot as plt
     t1 = time.time()
-    import load_data
+    from data import load_data
     data = load_data.load_particles_from_h5("/root/data/archived/mc20_truth.h5")
     presel = (data) 
     particles = np.concatenate(

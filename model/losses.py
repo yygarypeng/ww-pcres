@@ -1,6 +1,6 @@
 import torch
 import torch.nn.functional as F
-from torchBoost import Booster
+from physics.torchBoost import Booster
 
 TOR = 1e-16
 W_MASS_SCALE = 80.4
@@ -161,10 +161,19 @@ def angular_loss_mmd(x_batch, y_true, y_pred):
     true_booster = Booster(lep, true_w)
     pred_booster = Booster(lep, pred_w)
     valid = true_booster.valid_rest_frame_mask() & pred_booster.valid_rest_frame_mask()
-    valid = valid.to(y_pred.dtype).unsqueeze(-1)
 
-    true_ang = torch.stack(true_booster.lep_theta_phi_in_w_rest(), dim=-1) * valid
-    pred_ang = torch.stack(pred_booster.lep_theta_phi_in_w_rest(), dim=-1) * valid
-    _sigma_lst = [0.01, 0.05, 0.1, 0.5, 1.0, 5.0]
+    true_ang = torch.stack(true_booster.lep_theta_phi_in_w_rest(), dim=-1)[valid]
+    pred_ang = torch.stack(pred_booster.lep_theta_phi_in_w_rest(), dim=-1)[valid]
+    if true_ang.shape[0] == 0:
+        return (true_w.sum() + pred_w.sum()) * 0.0
+
+    # theta_idx = [0, 3]
+    # true_ang = true_ang.clone()
+    # pred_ang = pred_ang.clone()
+    # true_ang[..., theta_idx] = true_ang[..., theta_idx] / torch.pi
+    # pred_ang[..., theta_idx] = pred_ang[..., theta_idx] / torch.pi
+
+    _sigma_lst = [0.01, 0.03, 0.1, 0.3]
+    # DEBUG
+    # print("Shape of pred_ang: ", pred_ang.shape, "Shape of true_ang: ", true_ang.shape)
     return compute_mmd(pred_ang, true_ang, bandwidth_range=_sigma_lst)
-    # return F.l1_loss(pred_ang, true_ang)

@@ -34,7 +34,7 @@ class SelfAttentionBlock(nn.Module):
         self.ffn_norm = nn.LayerNorm(d_model)
         self.dropout = nn.Dropout(dropout) if dropout and dropout > 0 else nn.Identity()
         self.mha = nn.MultiheadAttention(d_model, nhead, dropout=dropout, batch_first=True)
-        self.ffn = _AttnFFN(d_model, d_model * 3, dropout)
+        self.ffn = _AttnFFN(d_model, d_model * 4, dropout)
     def forward(self, x, key_padding_mask=None):
         res = x
         x = self.attn_norm(x)

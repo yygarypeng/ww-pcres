@@ -23,6 +23,30 @@ def select_categories(available_categories, categories=None):
     return selected
 
 
+def split_categories(data_cfg, split):
+    explicit_categories = data_cfg.get(f"{split}_categories")
+    if explicit_categories is not None:
+        return explicit_categories
+
+    categories = data_cfg.get("categories")
+    if categories:
+        split_suffix = f"_{split}"
+        selected_categories = []
+        for category in categories:
+            category = str(category)
+            if category.endswith(("_train", "_val", "_test")):
+                if category.endswith(split_suffix):
+                    selected_categories.append(category)
+            else:
+                selected_categories.append(f"{category}{split_suffix}")
+
+        if not selected_categories:
+            raise ValueError(f"No categories selected for {split} split from data.categories")
+        return selected_categories
+
+    return [f"ggF_{split}"]
+
+
 def compute_standardization_stats(train_obj, target_obj=None, train_indices=None):
     """Fit standardization statistics, optionally on a training subset only."""
     feature_source = train_obj if train_indices is None else train_obj[train_indices]
@@ -44,12 +68,19 @@ def _safe_log_positive(values):
     result[valid] = np.log(values[valid])
     return result
 
-def load_particles_from_h5(filename):
+def _read_dataset(dataset, max_events=None):
+    if max_events is not None and dataset.shape and dataset.shape[0] > max_events:
+        return dataset[:max_events]
+    return dataset[:]
+
+
+def load_particles_from_h5(filename, categories=None, max_events=None):
     result = {}
 
     with h5py.File(filename, "r") as f:
+        selected_categories = select_categories(f.keys(), categories=categories)
         # For each category (ggF_train, ggF_test, VBF_train, etc.)
-        for category_name in f.keys():
+        for category_name in selected_categories:
             category_data = {}
             
             # For each particle/object group within the category
@@ -59,14 +90,17 @@ def load_particles_from_h5(filename):
                 # Load datasets (numpy arrays)
                 if isinstance(f[category_name][group_name], h5py.Group):
                     for dataset_name in f[category_name][group_name].keys():
-                        group_data[dataset_name] = f[category_name][group_name][dataset_name][:]
+                        group_data[dataset_name] = _read_dataset(
+                            f[category_name][group_name][dataset_name],
+                            max_events=max_events,
+                        )
 
                     # Load attributes (scalars)
                     for attr_name, attr_value in f[category_name][group_name].attrs.items():
                         group_data[attr_name] = attr_value
                 else:
                     # Handle case where it's a dataset directly
-                    group_data = f[category_name][group_name][:]
+                    group_data = _read_dataset(f[category_name][group_name], max_events=max_events)
 
                 category_data[group_name] = group_data
 
@@ -77,9 +111,14 @@ def load_particles_from_h5(filename):
 def load_data(
     data_path,
     categories=None,
+    max_events_per_category=None,
 ):
-    
-    data = load_particles_from_h5(data_path)
+
+    data = load_particles_from_h5(
+        data_path,
+        categories=categories,
+        max_events=max_events_per_category,
+    )
 
     def col(a):
         return a.reshape(a.shape[0], -1)
@@ -88,10 +127,7 @@ def load_data(
     all_train_objs = []
     all_target_objs = []
     
-    selected_categories = select_categories(
-        data.keys(),
-        categories=categories,
-    )
+    selected_categories = list(data.keys())
     print("Using HDF5 categories:", ", ".join(selected_categories))
 
     # Iterate through selected categories (ggF_train, VBF_train, etc.)
@@ -215,3 +251,25 @@ def load_data(
 
 
     return train_obj, target_obj, (std_mean_train, std_scale_train), (std_mean_target, std_scale_target)
+
+
+def load_presplit_data(data_path, data_cfg=None):
+    """Load train/val/test arrays from HDF5 groups that are already split."""
+    if data_cfg is None:
+        data_cfg = {}
+
+    train_categories = split_categories(data_cfg, "train")
+    val_categories = split_categories(data_cfg, "val")
+    test_categories = split_categories(data_cfg, "test")
+
+    print("Using original pre-split HDF5 data")
+    print("Train categories:", ", ".join(train_categories))
+    print("Validation categories:", ", ".join(val_categories))
+    print("Test categories:", ", ".join(test_categories))
+
+    max_events = data_cfg.get("max_events_per_category")
+    X_train, Y_train, _, _ = load_data(data_path, categories=train_categories, max_events_per_category=max_events)
+    X_val, Y_val, _, _ = load_data(data_path, categories=val_categories, max_events_per_category=max_events)
+    X_test, Y_test, _, _ = load_data(data_path, categories=test_categories, max_events_per_category=max_events)
+
+    return X_train, Y_train, X_val, Y_val, X_test, Y_test

@@ -28,15 +28,20 @@ class ArrayDataset(Dataset):
 
 class WBosonDataModule(L.LightningDataModule):
     """
-    Supports BOTH:
-        1) Random split via val_frac / test_frac
-        2) Explicit KFold splits via train_idx / val_idx
+    Supports:
+        1) Pre-split arrays via X_val / Y_val / X_test / Y_test
+        2) Random split via val_frac / test_frac
+        3) Explicit KFold splits via train_idx / val_idx
     """
 
     def __init__(
         self,
         X,
         Y,
+        X_val=None,
+        Y_val=None,
+        X_test=None,
+        Y_test=None,
         seed=114,
         batch_size=512,
         val_frac=0.1,
@@ -58,6 +63,62 @@ class WBosonDataModule(L.LightningDataModule):
                 f"X and Y must have the same number of samples, got "
                 f"{self.X.shape[0]} and {self.Y.shape[0]}"
             )
+
+        if (X_val is None) != (Y_val is None):
+            raise ValueError("X_val and Y_val must be provided together")
+        if (X_test is None) != (Y_test is None):
+            raise ValueError("X_test and Y_test must be provided together")
+
+        self.X_val = (
+            None if X_val is None else torch.as_tensor(X_val, dtype=torch.float32).contiguous()
+        )
+        self.Y_val = (
+            None if Y_val is None else torch.as_tensor(Y_val, dtype=torch.float32).contiguous()
+        )
+        self.X_test = (
+            None if X_test is None else torch.as_tensor(X_test, dtype=torch.float32).contiguous()
+        )
+        self.Y_test = (
+            None if Y_test is None else torch.as_tensor(Y_test, dtype=torch.float32).contiguous()
+        )
+
+        self.use_presplit = self.X_val is not None or self.X_test is not None
+        if self.use_presplit:
+            if self.X_val is None:
+                raise ValueError("Pre-split mode requires X_val and Y_val")
+            if any(idx is not None for idx in (train_idx, val_idx, test_idx)):
+                raise ValueError("Pre-split arrays cannot be used together with split indices")
+            if self.X_val.shape[0] != self.Y_val.shape[0]:
+                raise ValueError(
+                    f"X_val and Y_val must have the same number of samples, got "
+                    f"{self.X_val.shape[0]} and {self.Y_val.shape[0]}"
+                )
+            if self.X.shape[1:] != self.X_val.shape[1:]:
+                raise ValueError(
+                    f"X and X_val must have matching feature dimensions, got "
+                    f"{tuple(self.X.shape[1:])} and {tuple(self.X_val.shape[1:])}"
+                )
+            if self.Y.shape[1:] != self.Y_val.shape[1:]:
+                raise ValueError(
+                    f"Y and Y_val must have matching target dimensions, got "
+                    f"{tuple(self.Y.shape[1:])} and {tuple(self.Y_val.shape[1:])}"
+                )
+            if self.X_test is not None:
+                if self.X_test.shape[0] != self.Y_test.shape[0]:
+                    raise ValueError(
+                        f"X_test and Y_test must have the same number of samples, got "
+                        f"{self.X_test.shape[0]} and {self.Y_test.shape[0]}"
+                    )
+                if self.X.shape[1:] != self.X_test.shape[1:]:
+                    raise ValueError(
+                        f"X and X_test must have matching feature dimensions, got "
+                        f"{tuple(self.X.shape[1:])} and {tuple(self.X_test.shape[1:])}"
+                    )
+                if self.Y.shape[1:] != self.Y_test.shape[1:]:
+                    raise ValueError(
+                        f"Y and Y_test must have matching target dimensions, got "
+                        f"{tuple(self.Y.shape[1:])} and {tuple(self.Y_test.shape[1:])}"
+                    )
 
         self.batch_size = int(batch_size)
         if self.batch_size <= 0:
@@ -94,6 +155,42 @@ class WBosonDataModule(L.LightningDataModule):
     def setup(self, stage=None):
         ds = ArrayDataset(self.X, self.Y)
         self.std_ds = ds  # keep for (inverse) transform.
+
+        # -------- Pre-split dataset --------
+        if self.use_presplit:
+            print("Using pre-split dataset (train / val / test arrays)")
+
+            self.train_ds = ds
+            self.val_ds = ArrayDataset(self.X_val, self.Y_val)
+            self.test_ds = None
+            if self.X_test is not None:
+                self.test_ds = ArrayDataset(self.X_test, self.Y_test)
+
+            print(f"Train split: {len(self.train_ds)} samples")
+            print(f"Validation split: {len(self.val_ds)} samples")
+            if self.test_ds is not None:
+                print(f"Test split: {len(self.test_ds)} samples")
+                print(
+                    f"Feature dims: train={tuple(self.X.shape[1:])}, "
+                    f"val={tuple(self.X_val.shape[1:])}, "
+                    f"test={tuple(self.X_test.shape[1:])}"
+                )
+                print(
+                    f"Target dims: train={tuple(self.Y.shape[1:])}, "
+                    f"val={tuple(self.Y_val.shape[1:])}, "
+                    f"test={tuple(self.Y_test.shape[1:])}"
+                )
+            else:
+                print("Test split: not provided")
+                print(
+                    f"Feature dims: train={tuple(self.X.shape[1:])}, "
+                    f"val={tuple(self.X_val.shape[1:])}"
+                )
+                print(
+                    f"Target dims: train={tuple(self.Y.shape[1:])}, "
+                    f"val={tuple(self.Y_val.shape[1:])}"
+                )
+            return
 
         # -------- KFold / explicit split --------
         if self.train_idx is not None and self.val_idx is not None:
@@ -175,5 +272,5 @@ class WBosonDataModule(L.LightningDataModule):
     def test_dataloader(self):
         if self.test_ds is None:
             return None
-
+        print("Use test_dataloader() with test_ds of length", len(self.test_ds))
         return self._dataloader(self.test_ds, shuffle=False)

@@ -1,0 +1,37 @@
+parameters:
+  seed: 114
+  batch_size: 64
+  epochs: 1
+  learning_rate: 1.0e-4
+  gradient_clip_val: 0.0
+  d_model: 32
+  n_heads: 4
+  num_workers: 0
+  persistent_workers: false
+  pin_memory: false
+  prefetch_factor: 2
+  loss_weights:
+    huber: 1.0
+    w_mass_mmd0: 0.0
+    w_mass_mmd1: 0.0
+    w0_mass_mae: 0.0
+    w1_mass_mae: 0.0
+    dinu_pt: 0.0
+    higgs_mass: 0.0
+    angular_loss_mmd: 0.0
+    nu_mass: 0.0
+
+data:
+  categories: [ggF_train]
+  max_events_per_category: 1024
+  val_frac: 0.1
+  test_frac: 0.0
+
+trainer:
+  limit_train_batches: 2
+  limit_val_batches: 1
+  limit_test_batches: 0
+
+paths:
+  saved_path: outputs/sanity
+  data_path: /root/data/danning_h5/ypeng/mc20_qe_v4_recotruth_merged.h5

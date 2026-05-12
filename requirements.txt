@@ -6,3 +6,4 @@ h5py
 scikit-learn
 matplotlib
 mplhep
+wandb

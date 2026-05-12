@@ -9,8 +9,8 @@ from pytorch_lightning.loggers import CSVLogger, WandbLogger
 from sklearn.model_selection import train_test_split
 
 from model import LightningWBoson
-from data_module import WBosonDataModule
-import load_data as data
+from data import load_data as data
+from data.data_module import WBosonDataModule
 from train import clean_training_output, prime_csv_metric_header
 
 # ====== Hyperparameters constants ======

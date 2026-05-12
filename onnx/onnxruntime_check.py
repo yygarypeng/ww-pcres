@@ -3,7 +3,6 @@ from pathlib import Path
 import sys
 
 import numpy as np
-import onnxruntime
 import torch
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -16,12 +15,14 @@ from train import load_config
 
 def main():
     parser = argparse.ArgumentParser(description="Compare ONNX Runtime output with PyTorch")
-    parser.add_argument("--config", "-c", default=str(REPO_ROOT / "config.yaml"), help="Path to YAML config file")
+    parser.add_argument("--config", "-c", default=str(REPO_ROOT / "configs/config.yaml"), help="Path to YAML config file")
     parser.add_argument("--checkpoint", help="Specific .ckpt file to compare against")
     parser.add_argument("--onnx", default="hww_pcres_regressor.onnx", help="ONNX model path")
     parser.add_argument("--batch-size", type=int, default=16, help="Random comparison batch size")
     parser.add_argument("--seed", type=int, default=0, help="Random input seed")
     args = parser.parse_args()
+
+    import onnxruntime
 
     cfg = load_config(args.config)
     ckpt_path = find_checkpoint(cfg["paths"]["saved_path"], args.checkpoint)

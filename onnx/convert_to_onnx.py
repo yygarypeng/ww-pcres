@@ -30,7 +30,7 @@ def find_checkpoint(saved_path, checkpoint=None):
 
 def main():
     parser = argparse.ArgumentParser(description="Export a Lightning checkpoint to ONNX")
-    parser.add_argument("--config", "-c", default=str(REPO_ROOT / "config.yaml"), help="Path to YAML config file")
+    parser.add_argument("--config", "-c", default=str(REPO_ROOT / "configs/config.yaml"), help="Path to YAML config file")
     parser.add_argument("--checkpoint", help="Specific .ckpt file to export")
     parser.add_argument("--output", default="hww_pcres_regressor.onnx", help="Output ONNX path")
     parser.add_argument("--batch-size", type=int, default=1, help="Dummy export batch size")

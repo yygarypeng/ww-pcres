@@ -1,5 +1,5 @@
 import torch.nn as nn
-from layers import _AttnFFN
+from model.layers import _AttnFFN
 
 class DenseDropoutBlock(nn.Module):
     """

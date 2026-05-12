@@ -2,8 +2,8 @@ import torch
 import torch.nn as nn
 import pytorch_lightning as L
 
-from layers import Standardization, SelfAttentionBlock, ResidualBlock, WBosonFourVectorLayer
-from losses import (
+from model.layers import Standardization, SelfAttentionBlock, ResidualBlock, WBosonFourVectorLayer
+from model.losses import (
     huber_loss, w_mass_mmd_losses, higgs_mass_loss, 
     neg_r2_loss, nu_mass_loss, dinu_pt_loss, w_mass_mae_losses, aux_mom_mmd_loss,
     angular_loss_mmd

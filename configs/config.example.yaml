@@ -27,17 +27,5 @@ data:
   test_frac: 0.01
 
 paths:
-  saved_path: "/path/to/output_dir"
+  saved_path: "outputs/run"
   data_path: "/path/to/training_data.h5"
-
-scan:
-  strategy: random
-  seed: 114
-  num_samples: 8
-  max_parallel: 8
-  max_retries: 1
-  gpus: "0"
-  parameters:
-    parameters.loss_weights.dinu_pt: [0.003, 0.01, 0.03]
-    parameters.loss_weights.angular_loss_mmd: [3.0, 10.0, 30.0]
-    parameters.loss_weights.higgs_mass: [1.0, 3.0, 5.0]
