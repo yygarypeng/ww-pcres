@@ -173,7 +173,7 @@ def angular_loss_mmd(x_batch, y_true, y_pred):
     # true_ang[..., theta_idx] = true_ang[..., theta_idx] / torch.pi
     # pred_ang[..., theta_idx] = pred_ang[..., theta_idx] / torch.pi
 
-    _sigma_lst = [0.01, 0.03, 0.1, 0.3]
+    _sigma_lst = [0.01, 0.03, 0.1, 0.3, 1.0, 3.0]
     # DEBUG
     # print("Shape of pred_ang: ", pred_ang.shape, "Shape of true_ang: ", true_ang.shape)
     return compute_mmd(pred_ang, true_ang, bandwidth_range=_sigma_lst)

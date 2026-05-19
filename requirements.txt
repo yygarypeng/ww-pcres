@@ -6,4 +6,6 @@ h5py
 scikit-learn
 matplotlib
 mplhep
+onnx
+onnxruntime
 wandb

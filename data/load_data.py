@@ -200,14 +200,14 @@ def load_data(
             col(met_px), #16
             col(met_py), #17
             # high level features
-            col(m_ll), #18
-            col(dilep_pt), #19
-            col(met_pt), #20
-            col(deta_ll), #21
-            col(dphi_llmet), #22
-            col(dphi_l1met), #23 (l1 -> pos_lep; l2 -> neg_lep)
-            col(dphi_l2met), #24
-            col(dphi_ll), #25
+            # col(m_ll), #18
+            # col(dilep_pt), #19
+            # col(met_pt), #20
+            # col(deta_ll), #21
+            # col(dphi_llmet), #22
+            # col(dphi_l1met), #23 (l1 -> pos_lep; l2 -> neg_lep)
+            # col(dphi_l2met), #24
+            # col(dphi_ll), #25
         ], axis=-1)
         
         # target objects

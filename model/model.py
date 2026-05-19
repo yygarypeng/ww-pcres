@@ -36,7 +36,7 @@ class WBosonRegressor(nn.Module):
         # self.role_embedding = nn.Parameter(torch.zeros(self.num_tokens, d_model))
         # nn.init.normal_(self.role_embedding, mean=0.0, std=0.02)
         self.sa_blocks = nn.ModuleList([
-            SelfAttentionBlock(d_model, num_heads, dropout=0.5) for _ in range(4)
+            SelfAttentionBlock(d_model, num_heads, dropout=0.5) for _ in range(8)
         ])
         print(f"Using {len(self.sa_blocks)} SA blocks.")
         
@@ -44,9 +44,10 @@ class WBosonRegressor(nn.Module):
         _dim = 256 if d_model * self.num_tokens >= 256 else d_model * self.num_tokens
         blocks = [nn.Linear(d_model * self.num_tokens, _dim)] # reduce dimension after flattening
         blocks.append(ResidualBlock(_dim, 256, dropout=0.5))
+        blocks.append(ResidualBlock(256, 256, dropout=0.5))
         blocks.append(ResidualBlock(256, 128, dropout=0.5))
         blocks.append(ResidualBlock(128, 128, dropout=0.5))
-        blocks.append(ResidualBlock(128, 128, dropout=0.5))
+        # blocks.append(ResidualBlock(128, 64, dropout=0.5))
         
         self.trunk = nn.Sequential(*blocks)
         self.pre_trunk_bn = nn.LayerNorm(d_model * self.num_tokens)
