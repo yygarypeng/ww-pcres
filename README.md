@@ -1,9 +1,12 @@
-# hww_pcres_regressor
+# $HWW$ Residual Regressor
 
-PyTorch Lightning regressor for reconstructing the two W-boson four-vectors in
-H -> WW events. The model predicts neutrino momenta from leptons, MET, jets,
-and high-level event features, then builds W four-vectors with physics-aware
-layers and losses.
+The physics goal of this neural network (NN) is to construct spin-correlation-sensitive variable components $\theta^\ast_{\ell^\pm}$, $\phi^\ast_{\ell^\pm}$ in the associated $W$ boson rest frames; specifically, we aim to reconstruct the spin-correlation parameters via the $H \to WW^\ast \to \ell\nu\ell\nu$ decay channel.
+To better `correlation' between truth labels and predictions, ie, event-wise errors, a deterministic model is implemented; however, a vanilla DNN might collapse/average out the physical patterns.
+Therefore, we try to design a structure that can be informed by physics constraints, such as $m_{W^\pm}$ spectrum and Higgs mass, etc.
+As for details, please see our paper[will link in here soon]!
+
+Technically, this is a PyTorch Lightning regressor for reconstructing the two $W$ bosons' four-vectors in $H \to WW^\ast \to \ell\nu\ell\nu$. 
+The model predicts neutrino momenta from leptons, MET, and jets event features, then builds W four-vectors with physics-aware customized layers and losses.
 
 ## Layout
 
