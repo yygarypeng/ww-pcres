@@ -4,6 +4,8 @@ parameters:
   epochs: 1024
   learning_rate: 1.0e-4
   gradient_clip_val: 1.0
+  adaptive_loss_weights: false
+  log_loss_gradient_cosines: false
   d_model: 256
   n_heads: 16
   num_workers: 4
@@ -20,11 +22,20 @@ parameters:
     higgs_mass: 1.0
     nu_mass: 0.0
     angular_loss_mmd: 10.0
+    angular_loss_mae: 0.0
 
 data:
   categories: null
   val_frac: 0.05
   test_frac: 0.01
+
+trainer:
+  monitor_metric: val_loss
+  monitor_mode: min
+  early_stop_patience: 192
+  early_stop_min_delta: 0.0
+  save_top_k: 3
+  save_last: true
 
 paths:
   saved_path: "outputs/run"

@@ -15,10 +15,23 @@ def phi(px, py):
 def deta(eta1, eta2):
     return eta1 - eta2
 
+def _wrap_angle(angle):
+    return (angle + np.pi) % (2.0 * np.pi) - np.pi
+
+
+def _sum_angle(angle0, angle1):
+    return _wrap_angle(angle0 + angle1)
+
+
+def _diff_angle(angle0, angle1):
+    return _wrap_angle(angle0 - angle1)
+
+
 def dphi(phi1, phi2):
-    phi_diff = phi1 - phi2
-    # Wrap to [-pi, pi]
-    return (phi_diff + np.pi) % (2 * np.pi) - np.pi
+    return _diff_angle(phi1, phi2)
+
+def sphi(phi1, phi2):
+    return _sum_angle(phi1, phi2)
 
 def dr(deta, dphi):
     return np.sqrt(deta**2 + dphi**2)

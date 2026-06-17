@@ -2,6 +2,7 @@ from importlib import import_module
 
 __all__ = [
     "clean_training_output",
+    "build_training_callbacks",
     "flatten_config",
     "load_config",
     "main",
@@ -11,5 +12,5 @@ __all__ = [
 
 def __getattr__(name):
     if name in __all__:
-        return getattr(import_module("train.main"), name)
+        return getattr(import_module("train.original"), name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

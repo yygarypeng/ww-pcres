@@ -2,7 +2,8 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-    
+from physics import _diff_angle, _sum_angle
+
 #######################
 # Auxiliary Functions #
 #######################
@@ -225,19 +226,20 @@ class Booster(nn.Module):
         lep0_phi = self._phi(lep0)
         lep1_theta = self._theta(lep1)
         lep1_phi = self._phi(lep1)
-        # return (
-        #     lep0_theta,
-        #     torch.sin(lep0_phi),
-        #     torch.cos(lep0_phi),
-        #     lep1_theta,
-        #     torch.sin(lep1_phi),
-        #     torch.cos(lep1_phi),
-        # )
+        sum_theta = _sum_angle(lep0_theta, lep1_theta)
+        diff_theta = _diff_angle(lep0_theta, lep1_theta)
+        sum_phi = _sum_angle(lep0_phi, lep1_phi)
+        diff_phi = _diff_angle(lep0_phi, lep1_phi)
+
         return (
             lep0_theta,
             lep0_phi,
             lep1_theta,
             lep1_phi,
+            sum_theta,
+            diff_theta,
+            sum_phi,
+            diff_phi,
         )
     
     def forward(self, particles=None):
@@ -278,23 +280,18 @@ def _plot_theta_phi(
     matplotlib.use("Agg")
     from matplotlib import pyplot as plt
 
-    # values = [
-    #     ("lep0 theta", torch_angles[0], None if root_angles is None else root_angles[0], (0.0, np.pi)),
-    #     ("lep0 sin(phi)", torch_angles[1], None if root_angles is None else root_angles[1], (-1.0, 1.0)),
-    #     ("lep0 cos(phi)", torch_angles[2], None if root_angles is None else root_angles[2], (-1.0, 1.0)),
-    #     ("lep1 theta", torch_angles[3], None if root_angles is None else root_angles[3], (0.0, np.pi)),
-    #     ("lep1 sin(phi)", torch_angles[4], None if root_angles is None else root_angles[4], (-1.0, 1.0)),
-    #     ("lep1 cos(phi)", torch_angles[5], None if root_angles is None else root_angles[5], (-1.0, 1.0)),
-    # ]
     values = [
         ("lep0 theta", torch_angles[0], None if root_angles is None else root_angles[0], (0.0, np.pi)),
         ("lep0 phi", torch_angles[1], None if root_angles is None else root_angles[1], (-np.pi, np.pi)),
         ("lep1 theta", torch_angles[2], None if root_angles is None else root_angles[2], (0.0, np.pi)),
         ("lep1 phi", torch_angles[3], None if root_angles is None else root_angles[3], (-np.pi, np.pi)),
+        ("sum theta", torch_angles[4], None if root_angles is None else root_angles[4], (-np.pi, np.pi)),
+        ("diff theta", torch_angles[5], None if root_angles is None else root_angles[5], (-np.pi, np.pi)),
+        ("sum phi", torch_angles[6], None if root_angles is None else root_angles[6], (-np.pi, np.pi)),
+        ("diff phi", torch_angles[7], None if root_angles is None else root_angles[7], (-np.pi, np.pi)),
     ]
 
-    # fig, axes = plt.subplots(2, 3, figsize=(13, 7), constrained_layout=True)
-    fig, axes = plt.subplots(2, 2, figsize=(10, 7), constrained_layout=True)
+    fig, axes = plt.subplots(2, 4, figsize=(16, 7), constrained_layout=True)
     for ax, (title, torch_tensor, root_array, xlim) in zip(axes.flat, values):
         torch_data = torch_tensor.detach().cpu().numpy()
         ax.hist(torch_data, bins=60, range=xlim, histtype="step", linewidth=1.8, density=True, label="torch")
@@ -326,24 +323,22 @@ def _ohbboosting_angles(particles):
         #     return theta, np.arctan2(sin_phi, cos_phi)
         raise ValueError(f"Expected 2 angle arrays from ohbboosting, got {len(angles)}")
 
-    # lep0_theta, lep0_sin_phi, lep0_cos_phi = unpack_theta_sin_cos(lep0_angles)
-    # lep1_theta, lep1_sin_phi, lep1_cos_phi = unpack_theta_sin_cos(lep1_angles)
     lep0_theta, lep0_phi = unpack_theta_phi(lep0_angles)
     lep1_theta, lep1_phi = unpack_theta_phi(lep1_angles)
+    sum_theta = _sum_angle(lep0_theta, lep1_theta)
+    diff_theta = _diff_angle(lep0_theta, lep1_theta)
+    sum_phi = _sum_angle(lep0_phi, lep1_phi)
+    diff_phi = _diff_angle(lep0_phi, lep1_phi)
 
-    # return (
-    #     lep0_theta,
-    #     lep0_sin_phi,
-    #     lep0_cos_phi,
-    #     lep1_theta,
-    #     lep1_sin_phi,
-    #     lep1_cos_phi,
-    # )
     return (
         lep0_theta,
         lep0_phi,
         lep1_theta,
         lep1_phi,
+        sum_theta,
+        diff_theta,
+        sum_phi,
+        diff_phi,
     )
 
 if __name__ == "__main__":
@@ -354,21 +349,19 @@ if __name__ == "__main__":
     booster = Booster(lep, wboson).to(device)
     lep0, lep1 = booster()
     torch_angles = booster.lep_theta_phi_in_w_rest()
-    # lep0_theta, lep0_sin_phi, lep0_cos_phi, lep1_theta, lep1_sin_phi, lep1_cos_phi = torch_angles
-    lep0_theta, lep0_phi, lep1_theta, lep1_phi = torch_angles
+    (
+        lep0_theta,
+        lep0_phi,
+        lep1_theta,
+        lep1_phi,
+        sum_theta,
+        diff_theta,
+        sum_phi,
+        diff_phi,
+    ) = torch_angles
 
     loss = lep0.square().mean() + lep1.square().mean()
-    loss = (
-        loss
-        + lep0_theta.mean()
-        # + lep0_sin_phi.mean()
-        # + lep0_cos_phi.mean()
-        + lep0_phi.mean()
-        + lep1_theta.mean()
-        # + lep1_sin_phi.mean()
-        # + lep1_cos_phi.mean()
-        + lep1_phi.mean()
-    )
+    loss = loss + sum(angle.mean() for angle in torch_angles)
     loss.backward()
 
     print("device:", device)
@@ -376,21 +369,29 @@ if __name__ == "__main__":
     print("lep0 rest:", tuple(lep0.shape))
     print("lep1 rest:", tuple(lep1.shape))
     print("lep0 theta range:", float(lep0_theta.min()), float(lep0_theta.max()))
-    # print("lep0 sin(phi) range:", float(lep0_sin_phi.min()), float(lep0_sin_phi.max()))
-    # print("lep0 cos(phi) range:", float(lep0_cos_phi.min()), float(lep0_cos_phi.max()))
     print("lep0 phi range:", float(lep0_phi.min()), float(lep0_phi.max()))
     print("lep1 theta range:", float(lep1_theta.min()), float(lep1_theta.max()))
-    # print("lep1 sin(phi) range:", float(lep1_sin_phi.min()), float(lep1_sin_phi.max()))
-    # print("lep1 cos(phi) range:", float(lep1_cos_phi.min()), float(lep1_cos_phi.max()))
     print("lep1 phi range:", float(lep1_phi.min()), float(lep1_phi.max()))
+    print("sum theta range:", float(sum_theta.min()), float(sum_theta.max()))
+    print("diff theta range:", float(diff_theta.min()), float(diff_theta.max()))
+    print("sum phi range:", float(sum_phi.min()), float(sum_phi.max()))
+    print("diff phi range:", float(diff_phi.min()), float(diff_phi.max()))
     print("gradient finite:", bool(torch.isfinite(wboson.grad).all()))
 
     particles = booster.particles.detach().cpu().numpy()
     try:
         root_angles = _ohbboosting_angles(particles)
         for name, torch_angle, root_angle in zip(
-            # ["lep0 theta", "lep0 sin(phi)", "lep0 cos(phi)", "lep1 theta", "lep1 sin(phi)", "lep1 cos(phi)"],
-            ["lep0 theta", "lep0 phi", "lep1 theta", "lep1 phi"],
+            [
+                "lep0 theta",
+                "lep0 phi",
+                "lep1 theta",
+                "lep1 phi",
+                "sum theta",
+                "diff theta",
+                "sum phi",
+                "diff phi",
+            ],
             torch_angles,
             root_angles,
         ):
