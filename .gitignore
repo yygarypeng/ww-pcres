@@ -54,7 +54,6 @@ artifacts/
 hww_pcres_regressor*/
 lightning_logs/
 wandb/
-wandb_sweep_runs/
 
 # Logs, pid files, and generated plots
 *.log

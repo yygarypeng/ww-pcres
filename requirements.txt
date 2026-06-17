@@ -1,6 +1,8 @@
 torch
-pytorch-lightning
+pytorch-lightning==2.6.1
+torchmetrics==1.9.0
 numpy
+scipy==1.15.3
 pyyaml
 h5py
 scikit-learn

@@ -41,6 +41,7 @@ def plot_1d_hist(
     color="black",
     savepath=None,
     ratio_ylim=(0.5, 1.5),
+    ratio_text="Pred/True",
 ):
     fig, (ax, rax) = plt.subplots(
         2,
@@ -54,8 +55,9 @@ def plot_1d_hist(
     pred_counts, _ = np.histogram(pred, bins=bins_edges)
     truth_counts, _ = np.histogram(truth, bins=bins_edges)
 
-    ax.hist(pred, bins=bins_edges, linewidth=2, color="red", histtype="step", label="Pred")
-    ax.hist(truth, bins=bins_edges, linewidth=2, color="blue", histtype="step", label="True")
+    legend_text = ratio_text.split("/", 1) if "/" in ratio_text else [ratio_text, "True"]
+    ax.hist(pred, bins=bins_edges, linewidth=2, color="red", histtype="step", label=legend_text[0])
+    ax.hist(truth, bins=bins_edges, linewidth=2, color="blue", histtype="step", label=legend_text[1])
     ax.legend(frameon=False, loc="upper right")
     ax.set_ylabel("Events", loc="top")
 
@@ -134,7 +136,7 @@ def plot_1d_hist(
         )
 
     rax.set_xlabel(name + " [" + unit + "]", loc="right")
-    rax.set_ylabel("Pred/True")
+    rax.set_ylabel(ratio_text)
     rax.set_ylim(*ratio_ylim)
     rax.grid(axis="y", linestyle="--", alpha=0.35)
     rax.tick_params(axis="both", which="major", pad=10)
@@ -143,7 +145,7 @@ def plot_1d_hist(
         fig.savefig(savepath, bbox_inches="tight")
     plt.show()
 
-def plot_2d_hist(pred, truth, name, bins_edges=np.linspace(-200, 200, 51), log=False, unit="GeV", color="black", vmax=1e2, offset=0.5, savepath=None):
+def plot_2d_hist(pred, truth, name, bins_edges=np.linspace(-200, 200, 51), log=False, unit="GeV", color="black", xlabel="Pred", ylabel="True", vmax=1e2, offset=0.5, savepath=None):
     err = 0.2
     cor_mask = np.abs(_rel_err_func(pred, truth)) <= err # set 20% relative error cut
     fig, ax = plt.subplots()
@@ -159,8 +161,8 @@ def plot_2d_hist(pred, truth, name, bins_edges=np.linspace(-200, 200, 51), log=F
     ax.plot(bins_edges, bins_edges, color="gainsboro", linestyle="--")
     # plt.plot(lower, bins_edges, color="gainsboro", linestyle="-")
 
-    ax.set_xlabel(f"Pred [{unit}]")
-    ax.set_ylabel(f"True [{unit}]")
+    ax.set_xlabel(f"{xlabel} [{unit}]")
+    ax.set_ylabel(f"{ylabel} [{unit}]")
     ax.set_title(f"{name}" + f" (RMSE: {_rmse(pred, truth):.2f})", loc="right")
     print(f"Rel err < 20%: {100*np.sum(cor_mask)/len(truth):.2f} %")
 

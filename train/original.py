@@ -1,9 +1,11 @@
 import os
 import argparse
+import shutil
 from pathlib import Path
 import sys
 
 import numpy as np
+import yaml
 
 import torch
 from pytorch_lightning import Trainer, seed_everything
@@ -18,12 +20,100 @@ DEFAULT_CONFIG = REPO_ROOT / "configs/config.yaml"
 from model import LightningWBoson
 from data import load_data as data
 from data.data_module import WBosonDataModule
-from train import clean_training_output, flatten_config, load_config, prime_csv_metric_header
 
 
 def resolve_repo_path(raw_path):
     path = Path(raw_path).expanduser()
     return path if path.is_absolute() else REPO_ROOT / path
+
+
+def clean_training_output(saved_path):
+    saved_path = str(resolve_repo_path(saved_path))
+    if not saved_path:
+        raise ValueError("paths.saved_path must be a non-empty directory path")
+    if os.path.abspath(saved_path) == os.path.abspath(os.sep):
+        raise ValueError("Refusing to delete filesystem root as paths.saved_path")
+    if os.path.exists(saved_path):
+        if not os.path.isdir(saved_path):
+            raise ValueError(f"paths.saved_path exists but is not a directory: {saved_path}")
+        print(f"Found existing checkpoint at {saved_path}, deleting entire folder...")
+        shutil.rmtree(saved_path)
+    else:
+        print("No existing checkpoint found, starting fresh...")
+
+
+def load_config(config_path=DEFAULT_CONFIG):
+    config_path = Path(config_path).expanduser()
+    if not os.path.exists(config_path):
+        raise FileNotFoundError(f"Config file not found at: {config_path}")
+
+    with open(config_path, "r") as file:
+        return yaml.safe_load(file)
+
+
+def flatten_config(config, prefix=""):
+    items = {}
+    for key, value in config.items():
+        full_key = f"{prefix}.{key}" if prefix else str(key)
+        if isinstance(value, dict):
+            items.update(flatten_config(value, full_key))
+        else:
+            items[full_key] = value
+    return items
+
+
+def prime_csv_metric_header(csv_logger, model):
+    metric_keys = {"epoch", "step"}
+    loss_names = sorted(model.loss_weights.keys())
+    active_loss_names = [
+        name for name, weight in model.loss_weights.items()
+        if weight != 0.0
+    ]
+    for prefix in ("", "val_", "test_"):
+        metric_keys.add(f"{prefix}loss")
+        metric_keys.update(f"{prefix}{name}_loss" for name in loss_names)
+    if model.log_loss_gradient_cosines:
+        metric_keys.update(
+            f"grad_cos/{name}__total"
+            for name in active_loss_names
+        )
+    metric_keys.update(
+        f"loss_weight/{name}"
+        for name in loss_names
+    )
+
+    writer = csv_logger.experiment
+    existing_keys = set(getattr(writer, "metrics_keys", []))
+    writer.metrics_keys = sorted(existing_keys | metric_keys)
+
+
+def build_training_callbacks(trainer_cfg):
+    monitor_metric = trainer_cfg.get("monitor_metric", "val_loss")
+    monitor_mode = trainer_cfg.get("monitor_mode", "min")
+    save_top_k = int(trainer_cfg.get("save_top_k", 3))
+    save_last = bool(trainer_cfg.get("save_last", True))
+    early_stop_patience = trainer_cfg.get("early_stop_patience", 128)
+    early_stop_min_delta = float(trainer_cfg.get("early_stop_min_delta", 0.0))
+
+    ckpt = ModelCheckpoint(
+        monitor=monitor_metric,
+        mode=monitor_mode,
+        save_top_k=save_top_k,
+        save_last=save_last,
+        filename=f"reg-{{epoch:02d}}-{{{monitor_metric}:.2f}}",
+    )
+    callbacks = [ckpt]
+    if early_stop_patience is not None and int(early_stop_patience) > 0:
+        callbacks.append(
+            EarlyStopping(
+                monitor=monitor_metric,
+                patience=int(early_stop_patience),
+                min_delta=early_stop_min_delta,
+                mode=monitor_mode,
+                verbose=False,
+            )
+        )
+    return ckpt, callbacks
 
 
 def main(train=True, arg=None, config_path=DEFAULT_CONFIG):
@@ -38,6 +128,8 @@ def main(train=True, arg=None, config_path=DEFAULT_CONFIG):
     LEARNING_RATE = _param["learning_rate"]
     GRADIENT_CLIP_VAL = _param.get("gradient_clip_val", 1.0)
     LOSS_WEIGHTS = _param["loss_weights"]
+    ADAPTIVE_LOSS_WEIGHTS = _param.get("adaptive_loss_weights", False)
+    LOG_LOSS_GRADIENT_COSINES = _param.get("log_loss_gradient_cosines", False)
     D_MODEL = _param["d_model"]
     N_HEADS = _param["n_heads"]
     NUM_WORKERS = _param.get("num_workers", 0)
@@ -104,17 +196,13 @@ def main(train=True, arg=None, config_path=DEFAULT_CONFIG):
             std_mean_train=std_mean_train, std_scale_train=std_scale_train,
             lr=LEARNING_RATE,
             loss_weights=LOSS_WEIGHTS,
+            adaptive_loss_weights=ADAPTIVE_LOSS_WEIGHTS,
+            log_loss_gradient_cosines=LOG_LOSS_GRADIENT_COSINES,
             d_model=D_MODEL,
             num_heads=N_HEADS
         )
 
-        ckpt = ModelCheckpoint(monitor="val_loss", mode="min", save_top_k=1, filename="reg-{epoch:02d}-{val_loss:.2f}")
-        early_stopping = EarlyStopping(
-            monitor="val_loss",
-            patience=64,
-            mode="min",
-            verbose=False
-        )
+        ckpt, callbacks = build_training_callbacks(TRAINER_CFG)
 
         steps_per_epoch = max(1, len(dm.train_dataloader()))
         clean_training_output(saved_path)
@@ -150,7 +238,7 @@ def main(train=True, arg=None, config_path=DEFAULT_CONFIG):
             max_epochs=EPOCHS,
             accelerator="gpu" if torch.cuda.is_available() else "cpu",
             devices=1,
-            callbacks=[ckpt, early_stopping],
+            callbacks=callbacks,
             logger=[csv_logger, wandb_logger] if use_wandb else [csv_logger],
             log_every_n_steps=steps_per_epoch,
             gradient_clip_val=GRADIENT_CLIP_VAL,

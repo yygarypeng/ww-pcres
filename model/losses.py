@@ -106,8 +106,8 @@ def w_mass_mae_losses(y_true, y_pred):
     w1_mass2 = invariant_mass2(w1_pred)
     mass2_scale = W_MASS_SCALE**2
     return (
-        F.l1_loss((w0_mass2 - w0_true_mass**2) / mass2_scale, torch.zeros_like(w0_mass2)),
-        F.l1_loss((w1_mass2 - w1_true_mass**2) / mass2_scale, torch.zeros_like(w1_mass2))
+        F.huber_loss((w0_mass2 - w0_true_mass**2) / mass2_scale, torch.zeros_like(w0_mass2)),
+        F.huber_loss((w1_mass2 - w1_true_mass**2) / mass2_scale, torch.zeros_like(w1_mass2))
     )
 
 def w_mass_mmd_losses(y_true, y_pred):
@@ -152,6 +152,56 @@ def dinu_pt_loss(x_batch, y_pred):
     return F.huber_loss(dinu_pxpy, met_pxpy)
 
 def angular_loss_mmd(x_batch, y_true, y_pred):
+    def _features_for_mmd(angles):
+        theta0 = angles[..., 0]
+        phi0 = angles[..., 1]
+        theta1 = angles[..., 2]
+        phi1 = angles[..., 3]
+        sum_theta = angles[..., 4]
+        diff_theta = angles[..., 5]
+        sum_phi = angles[..., 6]
+        diff_phi = angles[..., 7]
+        return torch.stack([
+            theta0 / torch.pi,
+            torch.sin(phi0), torch.cos(phi0),
+            theta1 / torch.pi,
+            torch.sin(phi1), torch.cos(phi1),
+            # torch.sin(sum_theta), torch.cos(sum_theta),
+            # torch.sin(diff_theta), torch.cos(diff_theta),
+            # torch.sin(sum_phi), torch.cos(sum_phi),
+            # torch.sin(diff_phi), torch.cos(diff_phi),
+        ], dim=-1)
+
+    lep = x_batch[..., :8]
+    true_w0, true_w1 = w_4vec_construct(y_true[..., :4]), w_4vec_construct(y_true[..., 4:8])
+    pred_w0, pred_w1 = w_4vec_construct(y_pred[..., :4]), w_4vec_construct(y_pred[..., 4:8])
+    true_w = torch.cat([true_w0, true_w1], dim=-1)
+    pred_w = torch.cat([pred_w0, pred_w1], dim=-1)
+
+    true_booster = Booster(lep, true_w)
+    pred_booster = Booster(lep, pred_w)
+    valid = true_booster.valid_rest_frame_mask() & pred_booster.valid_rest_frame_mask()
+
+    true_ang = torch.stack(true_booster.lep_theta_phi_in_w_rest(), dim=-1)[valid]
+    pred_ang = torch.stack(pred_booster.lep_theta_phi_in_w_rest(), dim=-1)[valid]
+    if true_ang.shape[0] == 0:
+        return (true_w.sum() + pred_w.sum()) * 0.0
+
+    true_ang = _features_for_mmd(true_ang)
+    pred_ang = _features_for_mmd(pred_ang)
+
+    # theta_idx = [0, 3]
+    # true_ang = true_ang.clone()
+    # pred_ang = pred_ang.clone()
+    # true_ang[..., theta_idx] = true_ang[..., theta_idx] / torch.pi
+    # pred_ang[..., theta_idx] = pred_ang[..., theta_idx] / torch.pi
+
+    _sigma_lst = [0.01, 0.03, 0.1, 0.3, 1.0, 3.0]
+    # DEBUG
+    # print("Shape of pred_ang: ", pred_ang.shape, "Shape of true_ang: ", true_ang.shape)
+    return 100*compute_mmd(pred_ang, true_ang, bandwidth_range=_sigma_lst)
+
+def angular_loss_mae(x_batch, y_true, y_pred):
     lep = x_batch[..., :8]
     true_w0, true_w1 = w_4vec_construct(y_true[..., :4]), w_4vec_construct(y_true[..., 4:8])
     pred_w0, pred_w1 = w_4vec_construct(y_pred[..., :4]), w_4vec_construct(y_pred[..., 4:8])
@@ -173,7 +223,8 @@ def angular_loss_mmd(x_batch, y_true, y_pred):
     # true_ang[..., theta_idx] = true_ang[..., theta_idx] / torch.pi
     # pred_ang[..., theta_idx] = pred_ang[..., theta_idx] / torch.pi
 
-    _sigma_lst = [0.01, 0.03, 0.1, 0.3, 1.0, 3.0]
+    # _sigma_lst = [0.01, 0.03, 0.1, 0.3, 1.0, 3.0]
     # DEBUG
     # print("Shape of pred_ang: ", pred_ang.shape, "Shape of true_ang: ", true_ang.shape)
-    return compute_mmd(pred_ang, true_ang, bandwidth_range=_sigma_lst)
+    # return compute_mmd(pred_ang, true_ang, bandwidth_range=_sigma_lst)
+    return F.huber_loss(pred_ang, true_ang)

@@ -15,7 +15,6 @@ The model predicts neutrino momenta from leptons, MET, and jets event features, 
 - `model/`: Lightning module, neural-network layers, and losses.
 - `physics/`: kinematics helpers and W-rest-frame boost utilities.
 - `train/`: training entry points and launcher.
-- `sweep/`: W&B Sweep config, trial wrapper, and launcher.
 - `scripts/`: standalone utility scripts.
 - `notebooks/`: exploratory notebooks and notebook plotting helpers.
 - `onnx/`: ONNX export and validation utilities.
@@ -78,7 +77,7 @@ trainer:
 Run a one-epoch, two-batch sanity check with a small HDF5 subset:
 
 ```bash
-python -m train.main --config configs/sanity.yaml
+python -m train.original --config configs/sanity.yaml
 ```
 
 This writes to `outputs/sanity/`, which is ignored by git.
@@ -86,13 +85,13 @@ This writes to `outputs/sanity/`, which is ignored by git.
 ## Train
 
 ```bash
-python -m train.main --config configs/config.yaml
+python -m train.original --config configs/config.yaml
 ```
 
 With Weights & Biases:
 
 ```bash
-python -m train.main --config configs/config.yaml --wandb
+python -m train.original --config configs/config.yaml --wandb
 ```
 
 The launcher uses the same entry point:
@@ -103,28 +102,7 @@ The launcher uses the same entry point:
 
 Outputs are written under `paths.saved_path`. Training deletes that output directory before a fresh run, after data and model setup have succeeded.
 
-## W&B Sweep
-
-`sweep/sweep.yaml` defines the W&B hyperparameter search. `sweep/sweep.py` runs one sweep trial by loading `configs/config.yaml`, applying sampled W&B parameters, writing generated configs under `wandb_sweep_runs/configs/`, writing model outputs under `wandb_sweep_runs/runs/`, and calling the training workflow.
-
-Create the sweep:
-
-```bash
-wandb sweep sweep/sweep.yaml
-```
-
-Run the W&B agent command printed by W&B, or start an agent in the background:
-
-```bash
-SWEEP_ID=ENTITY/pcres-sweep/SWEEP_ID ./sweep/run_sweep.sh
-```
-
-Watch and stop the background agent:
-
-```bash
-tail -f sweep.log
-kill "$(cat sweep.pid)"
-```
+Adaptive loss weights, when enabled, are updated once at the end of each training epoch using the first training batch from that epoch. The cosine metrics are logged as `grad_cos/{loss}__total`.
 
 ## Data
 
@@ -137,7 +115,7 @@ The HDF5 file should contain top-level categories such as `ggF_train`, `ggF_val`
 - `truth_pos_w`: `px`, `py`, `pz`, `energy`, `m`
 - `truth_neg_w`: `px`, `py`, `pz`, `energy`, `m`
 
-The loader builds 26 input features and 10 targets. Non-finite rows are removed. Input standardization is fitted on the training split only.
+The loader builds 18 input features and 10 targets. Non-finite rows are removed. Input standardization is fitted on the training split only.
 
 ## ONNX
 
