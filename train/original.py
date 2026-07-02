@@ -1,8 +1,8 @@
-import os
 import argparse
+import os
 import shutil
-from pathlib import Path
 import sys
+from pathlib import Path
 
 import numpy as np
 import yaml
@@ -28,13 +28,13 @@ def resolve_repo_path(raw_path):
 
 
 def clean_training_output(saved_path):
-    saved_path = str(resolve_repo_path(saved_path))
-    if not saved_path:
+    if saved_path is None or not str(saved_path).strip():
         raise ValueError("paths.saved_path must be a non-empty directory path")
-    if os.path.abspath(saved_path) == os.path.abspath(os.sep):
+    saved_path = resolve_repo_path(saved_path)
+    if saved_path.resolve() == Path(saved_path.anchor).resolve():
         raise ValueError("Refusing to delete filesystem root as paths.saved_path")
-    if os.path.exists(saved_path):
-        if not os.path.isdir(saved_path):
+    if saved_path.exists():
+        if not saved_path.is_dir():
             raise ValueError(f"paths.saved_path exists but is not a directory: {saved_path}")
         print(f"Found existing checkpoint at {saved_path}, deleting entire folder...")
         shutil.rmtree(saved_path)
@@ -44,7 +44,7 @@ def clean_training_output(saved_path):
 
 def load_config(config_path=DEFAULT_CONFIG):
     config_path = Path(config_path).expanduser()
-    if not os.path.exists(config_path):
+    if not config_path.exists():
         raise FileNotFoundError(f"Config file not found at: {config_path}")
 
     with open(config_path, "r") as file:
@@ -77,6 +77,10 @@ def prime_csv_metric_header(csv_logger, model):
             f"grad_cos/{name}__total"
             for name in active_loss_names
         )
+        metric_keys.update(
+            f"grad_cos/{name}__rest"
+            for name in active_loss_names
+        )
     metric_keys.update(
         f"loss_weight/{name}"
         for name in loss_names
@@ -87,77 +91,46 @@ def prime_csv_metric_header(csv_logger, model):
     writer.metrics_keys = sorted(existing_keys | metric_keys)
 
 
-def build_training_callbacks(trainer_cfg):
-    monitor_metric = trainer_cfg.get("monitor_metric", "val_loss")
-    monitor_mode = trainer_cfg.get("monitor_mode", "min")
-    save_top_k = int(trainer_cfg.get("save_top_k", 3))
-    save_last = bool(trainer_cfg.get("save_last", True))
-    early_stop_patience = trainer_cfg.get("early_stop_patience", 128)
-    early_stop_min_delta = float(trainer_cfg.get("early_stop_min_delta", 0.0))
-
-    ckpt = ModelCheckpoint(
-        monitor=monitor_metric,
-        mode=monitor_mode,
-        save_top_k=save_top_k,
-        save_last=save_last,
-        filename=f"reg-{{epoch:02d}}-{{{monitor_metric}:.2f}}",
-    )
-    callbacks = [ckpt]
-    if early_stop_patience is not None and int(early_stop_patience) > 0:
-        callbacks.append(
-            EarlyStopping(
-                monitor=monitor_metric,
-                patience=int(early_stop_patience),
-                min_delta=early_stop_min_delta,
-                mode=monitor_mode,
-                verbose=False,
-            )
-        )
-    return ckpt, callbacks
-
-
 def main(train=True, arg=None, config_path=DEFAULT_CONFIG):
-    # ---------- load config ----------
     if arg is not None and hasattr(arg, "config"):
         config_path = arg.config
-    _cfg = load_config(config_path)
-    _param = _cfg["parameters"]
-    SEED = _param.get("seed", 114)
-    BATCH_SIZE = _param["batch_size"]
-    EPOCHS = _param["epochs"]
-    LEARNING_RATE = _param["learning_rate"]
-    GRADIENT_CLIP_VAL = _param.get("gradient_clip_val", 1.0)
-    LOSS_WEIGHTS = _param["loss_weights"]
-    ADAPTIVE_LOSS_WEIGHTS = _param.get("adaptive_loss_weights", False)
-    LOG_LOSS_GRADIENT_COSINES = _param.get("log_loss_gradient_cosines", False)
-    D_MODEL = _param["d_model"]
-    N_HEADS = _param["n_heads"]
-    NUM_WORKERS = _param.get("num_workers", 0)
-    PERSISTENT_WORKERS = _param.get("persistent_workers", False)
-    PIN_MEMORY = _param.get("pin_memory", torch.cuda.is_available())
-    PREFETCH_FACTOR = _param.get("prefetch_factor", 2)
-    DATA_CFG = _cfg.get("data", {})
-    TRAINER_CFG = _cfg.get("trainer", {})
+    cfg = load_config(config_path)
+    params = cfg["parameters"]
+    seed = params.get("seed", 114)
+    batch_size = params["batch_size"]
+    epochs = params["epochs"]
+    learning_rate = params["learning_rate"]
+    gradient_clip_val = params.get("gradient_clip_val", 1.0)
+    loss_weights = params["loss_weights"]
+    adaptive_loss_weights = params.get("adaptive_loss_weights", False)
+    log_loss_gradient_cosines = params.get("log_loss_gradient_cosines", False)
+    d_model = params["d_model"]
+    n_heads = params["n_heads"]
+    num_workers = params.get("num_workers", 0)
+    persistent_workers = params.get("persistent_workers", False)
+    pin_memory = params.get("pin_memory", torch.cuda.is_available())
+    prefetch_factor = params.get("prefetch_factor", 2)
+    data_cfg = cfg.get("data", {})
 
-    # some stable settings for dataloader and numpy
-    os.environ["OMP_NUM_THREADS"] = str(NUM_WORKERS + 2)
-    os.environ["MKL_NUM_THREADS"] = str(NUM_WORKERS + 2)
-    os.environ["OPENBLAS_NUM_THREADS"] = str(NUM_WORKERS + 2)
-    os.environ["NUMEXPR_NUM_THREADS"] = str(NUM_WORKERS + 2)
+    num_threads = str(num_workers)
+    os.environ["OMP_NUM_THREADS"] = num_threads
+    os.environ["MKL_NUM_THREADS"] = num_threads
+    os.environ["OPENBLAS_NUM_THREADS"] = num_threads
+    os.environ["NUMEXPR_NUM_THREADS"] = num_threads
 
-    saved_path = str(resolve_repo_path(_cfg["paths"]["saved_path"]))
-    data_path = str(resolve_repo_path(_cfg["paths"]["data_path"]))
+    saved_path = str(resolve_repo_path(cfg["paths"]["saved_path"]))
+    data_path = str(resolve_repo_path(cfg["paths"]["data_path"]))
 
-    if train != True:
+    if not train:
         print("Evaluation mode, loading checkpoints...")
 
-    seed_everything(SEED, workers=True)
+    seed_everything(seed, workers=True)
     torch.set_default_dtype(torch.float32)
-    torch.set_float32_matmul_precision("medium") # "high" is more accurate but slower
+    torch.set_float32_matmul_precision("medium")  # "high" is more accurate but slower
 
     llvv_train, ww_train, llvv_val, ww_val, llvv_test, ww_test = data.load_presplit_data(
         data_path,
-        data_cfg=DATA_CFG,
+        data_cfg=data_cfg,
     )
 
     X_train = llvv_train.astype(np.float32)
@@ -174,96 +147,105 @@ def main(train=True, arg=None, config_path=DEFAULT_CONFIG):
         Y_val=Y_val,
         X_test=X_test,
         Y_test=Y_test,
-        batch_size=BATCH_SIZE,
-        seed=SEED,
-        num_workers=NUM_WORKERS,
-        persistent_workers=PERSISTENT_WORKERS,
-        pin_memory=PIN_MEMORY,
-        prefetch_factor=PREFETCH_FACTOR,
-    ) 
+        batch_size=batch_size,
+        seed=seed,
+        num_workers=num_workers,
+        persistent_workers=persistent_workers,
+        pin_memory=pin_memory,
+        prefetch_factor=prefetch_factor,
+    )
     dm.setup()
     (std_mean_train, std_scale_train), _ = data.compute_standardization_stats(
         X_train,
         Y_train,
     )
 
-    if train == True:
-        print("Starting training...")
-        input_dim = X_train.shape[1]
-        print(f"Input dimension: {input_dim}")
-        model = LightningWBoson(
-            input_dim=input_dim,
-            std_mean_train=std_mean_train, std_scale_train=std_scale_train,
-            lr=LEARNING_RATE,
-            loss_weights=LOSS_WEIGHTS,
-            adaptive_loss_weights=ADAPTIVE_LOSS_WEIGHTS,
-            log_loss_gradient_cosines=LOG_LOSS_GRADIENT_COSINES,
-            d_model=D_MODEL,
-            num_heads=N_HEADS
-        )
-
-        ckpt, callbacks = build_training_callbacks(TRAINER_CFG)
-
-        steps_per_epoch = max(1, len(dm.train_dataloader()))
-        clean_training_output(saved_path)
-        use_wandb = bool(arg is not None and arg.wandb)
-        if use_wandb:
-            run_name = getattr(arg, "run_name", None) or os.path.basename(os.path.normpath(saved_path))
-            wandb_project = getattr(arg, "wandb_project", None) or "PCRES-regressor"
-            wandb_logger = WandbLogger(
-                project=wandb_project,
-                name=run_name,
-                save_dir=saved_path,
-                log_model=True,
-            )
-            logged_config = flatten_config(_cfg)
-            swept_config_keys = set(getattr(arg, "swept_config_keys", []) or [])
-            if swept_config_keys:
-                logged_config = {
-                    key: value
-                    for key, value in logged_config.items()
-                    if key not in swept_config_keys
-                }
-            wandb_logger.experiment.config.update(logged_config, allow_val_change=True)
-            if bool(getattr(arg, "watch_model", False)):
-                wandb_logger.watch(model, log="all", log_freq=steps_per_epoch, log_graph=False)
-        else:
-            wandb_logger = None
-            print("Wandb logging disabled, only using CSVLogger.")
-
-        csv_logger = CSVLogger(save_dir=saved_path, name="logs", version=0)
-        prime_csv_metric_header(csv_logger, model)
-
-        trainer = Trainer(
-            max_epochs=EPOCHS,
-            accelerator="gpu" if torch.cuda.is_available() else "cpu",
-            devices=1,
-            callbacks=callbacks,
-            logger=[csv_logger, wandb_logger] if use_wandb else [csv_logger],
-            log_every_n_steps=steps_per_epoch,
-            gradient_clip_val=GRADIENT_CLIP_VAL,
-            limit_train_batches=TRAINER_CFG.get("limit_train_batches", 1.0),
-            limit_val_batches=TRAINER_CFG.get("limit_val_batches", 1.0),
-            limit_test_batches=TRAINER_CFG.get("limit_test_batches", 1.0),
-        )
-        trainer.fit(model, datamodule=dm)
-        if dm.test_ds is not None and len(dm.test_ds) > 0:
-            print("Running test evaluation with best checkpoint...")
-            test_trainer = Trainer(
-                accelerator="gpu" if torch.cuda.is_available() else "cpu",
-                devices=1,
-                logger=False,
-                enable_checkpointing=False,
-                limit_test_batches=TRAINER_CFG.get("limit_test_batches", 1.0),
-            )
-            test_trainer.test(model=model, datamodule=dm, ckpt_path=ckpt.best_model_path, weights_only=False)
-        else:
-            print("No test split available, skipping test evaluation.")
-        if use_wandb:
-            wandb_logger.experiment.finish()
-    else:
+    if not train:
         print("Loading model from checkpoint for evaluation... return datamodule")
         return dm
+
+    print("Starting training...")
+    input_dim = X_train.shape[1]
+    print(f"Input dimension: {input_dim}")
+    model = LightningWBoson(
+        input_dim=input_dim,
+        std_mean_train=std_mean_train,
+        std_scale_train=std_scale_train,
+        lr=learning_rate,
+        loss_weights=loss_weights,
+        adaptive_loss_weights=adaptive_loss_weights,
+        log_loss_gradient_cosines=log_loss_gradient_cosines,
+        d_model=d_model,
+        num_heads=n_heads,
+    )
+
+    ckpt = ModelCheckpoint(
+        monitor="val_loss",
+        mode="min",
+        save_top_k=3,
+        save_last=True,
+        filename="reg-{epoch:02d}-{val_loss:.2f}",
+    )
+    callbacks = [
+        ckpt,
+        EarlyStopping(
+            monitor="val_loss",
+            patience=128,
+            mode="min",
+            verbose=False,
+        ),
+    ]
+
+    steps_per_epoch = max(1, len(dm.train_dataloader()))
+    clean_training_output(saved_path)
+    use_wandb = bool(getattr(arg, "wandb", False))
+    if use_wandb:
+        run_name = getattr(arg, "run_name", None) or Path(saved_path).name
+        wandb_project = getattr(arg, "wandb_project", None) or "PCRES-regressor"
+        wandb_logger = WandbLogger(
+            project=wandb_project,
+            name=run_name,
+            save_dir=saved_path,
+            log_model=True,
+        )
+        wandb_logger.experiment.config.update(flatten_config(cfg), allow_val_change=True)
+        if bool(getattr(arg, "watch_model", False)):
+            wandb_logger.watch(model, log="all", log_freq=steps_per_epoch, log_graph=False)
+    else:
+        wandb_logger = None
+        print("Wandb logging disabled, only using CSVLogger.")
+
+    csv_logger = CSVLogger(save_dir=saved_path, name="logs", version=0)
+    prime_csv_metric_header(csv_logger, model)
+
+    trainer = Trainer(
+        max_epochs=epochs,
+        accelerator="gpu" if torch.cuda.is_available() else "cpu",
+        devices=1,
+        callbacks=callbacks,
+        logger=[csv_logger, wandb_logger] if use_wandb else [csv_logger],
+        log_every_n_steps=steps_per_epoch,
+        gradient_clip_val=gradient_clip_val,
+    )
+    trainer.fit(model, datamodule=dm)
+    if dm.test_ds is not None and len(dm.test_ds) > 0:
+        print("Running test evaluation with best checkpoint...")
+        test_trainer = Trainer(
+            accelerator="gpu" if torch.cuda.is_available() else "cpu",
+            devices=1,
+            logger=False,
+            enable_checkpointing=False,
+        )
+        test_trainer.test(
+            model=model,
+            datamodule=dm,
+            ckpt_path=ckpt.best_model_path,
+            weights_only=False,
+        )
+    else:
+        print("No test split available, skipping test evaluation.")
+    if use_wandb:
+        wandb_logger.experiment.finish()
 
 
 if __name__ == "__main__":

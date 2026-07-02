@@ -37,7 +37,7 @@ class WBosonRegressor(nn.Module):
         # self.role_embedding = nn.Parameter(torch.zeros(self.num_tokens, d_model))
         # nn.init.normal_(self.role_embedding, mean=0.0, std=0.02)
         self.sa_blocks = nn.ModuleList([
-            SelfAttentionBlock(d_model, num_heads, dropout=0.5) for _ in range(8)
+            SelfAttentionBlock(d_model, num_heads, dropout=0.5) for _ in range(5)
         ])
         print(f"Using {len(self.sa_blocks)} SA blocks.")
         
@@ -48,17 +48,17 @@ class WBosonRegressor(nn.Module):
         blocks.append(ResidualBlock(256, 256, dropout=0.5))
         blocks.append(ResidualBlock(256, 128, dropout=0.5))
         blocks.append(ResidualBlock(128, 128, dropout=0.5))
-        # blocks.append(ResidualBlock(128, 64, dropout=0.5))
+        blocks.append(ResidualBlock(128, 64, dropout=0.5))
         
         self.trunk = nn.Sequential(*blocks)
         self.pre_trunk_bn = nn.LayerNorm(d_model * self.num_tokens)
 
         # nu momentum regression head
         self.nu_mom_head = nn.Sequential(
-            nn.LayerNorm(128),
-            nn.Linear(128, 32),
+            nn.LayerNorm(64),
+            nn.Linear(64, 16),
             nn.GELU(),
-            nn.Linear(32, 6)
+            nn.Linear(16, 6)
         )
         
         # W bosons decoder
@@ -117,13 +117,9 @@ class LightningWBoson(L.LightningModule):
             lr=1e-4, loss_weights=None,
             adaptive_loss_weights=False,
             log_loss_gradient_cosines=False,
-            **legacy_hparams,
         ):
         super().__init__()
-        legacy_hparams.pop("adaptive_loss_update_interval", None)
-        if legacy_hparams:
-            raise TypeError(f"Unexpected hyperparameters: {sorted(legacy_hparams)}")
-        self.save_hyperparameters(ignore=["legacy_hparams"])
+        self.save_hyperparameters()
         self.model = WBosonRegressor(
             input_dim, 
             d_model, num_heads,
@@ -152,7 +148,7 @@ class LightningWBoson(L.LightningModule):
         self.adaptive_loss_weights = bool(adaptive_loss_weights)
         self.adaptive_loss_names = [
             name for name, weight in self.loss_weights.items()
-            if weight != 0.0
+            if weight != 0.0 and name not in {"huber"}
         ]
         self.adaptive_loss_budget = sum(
             self.loss_weights[name] for name in self.adaptive_loss_names
@@ -182,7 +178,7 @@ class LightningWBoson(L.LightningModule):
             losses["w0_mass_mae"] = w0_mass_mae
             losses["w1_mass_mae"] = w1_mass_mae
         if self._loss_enabled("angular_loss_mmd"):
-            losses["angular_loss_mmd"] = angular_loss_mmd(x, y, y_pred)
+            losses["angular_loss_mmd"] = angular_loss_mmd(x, y, y_pred, scale=100.0)
         if self._loss_enabled("angular_loss_mae"):
             losses["angular_loss_mae"] = angular_loss_mae(x, y, y_pred)
         if self._loss_enabled("neg_r2"):
@@ -242,20 +238,38 @@ class LightningWBoson(L.LightningModule):
         cosines = {}
         for name in names:
             grad = self._loss_grad_vector(losses[name], parameters)
-            cos = torch.nn.functional.cosine_similarity(grad, total_grad, dim=0, eps=1.0e-6)
-            raw = torch.clamp(1.0 - cos, min=0.0)
+            cos_total = torch.nn.functional.cosine_similarity(grad, total_grad, dim=0, eps=1.0e-6)
+            weight = self.loss_weights.get(name, 0.0)
+            rest_grad = total_grad - weight * grad
+            cos_rest = torch.nn.functional.cosine_similarity(grad, rest_grad, dim=0, eps=1.0e-6)
+            raw = torch.clamp(1.0 - cos_total, min=0.0)
             if not torch.isfinite(raw).item():
                 return {}
             raw_weights.append(raw)
-            cosines[name] = cos.detach()
+            cosines[name] = {
+                "total": cos_total.detach(),
+                "rest": cos_rest.detach(),
+            }
 
         raw_sum = torch.stack(raw_weights).sum()
         if not torch.isfinite(raw_sum).item() or raw_sum.item() <= 0.0:
             return {}
 
+        # for name, raw in zip(names, raw_weights):
+        #     # update/scale weights by normalized cosine similarity
+        #     self.loss_weights[name] = float((raw / raw_sum * self.adaptive_loss_budget).detach().cpu())
+        # return cosines
+
         for name, raw in zip(names, raw_weights):
-            # update/scale weights by normalized cosine similarity
-            self.loss_weights[name] = float((raw / raw_sum * self.adaptive_loss_budget).detach().cpu())
+            target = float((raw / raw_sum * self.adaptive_loss_budget).detach().cpu())
+            old = float(self.loss_weights.get(name, target))
+
+            # Smooth update instead of hard assignment.
+            rho = 0.2  # 0.01 to 0.10. Smaller = more stable.
+            new = (1.0 - rho) * old + rho * target
+
+            self.loss_weights[name] = new
+
         return cosines
 
     def _log_losses(self, prefix, losses, total):
@@ -271,7 +285,8 @@ class LightningWBoson(L.LightningModule):
         if not self.log_loss_gradient_cosines:
             return
         for name, cos in cosines.items():
-            self.log(f"grad_cos/{name}__total", cos, prog_bar=False, on_step=False, on_epoch=True)
+            self.log(f"grad_cos/{name}__total", cos["total"], prog_bar=False, on_step=False, on_epoch=True)
+            self.log(f"grad_cos/{name}__rest", cos["rest"], prog_bar=False, on_step=False, on_epoch=True)
 
     def on_train_epoch_start(self):
         self._adaptive_batch = None

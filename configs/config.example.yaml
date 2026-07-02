@@ -29,14 +29,6 @@ data:
   val_frac: 0.05
   test_frac: 0.01
 
-trainer:
-  monitor_metric: val_loss
-  monitor_mode: min
-  early_stop_patience: 192
-  early_stop_min_delta: 0.0
-  save_top_k: 3
-  save_last: true
-
 paths:
   saved_path: "outputs/run"
   data_path: "/path/to/training_data.h5"

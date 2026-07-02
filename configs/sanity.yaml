@@ -27,11 +27,6 @@ data:
   val_frac: 0.1
   test_frac: 0.0
 
-trainer:
-  limit_train_batches: 2
-  limit_val_batches: 1
-  limit_test_batches: 0
-
 paths:
   saved_path: outputs/sanity
   data_path: /root/data/danning_h5/ypeng/mc20_qe_v4_recotruth_merged.h5
