@@ -27,11 +27,6 @@ data:
   test_categories: [ggF_test]
   max_events_per_category: 1024
 
-trainer:
-  limit_train_batches: 2
-  limit_val_batches: 1
-  limit_test_batches: 1
-
 paths:
   saved_path: outputs/sanity_original
   data_path: /root/data/danning_h5/ypeng/mc20_qe_v4_recotruth_merged.h5

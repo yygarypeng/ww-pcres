@@ -1,3 +1,3 @@
-from model.model import LightningWBoson, WBosonRegressor
+from model.model import LightningWBoson
 
-__all__ = ["LightningWBoson", "WBosonRegressor"]
+__all__ = ["LightningWBoson"]

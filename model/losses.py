@@ -20,7 +20,6 @@ def compute_mmd(x, y, kernel="imq", bandwidth_range=None):
     y = y[finit_mask]
 
     if x.shape[0] == 0 or y.shape[0] == 0:
-        # TODO: check the stability 
         return (
             torch.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0).sum()
             + torch.nan_to_num(y, nan=0.0, posinf=0.0, neginf=0.0).sum()
@@ -125,8 +124,6 @@ def higgs_mass_loss(y_pred):
     h_mass = torch.sqrt(h_mass2)
     return F.huber_loss(h_mass, torch.full_like(h_mass, H_MASS_SCALE))
 
-
-
 def nu_mass_loss(x_batch, y_pred):
     """This is just a monitor loss"""
     n0_4 = w_4vec_construct(y_pred[..., :4]) - x_batch[..., :4]
@@ -151,16 +148,16 @@ def dinu_pt_loss(x_batch, y_pred):
     met_pxpy = x_batch[..., 16:18]
     return F.huber_loss(dinu_pxpy, met_pxpy)
 
-def angular_loss_mmd(x_batch, y_true, y_pred):
+def angular_loss_mmd(x_batch, y_true, y_pred, scale=100.0):
     def _features_for_mmd(angles):
         theta0 = angles[..., 0]
         phi0 = angles[..., 1]
         theta1 = angles[..., 2]
         phi1 = angles[..., 3]
-        sum_theta = angles[..., 4]
-        diff_theta = angles[..., 5]
-        sum_phi = angles[..., 6]
-        diff_phi = angles[..., 7]
+        # sum_theta = angles[..., 4]
+        # diff_theta = angles[..., 5]
+        # sum_phi = angles[..., 6]
+        # diff_phi = angles[..., 7]
         return torch.stack([
             theta0 / torch.pi,
             torch.sin(phi0), torch.cos(phi0),
@@ -199,7 +196,7 @@ def angular_loss_mmd(x_batch, y_true, y_pred):
     _sigma_lst = [0.01, 0.03, 0.1, 0.3, 1.0, 3.0]
     # DEBUG
     # print("Shape of pred_ang: ", pred_ang.shape, "Shape of true_ang: ", true_ang.shape)
-    return 100*compute_mmd(pred_ang, true_ang, bandwidth_range=_sigma_lst)
+    return scale * compute_mmd(pred_ang, true_ang, bandwidth_range=_sigma_lst)
 
 def angular_loss_mae(x_batch, y_true, y_pred):
     lep = x_batch[..., :8]
