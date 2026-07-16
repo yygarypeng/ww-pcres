@@ -1,0 +1,256 @@
+import argparse
+import os
+import shutil
+import sys
+from pathlib import Path
+from time import time
+
+import numpy as np
+import yaml
+
+import torch
+from pytorch_lightning import Trainer, seed_everything
+from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
+from pytorch_lightning.loggers import CSVLogger, WandbLogger
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO_ROOT))
+DEFAULT_CONFIG = REPO_ROOT / "configs/config.yaml"
+
+
+from model import LightningWBoson
+from data import load_data as data
+from data.data_module import WBosonDataModule
+
+
+def resolve_repo_path(raw_path):
+    path = Path(raw_path).expanduser()
+    return path if path.is_absolute() else REPO_ROOT / path
+
+
+def clean_training_output(saved_path):
+    if saved_path is None or not str(saved_path).strip():
+        raise ValueError("paths.saved_path must be a non-empty directory path")
+    saved_path = resolve_repo_path(saved_path)
+    if saved_path.resolve() == Path(saved_path.anchor).resolve():
+        raise ValueError("Refusing to delete filesystem root as paths.saved_path")
+    if saved_path.exists():
+        if not saved_path.is_dir():
+            raise ValueError(f"paths.saved_path exists but is not a directory: {saved_path}")
+        print(f"Found existing checkpoint at {saved_path}, deleting entire folder...")
+        shutil.rmtree(saved_path)
+    else:
+        print("No existing checkpoint found, starting fresh...")
+
+
+def load_config(config_path=DEFAULT_CONFIG):
+    config_path = Path(config_path).expanduser()
+    if not config_path.exists():
+        raise FileNotFoundError(f"Config file not found at: {config_path}")
+
+    with open(config_path, "r") as file:
+        return yaml.safe_load(file)
+
+
+def flatten_config(config, prefix=""):
+    items = {}
+    for key, value in config.items():
+        full_key = f"{prefix}.{key}" if prefix else str(key)
+        if isinstance(value, dict):
+            items.update(flatten_config(value, full_key))
+        else:
+            items[full_key] = value
+    return items
+
+
+def prime_csv_metric_header(csv_logger, model):
+    metric_keys = {"epoch", "step"}
+    loss_names = sorted(model.loss_weights.keys())
+    active_loss_names = [
+        name for name, weight in model.loss_weights.items()
+        if weight != 0.0
+    ]
+    for prefix in ("", "val_", "test_"):
+        metric_keys.add(f"{prefix}loss")
+        metric_keys.update(f"{prefix}{name}_loss" for name in loss_names)
+    if model.log_loss_gradient_cosines:
+        metric_keys.update(
+            f"grad_cos/{name}__total"
+            for name in active_loss_names
+        )
+        metric_keys.update(
+            f"grad_cos/{name}__rest"
+            for name in active_loss_names
+        )
+    metric_keys.update(
+        f"loss_weight/{name}"
+        for name in loss_names
+    )
+
+    writer = csv_logger.experiment
+    existing_keys = set(getattr(writer, "metrics_keys", []))
+    writer.metrics_keys = sorted(existing_keys | metric_keys)
+
+
+def build_datamodule(cfg, data_path):
+    params = cfg["parameters"]
+    splits = data.load_presplit_data(
+        data_path,
+        data_cfg=cfg.get("data", {}),
+    )
+    X_train, Y_train, X_val, Y_val, X_test, Y_test = (
+        split.astype(np.float32) for split in splits
+    )
+
+    dm = WBosonDataModule(
+        X_train,
+        Y_train,
+        X_val=X_val,
+        Y_val=Y_val,
+        X_test=X_test,
+        Y_test=Y_test,
+        batch_size=params["batch_size"],
+        seed=params.get("seed", 114),
+        num_workers=params.get("num_workers", 0),
+        persistent_workers=params.get("persistent_workers", False),
+        pin_memory=params.get("pin_memory", torch.cuda.is_available()),
+        prefetch_factor=params.get("prefetch_factor", 2),
+    )
+    dm.setup()
+    standardization, _ = data.compute_standardization_stats(X_train, Y_train)
+    return dm, X_train.shape[1], standardization
+
+
+def create_loggers(cfg, model, saved_path, arg, steps_per_epoch):
+    csv_logger = CSVLogger(save_dir=saved_path, name="logs", version=0)
+    prime_csv_metric_header(csv_logger, model)
+
+    if not getattr(arg, "wandb", False):
+        print("Wandb logging disabled, only using CSVLogger.")
+        return [csv_logger], None
+
+    wandb_logger = WandbLogger(
+        project=getattr(arg, "wandb_project", None) or "PCRES-regressor",
+        name=getattr(arg, "run_name", None) or Path(saved_path).name,
+        save_dir=saved_path,
+        log_model=True,
+    )
+    wandb_logger.experiment.config.update(flatten_config(cfg), allow_val_change=True)
+    if getattr(arg, "watch_model", False):
+        wandb_logger.watch(model, log="all", log_freq=steps_per_epoch, log_graph=False)
+
+    return [csv_logger, wandb_logger], wandb_logger
+
+
+def run_training(cfg, dm, input_dim, standardization, saved_path, arg):
+    params = cfg["parameters"]
+    std_mean_train, std_scale_train = standardization
+    print("Starting training...")
+    print(f"Input dimension: {input_dim}")
+    model = LightningWBoson(
+        input_dim=input_dim,
+        std_mean_train=std_mean_train,
+        std_scale_train=std_scale_train,
+        lr=params["learning_rate"],
+        loss_weights=params["loss_weights"],
+        adaptive_loss_weights=params.get("adaptive_loss_weights", False),
+        log_loss_gradient_cosines=params.get("log_loss_gradient_cosines", False),
+        d_model=params["d_model"],
+        num_heads=params["n_heads"],
+    )
+
+    ckpt = ModelCheckpoint(
+        monitor="val_loss",
+        mode="min",
+        save_top_k=3,
+        save_last=True,
+        filename="reg-{epoch:02d}-{val_loss:.2f}",
+    )
+    steps_per_epoch = max(1, len(dm.train_dataloader()))
+    clean_training_output(saved_path)
+    loggers, wandb_logger = create_loggers(cfg, model, saved_path, arg, steps_per_epoch)
+
+    trainer = Trainer(
+        max_epochs=params["epochs"],
+        accelerator="gpu" if torch.cuda.is_available() else "cpu",
+        devices=1,
+        callbacks=[
+            ckpt,
+            EarlyStopping(monitor="val_loss", patience=128, mode="min", verbose=False),
+        ],
+        logger=loggers,
+        log_every_n_steps=steps_per_epoch,
+        gradient_clip_val=params.get("gradient_clip_val", 1.0),
+    )
+    trainer.fit(model, datamodule=dm)
+
+    if dm.test_ds is not None and len(dm.test_ds) > 0:
+        print("Running test evaluation with best checkpoint...")
+        test_trainer = Trainer(
+            accelerator="gpu" if torch.cuda.is_available() else "cpu",
+            devices=1,
+            logger=False,
+            enable_checkpointing=False,
+        )
+        test_trainer.test(
+            model=model,
+            datamodule=dm,
+            ckpt_path=ckpt.best_model_path,
+            weights_only=False,
+        )
+    else:
+        print("No test split available, skipping test evaluation.")
+
+    if wandb_logger is not None:
+        wandb_logger.experiment.finish()
+
+
+def main(train=True, arg=None, config_path=DEFAULT_CONFIG):
+    if arg is not None and hasattr(arg, "config"):
+        config_path = arg.config
+    cfg = load_config(config_path)
+    params = cfg["parameters"]
+
+    num_threads = str(params.get("num_workers", 0))
+    thread_variables = (
+        "OMP_NUM_THREADS",
+        "MKL_NUM_THREADS",
+        "OPENBLAS_NUM_THREADS",
+        "NUMEXPR_NUM_THREADS",
+    )
+    for variable in thread_variables:
+        os.environ[variable] = num_threads
+
+    seed_everything(params.get("seed", 114), workers=True)
+    torch.set_default_dtype(torch.float32)
+    torch.set_float32_matmul_precision("medium")
+
+    data_path = resolve_repo_path(cfg["paths"]["data_path"])
+    dm, input_dim, standardization = build_datamodule(cfg, data_path)
+    if not train:
+        print("Evaluation mode, returning datamodule...")
+        return dm
+
+    saved_path = resolve_repo_path(cfg["paths"]["saved_path"])
+    run_training(cfg, dm, input_dim, standardization, saved_path, arg)
+
+
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--config",
+        "-c",
+        default=str(DEFAULT_CONFIG),
+        help="Path to YAML config file",
+    )
+    parser.add_argument("--wandb", "-w", action="store_true", help="Enable W&B logging")
+    parser.add_argument("--run-name", help="Optional run name for loggers")
+    parser.add_argument("--wandb-project", default="PCRES-regressor", help="W&B project name")
+    parser.add_argument("--watch-model", action="store_true", help="Log model gradients and parameters")
+    return parser.parse_args()
+
+
+if __name__ == "__main__":
+    started_at = time()
+    main(arg=parse_args())
+    print(f"Total time: {time() - started_at:.2f} seconds.")

@@ -77,7 +77,7 @@ trainer:
 Run a one-epoch, two-batch sanity check with a small HDF5 subset:
 
 ```bash
-python -m train.original --config configs/sanity.yaml
+python train/train.py --config configs/sanity.yaml
 ```
 
 This writes to `outputs/sanity/`, which is ignored by git.
@@ -85,13 +85,13 @@ This writes to `outputs/sanity/`, which is ignored by git.
 ## Train
 
 ```bash
-python -m train.original --config configs/config.yaml
+python train/train.py --config configs/config.yaml
 ```
 
 With Weights & Biases:
 
 ```bash
-python -m train.original --config configs/config.yaml --wandb
+python train/train.py --config configs/config.yaml --wandb
 ```
 
 The launcher uses the same entry point:

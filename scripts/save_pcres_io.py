@@ -8,7 +8,7 @@ import torch
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
-from train import original as train
+from train import train
 from model import LightningWBoson
 
 OUTPUT_NAMES = ("w0_px", "w0_py", "w0_pz", "w0_logE", "w1_px", "w1_py", "w1_pz", "w1_logE")

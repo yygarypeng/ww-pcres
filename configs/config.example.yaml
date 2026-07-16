@@ -18,7 +18,8 @@ parameters:
     w_mass_mmd1: 1.0
     w0_mass_mae: 0.001
     w1_mass_mae: 0.001
-    dinu_pt: 0.01
+    dinu_pt: 0.0
+    dmet: 0.01
     higgs_mass: 1.0
     nu_mass: 0.0
     angular_loss_mmd: 10.0

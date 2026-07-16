@@ -161,10 +161,15 @@ def load_data(
         m_ll2 = dilep_energy**2 - dilep_px**2 - dilep_py**2 - dilep_pz**2
         m_ll = np.where(m_ll2 >= -1.0e-6, np.sqrt(np.clip(m_ll2, 0.0, None)), np.nan)
 
-        met_px = category_data["met"]["px"]
-        met_py = category_data["met"]["py"]
-        met_pt = category_data["met"]["pt"]
-        met_phi = category_data["met"]["phi"]
+        # met_px = category_data["met"]["px"]
+        # met_py = category_data["met"]["py"]
+        # met_pt = category_data["met"]["pt"]
+        # met_phi = category_data["met"]["phi"]
+        # TODO: truth met test (assume reco-lep = truth-lep)
+        met_px = (category_data["truth_pos_w"]["px"] - lep_pos_px) + (category_data["truth_neg_w"]["px"] - lep_neg_px)
+        met_py = (category_data["truth_pos_w"]["py"] - lep_pos_py) + (category_data["truth_neg_w"]["py"] - lep_neg_py)
+        met_pt = pt(met_px, met_py)
+        met_phi = phi(met_px, met_py)
         
         dphi_ll = dphi(lep_pos_phi, lep_neg_phi)
         dphi_llmet = dphi(dilep_phi, met_phi)
