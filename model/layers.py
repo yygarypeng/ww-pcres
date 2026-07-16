@@ -67,19 +67,32 @@ class ResidualBlock(nn.Module):
         return x_shortcut + y
 
 class WBosonFourVectorLayer(nn.Module):
-    def __init__(self, eps=1.0e-12):
+    def __init__(self, eps=1.0e-16):
         super().__init__()
         self.eps = eps
 
-    def forward(self, lep0, lep1, nu_3mom):
-        nu0_3, nu1_3 = nu_3mom[..., :3], nu_3mom[..., 3:]
+    def forward(self, lep0, lep1, nu_params, met):
+        # Layout: [nu0_px, nu0_py, nu0_pz, nu1_pz, dmet_px, dmet_py].
+        # The residual accounts for reco MET mismatch rather than smearing
+        # invisible momenta directly.
+        nu0_3 = nu_params[..., :3]
+        nu1_pz = nu_params[..., 3:4]
+        dmet = nu_params[..., 4:6]
+
+        # measured MET = neutrino transverse momentum + detector/reconstruction residual
+        nu_met = met - dmet
+
+        nu1_px = nu_met[..., 0:1] - nu0_3[..., 0:1]
+        nu1_py = nu_met[..., 1:2] - nu0_3[..., 1:2]
+        nu1_3 = torch.cat([nu1_px, nu1_py, nu1_pz], dim=-1)
+
         # neutrino energies as |p| for (approx) massless
         nu0_E = torch.sqrt(torch.clamp(torch.sum(nu0_3 ** 2, dim=-1, keepdim=True), min=self.eps))
         nu1_E = torch.sqrt(torch.clamp(torch.sum(nu1_3 ** 2, dim=-1, keepdim=True), min=self.eps))
         w0_3 = lep0[..., :3] + nu0_3
         w1_3 = lep1[..., :3] + nu1_3
-        w0_E = torch.clamp(lep0[..., 3].reshape(-1, 1) + nu0_E, min=self.eps)
-        w1_E = torch.clamp(lep1[..., 3].reshape(-1, 1) + nu1_E, min=self.eps)
+        w0_E = torch.clamp(lep0[..., 3:4] + nu0_E, min=self.eps)
+        w1_E = torch.clamp(lep1[..., 3:4] + nu1_E, min=self.eps)
         w0_logE = torch.log(w0_E)
         w1_logE = torch.log(w1_E)
         return torch.cat([w0_3, w0_logE, w1_3, w1_logE], dim=-1)
