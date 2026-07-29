@@ -17,12 +17,6 @@ def _rel_err_func(a, b):
     mask = ~np.isnan(a) & ~np.isnan(b) & (b != 0)
     return (a[mask] - b[mask]) / b[mask]
 
-def _err_bounds(x, rel_err=0.2, offset=5.0):
-    delta = rel_err * np.abs(x) + offset
-    upper = x + delta
-    lower = x - delta
-    return upper, lower
-
 def _rmse(pred, truth):
 	mask = np.isfinite(pred) & np.isfinite(truth)
 	if np.sum(mask) != len(pred):
@@ -155,11 +149,7 @@ def plot_2d_hist(pred, truth, name, bins_edges=np.linspace(-200, 200, 51), log=F
     else:
         ax.hist2d(pred, truth, bins=[bins_edges, bins_edges], cmap="viridis", vmin=1, vmax=vmax)
 
-    # Plot error guides aligned with bin edges
-    # upper, lower = _err_bounds(bins_edges, rel_err=err, offset=offset)
-    # plt.plot(upper, bins_edges, color="gainsboro", linestyle="-", label=r"$\pm 20\% offset$")
     ax.plot(bins_edges, bins_edges, color="gainsboro", linestyle="--")
-    # plt.plot(lower, bins_edges, color="gainsboro", linestyle="-")
 
     ax.set_xlabel(f"{xlabel} [{unit}]")
     ax.set_ylabel(f"{ylabel} [{unit}]")
@@ -188,25 +178,6 @@ def plot_2d_hist(pred, truth, name, bins_edges=np.linspace(-200, 200, 51), log=F
     if savepath is not None:
         fig.savefig(savepath, bbox_inches="tight")
     plt.show()
-    # if log:
-    #     plt.hist2d(pred[cor_mask], truth[cor_mask], bins=[bins_edges, bins_edges], cmap="viridis", norm=norm)
-    # else:
-    #     plt.hist2d(pred[cor_mask], truth[cor_mask], bins=[bins_edges, bins_edges], cmap="viridis", vmin=1, vmax=vmax)
-    # # Plot error guides aligned with bin edges
-    # upper, lower = _err_bounds(bins_edges, rel_err=err)
-    # plt.plot(upper, bins_edges, color="red", linestyle="-", label=r"$\pm 20\% offset$")
-    # plt.plot(lower, bins_edges, color="red", linestyle="-")
-    # plt.xlabel(f"Pred [{unit}]")
-    # plt.ylabel(f"True [{unit}]")
-    # plt.title(f"{name} (Rel err < 20%)"+f" with _RMSE: {_rmse(pred[cor_mask], truth[cor_mask]):.2f}", loc="right")
-    # txt = hep.atlas.label(ATLAS_LABEL_TEXT, data=True, loc=2, rlabel="")
-    # txt[0].set_color(color)
-    # txt[1].set_color(color)
-    # plt.tick_params(axis="both", which="major", pad=10) 
-    # plt.colorbar(label="Events")
-    # plt.gca().set_aspect("equal", adjustable="box")  # Make plot square
-    # # if savepath is not None:
-    # #     plt.savefig(savepath, bbox_inches="tight")
     
 def plot_2d_res_hist(pred, truth, name_pos, name_neg, bins_edges=np.linspace(-200, 200, 51), log=False, unit="GeV", color="black", vmax=5e3, savepath=None):
     fig, ax = plt.subplots()

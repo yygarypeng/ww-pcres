@@ -6,7 +6,7 @@ import pytorch_lightning as L
 from model.layers import Standardization, SelfAttentionBlock, ResidualBlock, WBosonFourVectorLayer
 import torch.nn.functional as F
 from model.losses import (
-    w_mass_mmd_losses, w_mass_huber_losses, higgs_mass_loss,
+    w_mass_losses, higgs_mass_loss,
     angular_loss_mmd, dmet_loss
 )
 
@@ -15,7 +15,10 @@ class WBosonRegressor(nn.Module):
             self, 
             input_dim,
             d_model, num_heads,
-            std_mean_train, std_scale_train
+            std_mean_train, std_scale_train,
+            attention_blocks=4,
+            attention_dropout=0.1,
+            decoder_dropout=0.1,
         ):
         super().__init__()
         
@@ -34,36 +37,37 @@ class WBosonRegressor(nn.Module):
         self.met_embed = nn.Linear(2, d_model)
         self.hl_embed = nn.Linear(self.hl_input_dim, d_model) if self.hl_input_dim > 0 else None
         self.num_tokens = 5 + int(self.hl_embed is not None)
-        # self.role_embedding = nn.Parameter(torch.zeros(self.num_tokens, d_model))
-        # nn.init.normal_(self.role_embedding, mean=0.0, std=0.02)
+        if self.hl_embed is not None:
+            print(f"Using {self.hl_input_dim} high-level features in the model.")
         self.sa_blocks = nn.ModuleList([
-            SelfAttentionBlock(d_model, num_heads, dropout=0.5) for _ in range(4)
+            SelfAttentionBlock(d_model, num_heads, dropout=attention_dropout)
+            for _ in range(attention_blocks)
         ])
+        self.context_norm = nn.LayerNorm(d_model)
         print(f"Using {len(self.sa_blocks)} SA blocks.")
         
         # residual decoder blocks
-        _dim = 256 if d_model * self.num_tokens >= 256 else d_model * self.num_tokens
-        blocks = [nn.Linear(d_model * self.num_tokens, _dim)] # reduce dimension after flattening
-        blocks.append(ResidualBlock(_dim, 128, dropout=0.5))
-        blocks.append(ResidualBlock(128, 64, dropout=0.5))
-        blocks.append(ResidualBlock(64, 128, dropout=0.5))
-        blocks.append(ResidualBlock(128, 256, dropout=0.5))
-        
-        self.trunk = nn.Sequential(*blocks)
-        self.pre_trunk_bn = nn.LayerNorm(d_model * self.num_tokens)
+        self.trunk = nn.Sequential(
+            nn.Linear(d_model * self.num_tokens, 512),
+            nn.GELU(),
+            nn.Dropout(decoder_dropout),
+            ResidualBlock(512, 256, hidden_dim=512, dropout=decoder_dropout),
+            ResidualBlock(256, 256, hidden_dim=256, dropout=decoder_dropout),
+            ResidualBlock(256, 128, hidden_dim=256, dropout=decoder_dropout),
+            ResidualBlock(128, 128, hidden_dim=128, dropout=decoder_dropout),
+        )
 
         # Latent regression head layout: [nu0_px, nu0_py, nu0_pz, nu1_pz]
         self.nu_mom_head = nn.Sequential(
-            nn.LayerNorm(256),
-            nn.Linear(256, 64),
+            nn.LayerNorm(128),
+            nn.Linear(128, 32),
             nn.GELU(),
-            nn.Linear(64, 4)
+            nn.Linear(32, 4)
         )
+        # Latent regression head layout: [dmet_x, dmet_y]
         self.nu_dmet_head = nn.Sequential(
-            nn.LayerNorm(256),
-            nn.Linear(256, 64),
-            nn.GELU(),
-            nn.Linear(64, 16),
+            nn.LayerNorm(128),
+            nn.Linear(128, 16),
             nn.GELU(),
             nn.Linear(16, 2)
         )
@@ -97,14 +101,14 @@ class WBosonRegressor(nn.Module):
             context = refiner(context, key_padding_mask=key_mask) # [B, num_tokens, d_model]
             context = context.masked_fill(key_mask.unsqueeze(-1), 0.0)
 
+        context = self.context_norm(context)
+        context = context.masked_fill(key_mask.unsqueeze(-1), 0.0)
         return context.reshape(batch_size, -1) # flatten to [B, num_tokens * d_model]
 
     def forward(self, x, return_aux=False):
         lep0, lep1 = x[..., :4], x[..., 4:8]
         met = x[..., 16:18]
-
         h = self.global_feature_aggregation(x)
-        h = self.pre_trunk_bn(h)
         h = self.trunk(h)
 
         nu_mom_params = self.nu_mom_head(h)
@@ -113,7 +117,11 @@ class WBosonRegressor(nn.Module):
         y_pred = self.w_layer(lep0, lep1, nu_params, met)
 
         if return_aux:
-            return y_pred, {"dmet": dmet_params, "nu_params": nu_params}
+            return y_pred, {
+                "cond": self.norm(x)[..., self.base_input_dim:],
+                "dmet": dmet_params,
+                "nu_params": nu_params,
+            }
         return y_pred
 
 
@@ -123,9 +131,12 @@ class LightningWBoson(L.LightningModule):
             input_dim,
             d_model, num_heads,
             std_mean_train, std_scale_train, 
-            lr=1e-4, loss_weights=None,
+            lr=1e-4, loss_weights=None, weight_decay=1e-4,
             adaptive_loss_weights=False,
             log_loss_gradient_cosines=False,
+            attention_blocks=4,
+            attention_dropout=0.1,
+            decoder_dropout=0.1,
         ):
         super().__init__()
         self.save_hyperparameters()
@@ -133,6 +144,9 @@ class LightningWBoson(L.LightningModule):
             input_dim, 
             d_model, num_heads,
             std_mean_train, std_scale_train,
+            attention_blocks=attention_blocks,
+            attention_dropout=attention_dropout,
+            decoder_dropout=decoder_dropout,
         ) # give a base model structure for forward() 
         defaults = {
             # main loss
@@ -166,22 +180,32 @@ class LightningWBoson(L.LightningModule):
         return self.model(x, return_aux=return_aux)
 
     def _loss_enabled(self, name):
-        return self.loss_weights.get(name, 0.0) != 0.0 or name in self.adaptive_loss_names
+        return (
+            self.loss_weights.get(name, 0.0) != 0.0
+            or self.adaptive_loss_weights and name in self.adaptive_loss_names
+        )
 
-    def _compute_losses(self, x, y, y_pred, aux=None):
+    def _compute_losses(self, x, y, y_pred, cond, aux=None):
         losses = {}
         if self._loss_enabled("huber"):
             losses["huber"] = F.huber_loss(y[..., :8], y_pred)
         if self._loss_enabled("higgs_mass"):
             losses["higgs_mass"] = higgs_mass_loss(y_pred)
-        if self._loss_enabled("w_mass_mmd"):
-            w_mass_mmd = w_mass_mmd_losses(y, y_pred, scale=1.0)
-            losses["w_mass_mmd"] = w_mass_mmd
-        if self._loss_enabled("w_mass_huber"):
-            w_mass_huber = w_mass_huber_losses(y, y_pred)
-            losses["w_mass_huber"] = w_mass_huber
+        w_mass_mmd_enabled = self._loss_enabled("w_mass_mmd")
+        w_mass_huber_enabled = self._loss_enabled("w_mass_huber")
+        if w_mass_mmd_enabled or w_mass_huber_enabled:
+            w_mass_mmd, w_mass_huber = w_mass_losses(
+                y,
+                y_pred,
+                include_mmd=w_mass_mmd_enabled,
+                include_huber=w_mass_huber_enabled,
+            )
+            if w_mass_mmd_enabled and w_mass_mmd is not None:
+                losses["w_mass_mmd"] = w_mass_mmd
+            if w_mass_huber_enabled and w_mass_huber is not None:
+                losses["w_mass_huber"] = w_mass_huber
         if self._loss_enabled("angular_loss_mmd"):
-            losses["angular_loss_mmd"] = angular_loss_mmd(x, y, y_pred, scale=1.0)
+            losses["angular_loss_mmd"] = angular_loss_mmd(x, y, y_pred, cond)
         if self._loss_enabled("dmet"):
             if aux is None or "dmet" not in aux:
                 raise ValueError("dmet loss requires forward(..., return_aux=True) outputs")
@@ -192,7 +216,7 @@ class LightningWBoson(L.LightningModule):
 
     def _compute_batch_losses(self, x, y):
         y_pred, aux = self(x, return_aux=True)
-        return self._compute_losses(x, y, y_pred, aux)
+        return self._compute_losses(x, y, y_pred, aux["cond"], aux)
 
     def _weighted_total_loss(self, losses, weights=None):
         weights = self.loss_weights if weights is None else weights
@@ -261,7 +285,7 @@ class LightningWBoson(L.LightningModule):
 
             # todo
             # Smooth update instead of hard assignment.
-            rho = 0.5  # 0.01 to 0.10. Smaller = more stable.
+            rho = 0.2  # 0.01 to 0.10. Smaller = more stable.
             new = (1.0 - rho) * old + rho * target
 
             self.loss_weights[name] = new
@@ -322,4 +346,8 @@ class LightningWBoson(L.LightningModule):
         _ = self._shared_step(batch, batch_idx, stage="test_")
     
     def configure_optimizers(self):
-        return torch.optim.AdamW(self.parameters(), lr=self.hparams.lr, weight_decay=1e-4)
+        return torch.optim.AdamW(
+            self.parameters(),
+            lr=self.hparams.lr,
+            weight_decay=self.hparams.weight_decay,
+        )

@@ -1,4 +1,4 @@
-# $HWW$ Residual Regressor
+# Physics-constrained Residual Regressor (ww-pcres)
 
 The physics goal of this neural network (NN) is to construct spin-correlation-sensitive variable components $\theta^\ast_{\ell^\pm}$, $\phi^\ast_{\ell^\pm}$ in the associated $W$ boson rest frames; specifically, we aim to reconstruct the spin-correlation parameters via the $H \to WW^\ast \to \ell\nu\ell\nu$ decay channel.
 To better `correlation' between truth labels and predictions, ie, event-wise errors, a deterministic model is implemented; however, a vanilla DNN might collapse/average out the physical patterns.
@@ -29,11 +29,7 @@ Generated outputs belong under `outputs/` or W&B/Lightning output folders and ar
 pip install -r requirements.txt
 ```
 
-Optional ONNX tools:
-
-```bash
-pip install onnx onnxruntime
-```
+`onnx` and `onnxruntime` are installed by `requirements.txt` for the supported ONNX workflow.
 
 `physics/ohbboosting.py` additionally requires ROOT and is only needed for ROOT-based visualization checks.
 
@@ -53,34 +49,17 @@ paths:
   data_path: "/path/to/training_data.h5"
 ```
 
-Data selection supports all categories, explicit categories, or capped sanity subsets:
+Data selection uses named, pre-split HDF5 categories:
 
 ```yaml
 data:
   categories: null
-  val_frac: 0.05
-  test_frac: 0.01
   max_events_per_category: null
 ```
 
-Trainer batch limits are optional and useful for quick smoke tests:
+`categories: null` selects `ggF_train`, `ggF_val`, and `ggF_test` by default. Use category stems such as `categories: [ggF, VBF]` to select the corresponding train, validation, and test categories for each stem. For direct control, set `train_categories`, `val_categories`, and `test_categories` to lists of full HDF5 category names instead; these split-specific settings take precedence over `categories`.
 
-```yaml
-trainer:
-  limit_train_batches: 2
-  limit_val_batches: 1
-  limit_test_batches: 0
-```
-
-## Sanity Check
-
-Run a one-epoch, two-batch sanity check with a small HDF5 subset:
-
-```bash
-python train/train.py --config configs/sanity.yaml
-```
-
-This writes to `outputs/sanity/`, which is ignored by git.
+`max_events_per_category` optionally caps the number of events read from each selected category in each split. `null` loads every event.
 
 ## Train
 
@@ -115,7 +94,7 @@ The HDF5 file should contain top-level categories such as `ggF_train`, `ggF_val`
 - `truth_pos_w`: `px`, `py`, `pz`, `energy`, `m`
 - `truth_neg_w`: `px`, `py`, `pz`, `energy`, `m`
 
-The loader builds 18 input features and 10 targets. Non-finite rows are removed. Input standardization is fitted on the training split only.
+The loader builds 22 input features and 10 targets. Target columns contain each W boson's `(px, py, pz, energy)` in GeV followed by the two truth W masses. Each truth W must be finite and timelike, have a nonnegative stored mass, and agree with $E^2-|p|^2$ within `1e-6 + 1e-6` times the sum-of-squares scale; the combined W pair must also be timelike. Input standardization is fitted on the training split only.
 
 ## ONNX
 

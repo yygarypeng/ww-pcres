@@ -2,23 +2,13 @@
 
 `pcres_io.npz` stores test-set inference results saved by `scripts/save_pcres_io.py`.
 
-## Dataset Split
+## Workflow
 
-The `scripts/save_pcres_io.py` run used the original pre-split HDF5 categories:
-
-| Split | Events |
-| --- | ---: |
-| Train (`ggF_train`) | 263,735 |
-| Validation (`ggF_val`) | 75,569 |
-| Test (`ggF_test`) | 37,681 |
-
-`pcres_io.npz` contains the test split only, so `inputs`, `outputs`, and
-`targets` each have 37,681 rows for that run. The file was written to
-`/root/work/ww-pcres/hww_pcres_regressor_nofold/pcres_io.npz`.
+Run `python scripts/save_pcres_io.py --config <config-path>` to evaluate the latest checkpoint under `paths.saved_path` on the configured pre-split test categories. The script writes `pcres_io.npz` and diagnostic plots under `paths.saved_path`. The archive contains the test split only; its row count depends on the selected categories, available events, and `max_events_per_category` setting.
 
 ## Contents
 
-- `inputs`: input features passed to the model, shape `(n_events, 26)`.
+- `inputs`: input features passed to the model, shape `(n_events, 22)`.
 - `outputs`: model predictions, shape `(n_events, 8)`.
 - `targets`: true target values, shape `(n_events, 10)`.
 - `checkpoint`: checkpoint path used for inference.
@@ -49,13 +39,9 @@ Each row corresponds to one test event, so `inputs[i]`, `outputs[i]`, and `targe
 | 16 | `met_px` |
 | 17 | `met_py` |
 | 18 | `m_ll` |
-| 19 | `dilep_pt` |
-| 20 | `met_pt` |
-| 21 | `deta_ll` |
-| 22 | `dphi_llmet` |
-| 23 | `dphi_pos_lep_met` |
-| 24 | `dphi_neg_lep_met` |
-| 25 | `dphi_ll` |
+| 19 | `deta_ll` |
+| 20 | `dphi_ll` |
+| 21 | `dphi_llmet` |
 
 ## Output Columns
 
@@ -64,11 +50,11 @@ Each row corresponds to one test event, so `inputs[i]`, `outputs[i]`, and `targe
 | 0 | `w_pos_px` |
 | 1 | `w_pos_py` |
 | 2 | `w_pos_pz` |
-| 3 | `w_pos_log_energy` |
+| 3 | `w_pos_energy` [GeV] |
 | 4 | `w_neg_px` |
 | 5 | `w_neg_py` |
 | 6 | `w_neg_pz` |
-| 7 | `w_neg_log_energy` |
+| 7 | `w_neg_energy` [GeV] |
 
 ## Target Columns
 
@@ -77,15 +63,15 @@ Each row corresponds to one test event, so `inputs[i]`, `outputs[i]`, and `targe
 | 0 | `w_pos_px` |
 | 1 | `w_pos_py` |
 | 2 | `w_pos_pz` |
-| 3 | `w_pos_log_energy` |
+| 3 | `w_pos_energy` [GeV] |
 | 4 | `w_neg_px` |
 | 5 | `w_neg_py` |
 | 6 | `w_neg_pz` |
-| 7 | `w_neg_log_energy` |
+| 7 | `w_neg_energy` [GeV] |
 | 8 | `w_pos_mass` |
 | 9 | `w_neg_mass` |
 
-Compare `outputs` with `targets[:, :8]`. The final two target columns are truth W masses kept for reference/checking and are not directly predicted by the model.
+Compare `outputs` with `targets[:, :8]`. Momentum, energy, and mass values are in GeV. The final two target columns are truth W masses kept for reference/checking and are not directly predicted by the model.
 
 ## Reading The File
 

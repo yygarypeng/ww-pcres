@@ -1,10 +1,9 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 
 class Standardization(nn.Module):
-    def __init__(self, mean, std, eps=1e-16):
+    def __init__(self, mean, std, eps=1.0e-16):
         super().__init__()
         self.register_buffer("mean", torch.as_tensor(mean, dtype=torch.float32))
         self.register_buffer("std", torch.as_tensor(std, dtype=torch.float32).clamp_min(eps))
@@ -16,7 +15,6 @@ class _AttnFFN(nn.Module):
     def __init__(self, d_model, ffn_dim, dropout=0.3):
         super().__init__()
         self.ffn = nn.Sequential(
-            # nn.LayerNorm(d_model),
             nn.Linear(d_model, ffn_dim),
             nn.GELU(),
             nn.Dropout(dropout),
@@ -38,7 +36,11 @@ class SelfAttentionBlock(nn.Module):
     def forward(self, x, key_padding_mask=None):
         res = x
         x = self.attn_norm(x)
-        x, _ = self.mha(x, x, x, key_padding_mask=key_padding_mask)
+        x, _ = self.mha(
+            x, x, x,
+            key_padding_mask=key_padding_mask,
+            need_weights=False,
+        )
         x = res + self.dropout(x)
         
         res = x
@@ -48,7 +50,7 @@ class SelfAttentionBlock(nn.Module):
         return x
 
 class ResidualBlock(nn.Module):
-    def __init__(self, in_dim, out_dim, dropout=0.1):
+    def __init__(self, in_dim, out_dim, hidden_dim, dropout=0.1):
         super().__init__()
         self.shortcut = (
             nn.Identity() if in_dim == out_dim
@@ -56,9 +58,10 @@ class ResidualBlock(nn.Module):
         )
         self.residual = nn.Sequential(
             nn.LayerNorm(in_dim),
+            nn.Linear(in_dim, hidden_dim),
             nn.GELU(),
-            nn.Linear(in_dim, out_dim),
             nn.Dropout(dropout) if dropout and dropout > 0 else nn.Identity(),
+            nn.Linear(hidden_dim, out_dim),
         )
 
     def forward(self, x):
@@ -67,10 +70,6 @@ class ResidualBlock(nn.Module):
         return x_shortcut + y
 
 class WBosonFourVectorLayer(nn.Module):
-    def __init__(self, eps=1.0e-16):
-        super().__init__()
-        self.eps = eps
-
     def forward(self, lep0, lep1, nu_params, met):
         # Layout: [nu0_px, nu0_py, nu0_pz, nu1_pz, dmet_px, dmet_py].
         # The residual accounts for reco MET mismatch rather than smearing
@@ -80,19 +79,17 @@ class WBosonFourVectorLayer(nn.Module):
         dmet = nu_params[..., 4:6]
 
         # measured MET = neutrino transverse momentum + detector/reconstruction residual
-        nu_met = met - dmet
+        nunu_pt = met - dmet
 
-        nu1_px = nu_met[..., 0:1] - nu0_3[..., 0:1]
-        nu1_py = nu_met[..., 1:2] - nu0_3[..., 1:2]
+        nu1_px = nunu_pt[..., 0:1] - nu0_3[..., 0:1]
+        nu1_py = nunu_pt[..., 1:2] - nu0_3[..., 1:2]
         nu1_3 = torch.cat([nu1_px, nu1_py, nu1_pz], dim=-1)
 
         # neutrino energies as |p| for (approx) massless
-        nu0_E = torch.sqrt(torch.clamp(torch.sum(nu0_3 ** 2, dim=-1, keepdim=True), min=self.eps))
-        nu1_E = torch.sqrt(torch.clamp(torch.sum(nu1_3 ** 2, dim=-1, keepdim=True), min=self.eps))
+        nu0_E = torch.linalg.vector_norm(nu0_3, dim=-1, keepdim=True)
+        nu1_E = torch.linalg.vector_norm(nu1_3, dim=-1, keepdim=True)
         w0_3 = lep0[..., :3] + nu0_3
         w1_3 = lep1[..., :3] + nu1_3
-        w0_E = torch.clamp(lep0[..., 3:4] + nu0_E, min=self.eps)
-        w1_E = torch.clamp(lep1[..., 3:4] + nu1_E, min=self.eps)
-        w0_logE = torch.log(w0_E)
-        w1_logE = torch.log(w1_E)
-        return torch.cat([w0_3, w0_logE, w1_3, w1_logE], dim=-1)
+        w0_E = lep0[..., 3:4] + nu0_E
+        w1_E = lep1[..., 3:4] + nu1_E
+        return torch.cat([w0_3, w0_E, w1_3, w1_E], dim=-1)

@@ -142,6 +142,25 @@ def create_loggers(cfg, model, saved_path, arg, steps_per_epoch):
     return [csv_logger, wandb_logger], wandb_logger
 
 
+def build_training_callbacks(params):
+    return [
+        ModelCheckpoint(
+            monitor="val_loss",
+            mode="min",
+            save_top_k=3,
+            save_last=True,
+            filename="reg-{epoch:02d}-{val_loss:.2f}",
+        ),
+        EarlyStopping(
+            monitor="val_loss",
+            patience=params.get("early_stopping_patience", 32),
+            min_delta=params.get("early_stopping_min_delta", 0.0),
+            mode="min",
+            verbose=False,
+        ),
+    ]
+
+
 def run_training(cfg, dm, input_dim, standardization, saved_path, arg):
     params = cfg["parameters"]
     std_mean_train, std_scale_train = standardization
@@ -152,20 +171,19 @@ def run_training(cfg, dm, input_dim, standardization, saved_path, arg):
         std_mean_train=std_mean_train,
         std_scale_train=std_scale_train,
         lr=params["learning_rate"],
+        weight_decay=params.get("weight_decay", 1e-4),
         loss_weights=params["loss_weights"],
         adaptive_loss_weights=params.get("adaptive_loss_weights", False),
         log_loss_gradient_cosines=params.get("log_loss_gradient_cosines", False),
         d_model=params["d_model"],
         num_heads=params["n_heads"],
+        attention_blocks=params.get("attention_blocks", 4),
+        attention_dropout=params.get("attention_dropout", 0.1),
+        decoder_dropout=params.get("decoder_dropout", 0.1),
     )
 
-    ckpt = ModelCheckpoint(
-        monitor="val_loss",
-        mode="min",
-        save_top_k=3,
-        save_last=True,
-        filename="reg-{epoch:02d}-{val_loss:.2f}",
-    )
+    callbacks = build_training_callbacks(params)
+    ckpt = callbacks[0]
     steps_per_epoch = max(1, len(dm.train_dataloader()))
     clean_training_output(saved_path)
     loggers, wandb_logger = create_loggers(cfg, model, saved_path, arg, steps_per_epoch)
@@ -174,10 +192,7 @@ def run_training(cfg, dm, input_dim, standardization, saved_path, arg):
         max_epochs=params["epochs"],
         accelerator="gpu" if torch.cuda.is_available() else "cpu",
         devices=1,
-        callbacks=[
-            ckpt,
-            EarlyStopping(monitor="val_loss", patience=128, mode="min", verbose=False),
-        ],
+        callbacks=callbacks,
         logger=loggers,
         log_every_n_steps=steps_per_epoch,
         gradient_clip_val=params.get("gradient_clip_val", 1.0),
