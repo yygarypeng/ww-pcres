@@ -96,13 +96,24 @@ class Booster(nn.Module):
         w1 = particles[..., 8:12]
         lep1 = particles[..., 12:16]
         higgs = w0 + w1
+        w1_h = self._boost_to_rest(w1, higgs)
+        w1_axis = w1_h[..., 0:3]
+        eps = self._eps(w1_h)
+        axis_norm = torch.linalg.vector_norm(w1_axis, dim=-1)
+        transverse_fraction = (
+            torch.linalg.vector_norm(w1_axis[..., 0:2], dim=-1) /
+            axis_norm.clamp_min(eps)
+        )
 
         return (
             torch.isfinite(lep0).all(dim=-1) &
             torch.isfinite(lep1).all(dim=-1) &
             self._has_rest_frame(higgs) &
             self._has_rest_frame(w0) &
-            self._has_rest_frame(w1)
+            self._has_rest_frame(w1) &
+            torch.isfinite(w1_axis).all(dim=-1) &
+            (axis_norm > eps) &
+            (transverse_fraction > eps**0.5)
         )
     
     ###################

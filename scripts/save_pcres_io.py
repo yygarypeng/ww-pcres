@@ -11,7 +11,17 @@ sys.path.insert(0, str(REPO_ROOT))
 from train import train
 from model import LightningWBoson
 
-OUTPUT_NAMES = ("w0_px", "w0_py", "w0_pz", "w0_logE", "w1_px", "w1_py", "w1_pz", "w1_logE")
+
+OUTPUT_NAMES = (
+    "w0_px",
+    "w0_py",
+    "w0_pz",
+    "w0_energy",
+    "w1_px",
+    "w1_py",
+    "w1_pz",
+    "w1_energy",
+)
 
 
 def find_latest_checkpoint(saved_path):
@@ -84,7 +94,7 @@ def main():
 
     config_path = Path(args.config).expanduser()
     cfg = train.load_config(config_path)
-    saved_path = Path(cfg["paths"]["saved_path"]).expanduser()
+    saved_path = train.resolve_repo_path(cfg["paths"]["saved_path"])
     checkpoint_path = find_latest_checkpoint(saved_path)
     output_path = saved_path / "pcres_io.npz"
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -93,7 +103,7 @@ def main():
     dm.setup(stage="test")
     test_loader = dm.test_dataloader()
     if test_loader is None:
-        raise RuntimeError("No test dataloader available. Check data.test_frac or explicit test split.")
+        raise RuntimeError("No test dataloader available. Check data.test_categories or data.categories.")
 
     model = LightningWBoson.load_from_checkpoint(
         str(checkpoint_path),

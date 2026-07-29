@@ -150,11 +150,9 @@ class WBosonDataModule(L.LightningDataModule):
         self.train_ds = None
         self.val_ds = None
         self.test_ds = None
-        self.std_ds = None
 
     def setup(self, stage=None):
         ds = ArrayDataset(self.X, self.Y)
-        self.std_ds = ds  # keep for (inverse) transform.
 
         # -------- Pre-split dataset --------
         if self.use_presplit:

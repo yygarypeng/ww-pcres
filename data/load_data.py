@@ -3,7 +3,7 @@ import h5py
 
 from sklearn.preprocessing import StandardScaler
 
-from physics import pt, eta, phi, deta, dphi
+from physics import eta, phi, deta, dphi
 
 
 def select_categories(available_categories, categories=None):
@@ -62,16 +62,41 @@ def compute_standardization_stats(train_obj, target_obj=None, train_indices=None
     return feature_stats, target_stats
 
 
-def _safe_log_positive(values):
-    result = np.full_like(values, np.nan, dtype=np.float64)
-    valid = values > 0.0
-    result[valid] = np.log(values[valid])
-    return result
-
 def _read_dataset(dataset, max_events=None):
     if max_events is not None and dataset.shape and dataset.shape[0] > max_events:
         return dataset[:max_events]
     return dataset[:]
+
+
+def _valid_truth_w_rows(target_obj):
+    truth = np.asarray(target_obj, dtype=np.float64)
+    pos_px, pos_py, pos_pz, pos_energy = truth[:, :4].T
+    neg_px, neg_py, neg_pz, neg_energy = truth[:, 4:8].T
+    pos_mass, neg_mass = truth[:, 8:10].T
+
+    valid = np.ones(len(truth), dtype=bool)
+    for px, py, pz, energy, mass in (
+        (pos_px, pos_py, pos_pz, pos_energy, pos_mass),
+        (neg_px, neg_py, neg_pz, neg_energy, neg_mass),
+    ):
+        raw_m2 = energy**2 - px**2 - py**2 - pz**2
+        delta = raw_m2 - mass**2
+        scale = energy**2 + px**2 + py**2 + pz**2 + mass**2
+        valid &= (
+            np.isfinite(np.column_stack((px, py, pz, energy, mass))).all(axis=1)
+            & (energy > 0.0)
+            & (mass >= 0.0)
+            & (raw_m2 > 0.0)
+            & (np.abs(delta) <= 1.0e-6 + 1.0e-6 * scale)
+        )
+
+    pair_m2 = (
+        (pos_energy + neg_energy) ** 2
+        - (pos_px + neg_px) ** 2
+        - (pos_py + neg_py) ** 2
+        - (pos_pz + neg_pz) ** 2
+    )
+    return valid & np.isfinite(pair_m2) & (pair_m2 > 0.0)
 
 
 def load_particles_from_h5(filename, categories=None, max_events=None):
@@ -133,7 +158,7 @@ def load_data(
     # Iterate through selected categories (ggF_train, VBF_train, etc.)
     for category in selected_categories:
         category_data = data[category]
-        
+
         # training features
         lep_pos_px = category_data["pos_lep"]["px"]
         lep_pos_py = category_data["pos_lep"]["py"]
@@ -143,7 +168,7 @@ def load_data(
         lep_neg_py = category_data["neg_lep"]["py"]
         lep_neg_pz = category_data["neg_lep"]["pz"]
         lep_neg_energy = category_data["neg_lep"]["energy"]
-        
+
         lep_pos_pt = category_data["pos_lep"]["pt"]
         lep_neg_pt = category_data["neg_lep"]["pt"]
         lep_pos_eta = category_data["pos_lep"]["eta"]
@@ -155,28 +180,19 @@ def load_data(
         dilep_py = lep_pos_py + lep_neg_py
         dilep_pz = lep_pos_pz + lep_neg_pz
         dilep_energy = lep_pos_energy + lep_neg_energy
-        dilep_pt = pt(dilep_px, dilep_py)
         dilep_eta = eta(dilep_px, dilep_py, dilep_pz)
         dilep_phi = phi(dilep_px, dilep_py)
         m_ll2 = dilep_energy**2 - dilep_px**2 - dilep_py**2 - dilep_pz**2
         m_ll = np.where(m_ll2 >= -1.0e-6, np.sqrt(np.clip(m_ll2, 0.0, None)), np.nan)
 
-        # met_px = category_data["met"]["px"]
-        # met_py = category_data["met"]["py"]
-        # met_pt = category_data["met"]["pt"]
-        # met_phi = category_data["met"]["phi"]
-        # TODO: truth met test (assume reco-lep = truth-lep)
-        met_px = (category_data["truth_pos_w"]["px"] - lep_pos_px) + (category_data["truth_neg_w"]["px"] - lep_neg_px)
-        met_py = (category_data["truth_pos_w"]["py"] - lep_pos_py) + (category_data["truth_neg_w"]["py"] - lep_neg_py)
-        met_pt = pt(met_px, met_py)
-        met_phi = phi(met_px, met_py)
+        met_px = category_data["met"]["px"]
+        met_py = category_data["met"]["py"]
+        met_phi = category_data["met"]["phi"]
         
         dphi_ll = dphi(lep_pos_phi, lep_neg_phi)
         dphi_llmet = dphi(dilep_phi, met_phi)
-        dphi_l1met = dphi(lep_pos_phi, met_phi)
-        dphi_l2met = dphi(lep_neg_phi, met_phi)
-        
         deta_ll = deta(lep_pos_eta, lep_neg_eta)
+
         jet_px = category_data["jets"]["px"][:, 0:2]
         jet_py = category_data["jets"]["py"][:, 0:2]
         jet_pz = category_data["jets"]["pz"][:, 0:2]
@@ -205,14 +221,10 @@ def load_data(
             col(met_px), #16
             col(met_py), #17
             # high level features
-            # col(m_ll), #18
-            # col(dilep_pt), #19
-            # col(met_pt), #20
-            # col(deta_ll), #21
-            # col(dphi_llmet), #22
-            # col(dphi_l1met), #23 (l1 -> pos_lep; l2 -> neg_lep)
-            # col(dphi_l2met), #24
-            # col(dphi_ll), #25
+            col(m_ll), #18
+            col(deta_ll), #19
+            col(dphi_ll), #20
+            col(dphi_llmet), #21
         ], axis=-1)
         
         # target objects
@@ -220,11 +232,11 @@ def load_data(
 			col(category_data["truth_pos_w"]["px"]),
 			col(category_data["truth_pos_w"]["py"]),
 			col(category_data["truth_pos_w"]["pz"]),
-			col(_safe_log_positive(category_data["truth_pos_w"]["energy"])),
+			col(category_data["truth_pos_w"]["energy"]),
 			col(category_data["truth_neg_w"]["px"]),
 			col(category_data["truth_neg_w"]["py"]),
 			col(category_data["truth_neg_w"]["pz"]),
-			col(_safe_log_positive(category_data["truth_neg_w"]["energy"])),
+			col(category_data["truth_neg_w"]["energy"]),
 			col(category_data["truth_pos_w"]["m"]),
 			col(category_data["truth_neg_w"]["m"]),
         ], axis=-1)
@@ -239,15 +251,20 @@ def load_data(
     print("Training objects shape:", train_obj.shape)
     print("Target objects shape:", target_obj.shape)
 
-    # Remove rows with NaN or infinite values
+    # Remove rows with non-finite values or invalid truth W kinematics
     valid_train = np.isfinite(train_obj).all(axis=1)
     valid_target = np.isfinite(target_obj).all(axis=1)
-    valid_idx = valid_train & valid_target
+    valid_physics = _valid_truth_w_rows(target_obj)
+    valid_idx = valid_train & valid_target & valid_physics
 
     train_obj = train_obj[valid_idx]
     target_obj = target_obj[valid_idx]
 
-    print("Removed", (~valid_idx).sum(), "rows with NaN or infinite values")
+    print(
+        "Removed",
+        (~valid_idx).sum(),
+        "rows with non-finite features/targets or physically invalid truth W kinematics",
+    )
     
     (std_mean_train, std_scale_train), (std_mean_target, std_scale_target) = compute_standardization_stats(
         train_obj,
