@@ -156,6 +156,21 @@ def invariant_mass2(fourvec):
     px, py, pz, E = fourvec[..., 0], fourvec[..., 1], fourvec[..., 2], fourvec[..., 3]
     return E**2 - (px**2 + py**2 + pz**2)
 
+
+def standardized_fourvec_huber_loss(y_true, y_pred, component_scales):
+    true_fourvecs = y_true[..., :8].reshape(*y_true.shape[:-1], 2, 4)
+    pred_fourvecs = y_pred.reshape(*y_pred.shape[:-1], 2, 4)
+    true_transformed = torch.cat(
+        [true_fourvecs[..., :3], torch.log1p(true_fourvecs[..., 3:4])],
+        dim=-1,
+    )
+    pred_transformed = torch.cat(
+        [pred_fourvecs[..., :3], torch.log1p(pred_fourvecs[..., 3:4])],
+        dim=-1,
+    )
+    residual = (pred_transformed - true_transformed) / component_scales
+    return F.huber_loss(residual, torch.zeros_like(residual))
+
 ####################
 ## Loss functions ##
 ####################
@@ -184,7 +199,7 @@ def higgs_mass_loss(y_pred):
     # return F.huber_loss(h_mass , torch.full_like(h_mass, H_MASS_SCALE)) + causal_penalty.mean()
     return F.huber_loss(h_mass , torch.full_like(h_mass, H_MASS_SCALE), delta=1.0)
 
-def dmet_loss(x_batch, y_true, dmet):
+def dmet_loss(x_batch, y_true, dmet, component_scales):
     true_w0 = y_true[..., :4]
     true_w1 = y_true[..., 4:8]
 
@@ -192,10 +207,14 @@ def dmet_loss(x_batch, y_true, dmet):
     true_nu1 = true_w1 - x_batch[..., 4:8]
     true_dinu_pxpy = true_nu0[..., :2] + true_nu1[..., :2]
     dmet_target = x_batch[..., 16:18] - true_dinu_pxpy
+    residual = (dmet - dmet_target) / component_scales
 
-    return F.huber_loss(dmet, dmet_target)
+    return F.huber_loss(residual, torch.zeros_like(residual))
 
 def angular_loss_mmd(x_batch, y_true, y_pred, cond):
+    if cond.shape[-1] == 0:
+        raise ValueError("angular local MMD requires the four high-level conditioning features")
+
     def _features_for_mmd(angles):
         theta0 = angles[..., 0]
         phi0 = angles[..., 1]
@@ -231,10 +250,8 @@ def angular_loss_mmd(x_batch, y_true, y_pred, cond):
     pred_ang = _features_for_mmd(pred_ang)
 
     cond = cond[valid]
-    pred = torch.cat([pred_ang], dim=-1)
-    true = torch.cat([true_ang], dim=-1)
-    _sigma_lst = [0.01, 0.03, 0.1, 0.3]
-    return compute_local_mmd(pred, true, cond=cond, base_bandwidth_range=_sigma_lst)
+    _sigma_lst = [0.01, 0.03, 0.05, 0.07, 0.1, 0.3, 0.5, 0.7]
+    return compute_local_mmd(pred_ang, true_ang, cond=cond, base_bandwidth_range=_sigma_lst)
 
 #############################
 ## Archived loss functions ##

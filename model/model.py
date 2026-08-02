@@ -4,11 +4,11 @@ from torch.nn.utils import parameters_to_vector
 import pytorch_lightning as L
 
 from model.layers import Standardization, SelfAttentionBlock, ResidualBlock, WBosonFourVectorLayer
-import torch.nn.functional as F
 from model.losses import (
     w_mass_losses, higgs_mass_loss,
-    angular_loss_mmd, dmet_loss
+    angular_loss_mmd, dmet_loss, standardized_fourvec_huber_loss
 )
+
 
 class WBosonRegressor(nn.Module):
     def __init__(
@@ -16,6 +16,8 @@ class WBosonRegressor(nn.Module):
             input_dim,
             d_model, num_heads,
             std_mean_train, std_scale_train,
+            mmd_cond_mean_train=None,
+            mmd_cond_scale_train=None,
             attention_blocks=4,
             attention_dropout=0.1,
             decoder_dropout=0.1,
@@ -24,6 +26,14 @@ class WBosonRegressor(nn.Module):
         
         # do the normalization (need to use large batch size for stable stats)
         self.norm = Standardization(std_mean_train, std_scale_train)
+        if (mmd_cond_mean_train is None) != (mmd_cond_scale_train is None):
+            raise ValueError("MMD condition mean and scale must be provided together")
+        if mmd_cond_mean_train is None:
+            mmd_cond_mean_train = torch.zeros(6, dtype=torch.float32)
+            mmd_cond_scale_train = torch.ones(6, dtype=torch.float32)
+        if len(mmd_cond_mean_train) != 6 or len(mmd_cond_scale_train) != 6:
+            raise ValueError("MMD condition mean and scale must each contain 6 values")
+        self.cond_norm = Standardization(mmd_cond_mean_train, mmd_cond_scale_train)
         self.base_input_dim = 18 # w/o high-level features
         self.hl_input_dim = input_dim - self.base_input_dim
         if self.hl_input_dim < 0:
@@ -51,13 +61,14 @@ class WBosonRegressor(nn.Module):
             nn.Linear(d_model * self.num_tokens, 512),
             nn.GELU(),
             nn.Dropout(decoder_dropout),
+            ResidualBlock(512, 512, hidden_dim=512, dropout=decoder_dropout),
             ResidualBlock(512, 256, hidden_dim=512, dropout=decoder_dropout),
             ResidualBlock(256, 256, hidden_dim=256, dropout=decoder_dropout),
             ResidualBlock(256, 128, hidden_dim=256, dropout=decoder_dropout),
             ResidualBlock(128, 128, hidden_dim=128, dropout=decoder_dropout),
         )
 
-        # Latent regression head layout: [nu0_px, nu0_py, nu0_pz, nu1_pz]
+        # Latent regression head layout: [delta_nu_px, delta_nu_py, nu0_pz, nu1_pz]
         self.nu_mom_head = nn.Sequential(
             nn.LayerNorm(128),
             nn.Linear(128, 32),
@@ -103,7 +114,21 @@ class WBosonRegressor(nn.Module):
 
         context = self.context_norm(context)
         context = context.masked_fill(key_mask.unsqueeze(-1), 0.0)
-        return context.reshape(batch_size, -1) # flatten to [B, num_tokens * d_model]
+        return context.reshape(batch_size, -1)
+
+    def _mmd_condition(self, x):
+        if x.shape[-1] < 22:
+            return x.new_empty((*x.shape[:-1], 0))
+
+        condition = torch.stack([
+            x[..., 18],
+            x[..., 19],
+            torch.sin(x[..., 20]),
+            torch.cos(x[..., 20]),
+            torch.sin(x[..., 21]),
+            torch.cos(x[..., 21]),
+        ], dim=-1)
+        return self.cond_norm(condition)
 
     def forward(self, x, return_aux=False):
         lep0, lep1 = x[..., :4], x[..., 4:8]
@@ -118,7 +143,7 @@ class WBosonRegressor(nn.Module):
 
         if return_aux:
             return y_pred, {
-                "cond": self.norm(x)[..., self.base_input_dim:],
+                "cond": self._mmd_condition(x),
                 "dmet": dmet_params,
                 "nu_params": nu_params,
             }
@@ -130,8 +155,12 @@ class LightningWBoson(L.LightningModule):
             self, 
             input_dim,
             d_model, num_heads,
-            std_mean_train, std_scale_train, 
-            lr=1e-4, loss_weights=None, weight_decay=1e-4,
+            std_mean_train, std_scale_train,
+            mmd_cond_mean_train=None,
+            mmd_cond_scale_train=None,
+            w_fourvec_scales=None,
+            dmet_scales=None,
+            lr=1e-4, weight_decay=1e-4, loss_weights=None,
             adaptive_loss_weights=False,
             log_loss_gradient_cosines=False,
             attention_blocks=4,
@@ -140,10 +169,24 @@ class LightningWBoson(L.LightningModule):
         ):
         super().__init__()
         self.save_hyperparameters()
+        if w_fourvec_scales is None:
+            w_fourvec_scales = torch.ones(4, dtype=torch.float32)
+        self.register_buffer(
+            "w_fourvec_scales",
+            torch.as_tensor(w_fourvec_scales, dtype=torch.float32).clamp_min(torch.finfo(torch.float32).eps),
+        )
+        if dmet_scales is None:
+            dmet_scales = torch.ones(2, dtype=torch.float32)
+        self.register_buffer(
+            "dmet_scales",
+            torch.as_tensor(dmet_scales, dtype=torch.float32).clamp_min(torch.finfo(torch.float32).eps),
+        )
         self.model = WBosonRegressor(
             input_dim, 
             d_model, num_heads,
             std_mean_train, std_scale_train,
+            mmd_cond_mean_train=mmd_cond_mean_train,
+            mmd_cond_scale_train=mmd_cond_scale_train,
             attention_blocks=attention_blocks,
             attention_dropout=attention_dropout,
             decoder_dropout=decoder_dropout,
@@ -173,7 +216,7 @@ class LightningWBoson(L.LightningModule):
             self.loss_weights[name] for name in self.adaptive_loss_names
         )
         self.log_loss_gradient_cosines = bool(log_loss_gradient_cosines)
-        self._adaptive_batch = None
+        self._gradient_analysis_batch = None
         self.lr = lr
 
     def forward(self, x, return_aux=False):
@@ -188,7 +231,11 @@ class LightningWBoson(L.LightningModule):
     def _compute_losses(self, x, y, y_pred, cond, aux=None):
         losses = {}
         if self._loss_enabled("huber"):
-            losses["huber"] = F.huber_loss(y[..., :8], y_pred)
+            losses["huber"] = standardized_fourvec_huber_loss(
+                y,
+                y_pred,
+                self.w_fourvec_scales,
+            )
         if self._loss_enabled("higgs_mass"):
             losses["higgs_mass"] = higgs_mass_loss(y_pred)
         w_mass_mmd_enabled = self._loss_enabled("w_mass_mmd")
@@ -209,7 +256,7 @@ class LightningWBoson(L.LightningModule):
         if self._loss_enabled("dmet"):
             if aux is None or "dmet" not in aux:
                 raise ValueError("dmet loss requires forward(..., return_aux=True) outputs")
-            losses["dmet"] = dmet_loss(x, y, aux["dmet"])
+            losses["dmet"] = dmet_loss(x, y, aux["dmet"], self.dmet_scales)
 
         total = self._weighted_total_loss(losses)
         return total, losses
@@ -243,21 +290,18 @@ class LightningWBoson(L.LightningModule):
             for param, grad in zip(parameters, grads)
         )
 
-    def _update_adaptive_loss_weights(self, losses, total):
+    def _compute_loss_gradient_cosines(self, losses, total):
         names = [name for name in self.adaptive_loss_names if name in losses]
         if not names:
             return {}
-        if self.adaptive_loss_budget <= 0.0:
-            return {}
 
-        # only allow trainble parameters
+        # Only include trainable parameters in the gradient comparison.
         parameters = tuple(p for p in self.parameters() if p.requires_grad)
         if not parameters:
             return {}
 
         total_grad = self._loss_grad_vector(total, parameters)
 
-        raw_weights = []
         cosines = {}
         for name in names:
             grad = self._loss_grad_vector(losses[name], parameters)
@@ -265,19 +309,27 @@ class LightningWBoson(L.LightningModule):
             weight = self.loss_weights.get(name, 0.0)
             rest_grad = total_grad - weight * grad
             cos_rest = torch.nn.functional.cosine_similarity(grad, rest_grad, dim=0, eps=1.0e-6)
-            # todo: use rest or total?
-            raw = torch.clamp(1.0 - cos_total, min=0.0)
-            if not torch.isfinite(raw).item():
+            if not torch.isfinite(cos_total).item() or not torch.isfinite(cos_rest).item():
                 return {}
-            raw_weights.append(raw)
             cosines[name] = {
                 "total": cos_total.detach(),
                 "rest": cos_rest.detach(),
             }
+        return cosines
+
+    def _update_adaptive_loss_weights(self, cosines):
+        if not cosines or self.adaptive_loss_budget <= 0.0:
+            return
+
+        names = list(cosines)
+        raw_weights = [
+            torch.clamp(1.0 - cosines[name]["total"], min=0.0)
+            for name in names
+        ]
 
         raw_sum = torch.stack(raw_weights).sum()
         if not torch.isfinite(raw_sum).item() or raw_sum.item() <= 0.0:
-            return {}
+            return
 
         for name, raw in zip(names, raw_weights):
             target = float((raw / raw_sum * self.adaptive_loss_budget).detach().cpu())
@@ -285,12 +337,10 @@ class LightningWBoson(L.LightningModule):
 
             # todo
             # Smooth update instead of hard assignment.
-            rho = 0.2  # 0.01 to 0.10. Smaller = more stable.
+            rho = 0.1  # 0.01 to 0.10. Smaller = more stable.
             new = (1.0 - rho) * old + rho * target
 
             self.loss_weights[name] = new
-
-        return cosines
 
     def _log_losses(self, prefix, losses, total):
         self.log(f"{prefix}loss", total.detach(), prog_bar=True, on_step=False, on_epoch=True)
@@ -309,26 +359,29 @@ class LightningWBoson(L.LightningModule):
             self.log(f"grad_cos/{name}__rest", cos["rest"], prog_bar=False, on_step=False, on_epoch=True)
 
     def on_train_epoch_start(self):
-        self._adaptive_batch = None
+        self._gradient_analysis_batch = None
 
     def on_train_epoch_end(self):
-        if not self.adaptive_loss_weights or self._adaptive_batch is None:
+        if self._gradient_analysis_batch is None:
             return
 
-        x, y = self._adaptive_batch
+        x, y = self._gradient_analysis_batch
         with torch.enable_grad():
             x = x.to(self.device)
             y = y.to(self.device)
             total, losses = self._compute_batch_losses(x, y)
-            cosines = self._update_adaptive_loss_weights(losses, total)
+            cosines = self._compute_loss_gradient_cosines(losses, total)
+        if self.adaptive_loss_weights:
+            self._update_adaptive_loss_weights(cosines)
         self._log_grad_cosines(cosines)
-        self._adaptive_batch = None
+        self._gradient_analysis_batch = None
     
     def training_step(self, batch, batch_idx):
         x, y = batch
         total, losses = self._compute_batch_losses(x, y)
-        if self.adaptive_loss_weights and self._adaptive_batch is None:
-            self._adaptive_batch = (x.detach().cpu(), y.detach().cpu())
+        needs_gradient_analysis = self.adaptive_loss_weights or self.log_loss_gradient_cosines
+        if needs_gradient_analysis and self._gradient_analysis_batch is None:
+            self._gradient_analysis_batch = (x.detach().cpu(), y.detach().cpu())
         self._log_losses("", losses, total)
         self._log_loss_weights()
         return total

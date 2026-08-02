@@ -52,6 +52,20 @@ def load_config(config_path=DEFAULT_CONFIG):
         return yaml.safe_load(file)
 
 
+def apply_cli_overrides(cfg, arg):
+    overrides = (
+        ("seed", "parameters", "seed"),
+        ("epochs", "parameters", "epochs"),
+        ("max_events_per_category", "data", "max_events_per_category"),
+        ("saved_path", "paths", "saved_path"),
+    )
+    for arg_name, section, key in overrides:
+        value = getattr(arg, arg_name, None)
+        if value is not None:
+            cfg.setdefault(section, {})[key] = value
+    return cfg
+
+
 def flatten_config(config, prefix=""):
     items = {}
     for key, value in config.items():
@@ -66,21 +80,17 @@ def flatten_config(config, prefix=""):
 def prime_csv_metric_header(csv_logger, model):
     metric_keys = {"epoch", "step"}
     loss_names = sorted(model.loss_weights.keys())
-    active_loss_names = [
-        name for name, weight in model.loss_weights.items()
-        if weight != 0.0
-    ]
     for prefix in ("", "val_", "test_"):
         metric_keys.add(f"{prefix}loss")
         metric_keys.update(f"{prefix}{name}_loss" for name in loss_names)
     if model.log_loss_gradient_cosines:
         metric_keys.update(
             f"grad_cos/{name}__total"
-            for name in active_loss_names
+            for name in model.adaptive_loss_names
         )
         metric_keys.update(
             f"grad_cos/{name}__rest"
-            for name in active_loss_names
+            for name in model.adaptive_loss_names
         )
     metric_keys.update(
         f"loss_weight/{name}"
@@ -90,6 +100,21 @@ def prime_csv_metric_header(csv_logger, model):
     writer = csv_logger.experiment
     existing_keys = set(getattr(writer, "metrics_keys", []))
     writer.metrics_keys = sorted(existing_keys | metric_keys)
+
+
+def compute_w_fourvec_scales(targets):
+    w_fourvecs = targets[:, :8].reshape(-1, 4).copy()
+    w_fourvecs[:, 3] = np.log1p(w_fourvecs[:, 3])
+    scales = np.std(w_fourvecs, axis=0)
+    return np.maximum(scales, np.finfo(np.float32).eps).astype(np.float32)
+
+
+def compute_dmet_scales(features, targets):
+    true_nu0_t = targets[:, :2] - features[:, :2]
+    true_nu1_t = targets[:, 4:6] - features[:, 4:6]
+    true_dmet = features[:, 16:18] - true_nu0_t - true_nu1_t
+    scales = np.std(true_dmet, axis=0)
+    return np.maximum(scales, np.finfo(np.float32).eps).astype(np.float32)
 
 
 def build_datamodule(cfg, data_path):
@@ -118,7 +143,17 @@ def build_datamodule(cfg, data_path):
     )
     dm.setup()
     standardization, _ = data.compute_standardization_stats(X_train, Y_train)
-    return dm, X_train.shape[1], standardization
+    mmd_condition_standardization = data.compute_mmd_condition_stats(X_train)
+    w_fourvec_scales = compute_w_fourvec_scales(Y_train)
+    dmet_scales = compute_dmet_scales(X_train, Y_train)
+    return (
+        dm,
+        X_train.shape[1],
+        standardization,
+        mmd_condition_standardization,
+        w_fourvec_scales,
+        dmet_scales,
+    )
 
 
 def create_loggers(cfg, model, saved_path, arg, steps_per_epoch):
@@ -161,15 +196,30 @@ def build_training_callbacks(params):
     ]
 
 
-def run_training(cfg, dm, input_dim, standardization, saved_path, arg):
+def run_training(
+    cfg,
+    dm,
+    input_dim,
+    standardization,
+    mmd_condition_standardization,
+    w_fourvec_scales,
+    dmet_scales,
+    saved_path,
+    arg,
+):
     params = cfg["parameters"]
     std_mean_train, std_scale_train = standardization
+    mmd_cond_mean_train, mmd_cond_scale_train = mmd_condition_standardization
     print("Starting training...")
     print(f"Input dimension: {input_dim}")
     model = LightningWBoson(
         input_dim=input_dim,
         std_mean_train=std_mean_train,
         std_scale_train=std_scale_train,
+        mmd_cond_mean_train=mmd_cond_mean_train,
+        mmd_cond_scale_train=mmd_cond_scale_train,
+        w_fourvec_scales=w_fourvec_scales,
+        dmet_scales=dmet_scales,
         lr=params["learning_rate"],
         weight_decay=params.get("weight_decay", 1e-4),
         loss_weights=params["loss_weights"],
@@ -224,6 +274,8 @@ def main(train=True, arg=None, config_path=DEFAULT_CONFIG):
     if arg is not None and hasattr(arg, "config"):
         config_path = arg.config
     cfg = load_config(config_path)
+    if arg is not None:
+        cfg = apply_cli_overrides(cfg, arg)
     params = cfg["parameters"]
 
     num_threads = str(params.get("num_workers", 0))
@@ -241,13 +293,30 @@ def main(train=True, arg=None, config_path=DEFAULT_CONFIG):
     torch.set_float32_matmul_precision("medium")
 
     data_path = resolve_repo_path(cfg["paths"]["data_path"])
-    dm, input_dim, standardization = build_datamodule(cfg, data_path)
+    (
+        dm,
+        input_dim,
+        standardization,
+        mmd_condition_standardization,
+        w_fourvec_scales,
+        dmet_scales,
+    ) = build_datamodule(cfg, data_path)
     if not train:
         print("Evaluation mode, returning datamodule...")
         return dm
 
     saved_path = resolve_repo_path(cfg["paths"]["saved_path"])
-    run_training(cfg, dm, input_dim, standardization, saved_path, arg)
+    run_training(
+        cfg,
+        dm,
+        input_dim,
+        standardization,
+        mmd_condition_standardization,
+        w_fourvec_scales,
+        dmet_scales,
+        saved_path,
+        arg,
+    )
 
 
 def parse_args():
@@ -259,6 +328,14 @@ def parse_args():
         help="Path to YAML config file",
     )
     parser.add_argument("--wandb", "-w", action="store_true", help="Enable W&B logging")
+    parser.add_argument("--saved-path", help="Override paths.saved_path")
+    parser.add_argument("--seed", type=int, help="Override parameters.seed")
+    parser.add_argument("--epochs", type=int, help="Override parameters.epochs")
+    parser.add_argument(
+        "--max-events-per-category",
+        type=int,
+        help="Override data.max_events_per_category for short ablation runs",
+    )
     parser.add_argument("--run-name", help="Optional run name for loggers")
     parser.add_argument("--wandb-project", default="PCRES-regressor", help="W&B project name")
     parser.add_argument("--watch-model", action="store_true", help="Log model gradients and parameters")

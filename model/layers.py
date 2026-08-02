@@ -24,7 +24,8 @@ class _AttnFFN(nn.Module):
     def forward(self, x):
         x = self.ffn(x)
         return x
-    
+
+
 class SelfAttentionBlock(nn.Module):
     def __init__(self, d_model, nhead, dropout=0.3):
         super().__init__()
@@ -71,19 +72,20 @@ class ResidualBlock(nn.Module):
 
 class WBosonFourVectorLayer(nn.Module):
     def forward(self, lep0, lep1, nu_params, met):
-        # Layout: [nu0_px, nu0_py, nu0_pz, nu1_pz, dmet_px, dmet_py].
+        # Layout: [delta_nu_px, delta_nu_py, nu0_pz, nu1_pz, dmet_px, dmet_py].
         # The residual accounts for reco MET mismatch rather than smearing
         # invisible momenta directly.
-        nu0_3 = nu_params[..., :3]
+        delta_nu_t = nu_params[..., :2]
+        nu0_pz = nu_params[..., 2:3]
         nu1_pz = nu_params[..., 3:4]
         dmet = nu_params[..., 4:6]
 
         # measured MET = neutrino transverse momentum + detector/reconstruction residual
-        nunu_pt = met - dmet
-
-        nu1_px = nunu_pt[..., 0:1] - nu0_3[..., 0:1]
-        nu1_py = nunu_pt[..., 1:2] - nu0_3[..., 1:2]
-        nu1_3 = torch.cat([nu1_px, nu1_py, nu1_pz], dim=-1)
+        total_nu_t = met - dmet
+        nu0_t = 0.5 * (total_nu_t + delta_nu_t)
+        nu1_t = 0.5 * (total_nu_t - delta_nu_t)
+        nu0_3 = torch.cat([nu0_t, nu0_pz], dim=-1)
+        nu1_3 = torch.cat([nu1_t, nu1_pz], dim=-1)
 
         # neutrino energies as |p| for (approx) massless
         nu0_E = torch.linalg.vector_norm(nu0_3, dim=-1, keepdim=True)

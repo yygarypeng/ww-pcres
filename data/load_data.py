@@ -47,6 +47,33 @@ def split_categories(data_cfg, split):
     return [f"ggF_{split}"]
 
 
+def mmd_condition_features(features):
+    features = np.asarray(features)
+    if features.shape[-1] < 22:
+        raise ValueError(
+            f"MMD conditioning requires at least 22 features, got {features.shape[-1]}"
+        )
+
+    m_ll = features[..., 18:19]
+    deta_ll = features[..., 19:20]
+    dphi_ll = features[..., 20:21]
+    dphi_llmet = features[..., 21:22]
+    return np.concatenate([
+        m_ll,
+        deta_ll,
+        np.sin(dphi_ll),
+        np.cos(dphi_ll),
+        np.sin(dphi_llmet),
+        np.cos(dphi_llmet),
+    ], axis=-1)
+
+
+def compute_mmd_condition_stats(train_obj):
+    condition = mmd_condition_features(train_obj)
+    scaler = StandardScaler().fit(condition)
+    return scaler.mean_, scaler.scale_
+
+
 def compute_standardization_stats(train_obj, target_obj=None, train_indices=None):
     """Fit standardization statistics, optionally on a training subset only."""
     feature_source = train_obj if train_indices is None else train_obj[train_indices]

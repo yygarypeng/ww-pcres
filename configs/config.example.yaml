@@ -24,7 +24,7 @@ parameters:
     w_mass_mmd: 1.0
     w_mass_huber: 0.001
     angular_loss_mmd: 10.0
-    dmet: 0.01
+    dmet: 10.0
 
 data:
   categories: null
