@@ -25,14 +25,13 @@ class Opset11MultiheadAttention(nn.Module):
         self.in_proj_bias = mha.in_proj_bias
         self.out_proj = mha.out_proj
 
-    def forward(self, query, key, value, key_padding_mask=None):
+    def forward(self, query, key, value, key_padding_mask=None, need_weights=False):
         if query is not key or key is not value:
             raise ValueError("Opset11MultiheadAttention only supports self-attention")
 
         batch_size, seq_len, _ = query.shape
         qkv = F.linear(query, self.in_proj_weight, self.in_proj_bias)
         q, k, v = qkv.chunk(3, dim=-1)
-
         q = q.reshape(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
         k = k.reshape(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
         v = v.reshape(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
@@ -52,7 +51,9 @@ class Opset11MultiheadAttention(nn.Module):
 def replace_multihead_attention_for_opset11(module):
     for name, child in module.named_children():
         if isinstance(child, nn.MultiheadAttention):
-            setattr(module, name, Opset11MultiheadAttention(child))
+            replacement = Opset11MultiheadAttention(child)
+            replacement.train(child.training)
+            setattr(module, name, replacement)
         else:
             replace_multihead_attention_for_opset11(child)
 

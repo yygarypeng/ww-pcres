@@ -3,9 +3,7 @@
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(dirname -- "$SCRIPT_DIR")"
 
-command=(python "$SCRIPT_DIR/train.py" "$@")
-if [[ -n "${CPU_CORES:-}" ]]; then
-    command=(taskset -c "$CPU_CORES" "${command[@]}")
-fi
-
-"${command[@]}" &> "$REPO_ROOT/record.log" &
+# TODO: UPDATE BIOS to fix the 11th CPU instability issue
+# 11th cpu is not stable in this BIOS version! (July 29, 2026)
+taskset -c 0-9 python "${SCRIPT_DIR}/train.py" "$@" \
+    &> "$REPO_ROOT/record.log" &
