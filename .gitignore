@@ -66,6 +66,7 @@ Figure/
 
 # Agent/editor local state
 .agents/
+.worktrees/
 .continue/
 skills-lock.json
 .idea/
