@@ -21,7 +21,7 @@ parameters:
   loss_weights:
     huber: 1.0
     higgs_mass: 1.0
-    w_mass_mmd: 1.0
+    kinematic_loss_mmd: 1.0
     w_mass_huber: 0.001
     angular_loss_mmd: 10.0
     dmet: 10.0

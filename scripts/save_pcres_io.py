@@ -105,7 +105,7 @@ def main():
     if test_loader is None:
         raise RuntimeError("No test dataloader available. Check data.test_categories or data.categories.")
 
-    model = LightningWBoson.load_from_checkpoint(
+    model = LightningWBoson.load_for_inference(
         str(checkpoint_path),
         map_location=device,
         weights_only=False,

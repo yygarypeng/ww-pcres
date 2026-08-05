@@ -72,20 +72,17 @@ class ResidualBlock(nn.Module):
 
 class WBosonFourVectorLayer(nn.Module):
     def forward(self, lep0, lep1, nu_params, met):
-        # Layout: [delta_nu_px, delta_nu_py, nu0_pz, nu1_pz, dmet_px, dmet_py].
-        # The residual accounts for reco MET mismatch rather than smearing
-        # invisible momenta directly.
-        delta_nu_t = nu_params[..., :2]
+        # [delta_dinu_px, delta_dinu_py, nu0_pz, nu1_pz, dmet_px, dmet_py].
+        delta_dinu_pt = nu_params[..., :2]
         nu0_pz = nu_params[..., 2:3]
         nu1_pz = nu_params[..., 3:4]
         dmet = nu_params[..., 4:6]
 
-        # measured MET = neutrino transverse momentum + detector/reconstruction residual
-        total_nu_t = met - dmet
-        nu0_t = 0.5 * (total_nu_t + delta_nu_t)
-        nu1_t = 0.5 * (total_nu_t - delta_nu_t)
-        nu0_3 = torch.cat([nu0_t, nu0_pz], dim=-1)
-        nu1_3 = torch.cat([nu1_t, nu1_pz], dim=-1)
+        total_dinu_pt = met - dmet
+        nu0_pt = 0.5 * (total_dinu_pt + delta_dinu_pt)
+        nu1_pt = 0.5 * (total_dinu_pt - delta_dinu_pt)
+        nu0_3 = torch.cat([nu0_pt, nu0_pz], dim=-1)
+        nu1_3 = torch.cat([nu1_pt, nu1_pz], dim=-1)
 
         # neutrino energies as |p| for (approx) massless
         nu0_E = torch.linalg.vector_norm(nu0_3, dim=-1, keepdim=True)

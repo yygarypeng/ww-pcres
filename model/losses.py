@@ -14,66 +14,6 @@ H_MASS_SCALE = 125.0
 ## Utilities ##
 ###############
 
-def compute_mmd(x, y, kernel="imq", bandwidth_range=None):
-    if bandwidth_range is None:
-        bandwidth_range = [0.01, 0.1, 1.0]
-    x = x.reshape(x.shape[0], -1)
-    y = y.reshape(y.shape[0], -1)
-
-    # Ignore samples with non-finite values
-    # the full pairwise kernel matrix.
-    finit_mask = torch.isfinite(x).all(dim=1) & torch.isfinite(y).all(dim=1)
-    x = x[finit_mask]
-    y = y[finit_mask]
-
-    if x.shape[0] == 0 or y.shape[0] == 0:
-        return (
-            torch.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0).sum()
-            + torch.nan_to_num(y, nan=0.0, posinf=0.0, neginf=0.0).sum()
-        ) * 0.0
-
-    with torch.no_grad(): # a heuristic way to set bandwidths
-        dists = torch.cdist(y, y, p=2)
-        median_dist = torch.median(dists)
-        sel_dist = torch.where(
-            median_dist == 0.0,
-            torch.ones_like(median_dist),
-            median_dist,
-        )
-        bandwidth_range = [s * sel_dist for s in bandwidth_range]
-
-    xx, yy, xy = torch.mm(x, x.t()), torch.mm(y, y.t()), torch.mm(x, y.t())
-    rx = xx.diag().unsqueeze(0).expand_as(xx)
-    ry = yy.diag().unsqueeze(0).expand_as(yy)
-    dxx = rx.t() + rx - 2. * xx
-    dyy = ry.t() + ry - 2. * yy
-    dxy = rx.t() + ry - 2. * xy
-    dxx = dxx.clamp_min(0.0)
-    dyy = dyy.clamp_min(0.0)
-    dxy = dxy.clamp_min(0.0)
-
-    XX = torch.zeros_like(xx)
-    YY = torch.zeros_like(yy)
-    XY = torch.zeros_like(xy)
-
-    def rbf_kernel(a, d):
-        return torch.exp(-0.5 * d / (a**2 + TOR))
-    def imq_kernel(a, d):
-        return a**2 / (a**2 + d + TOR)
-
-    if kernel == "rbf":
-        _ker = lambda a, d: rbf_kernel(a, d)
-    elif kernel == "imq":
-        _ker = lambda a, d: imq_kernel(a, d)
-    else:
-        raise ValueError(f"Unsupported kernel: {kernel}")
-
-    for a in bandwidth_range:
-        XX += _ker(a, dxx)
-        YY += _ker(a, dyy)
-        XY += _ker(a, dxy)
-    return torch.mean(XX + YY - 2. * XY)
-
 def compute_local_mmd(x, y, cond, kernel="imq", base_bandwidth_range=None):
     if base_bandwidth_range is None:
         base_bandwidth_range = [0.05, 0.1, 0.5, 1.0]
@@ -175,7 +115,7 @@ def standardized_fourvec_huber_loss(y_true, y_pred, component_scales):
 ## Loss functions ##
 ####################
 
-def w_mass_losses(y_true, y_pred, *, include_mmd=True, include_huber=True):
+def w_mass_huber_loss(y_true, y_pred):
     w0_pred, w1_pred = y_pred[..., :4], y_pred[..., 4:8]
     w0_true_mass, w1_true_mass = y_true[..., 8], y_true[..., 9]
 
@@ -184,9 +124,7 @@ def w_mass_losses(y_true, y_pred, *, include_mmd=True, include_huber=True):
 
     w_lst_true = torch.stack([w0_true_mass**2, w1_true_mass**2], dim=-1) / W_MASS_SCALE**2
     w_lst_pred = torch.stack([w0_mass2, w1_mass2], dim=-1) / W_MASS_SCALE**2
-    mmd = compute_mmd(w_lst_pred, w_lst_true) if include_mmd else None
-    huber = F.huber_loss(w_lst_pred, w_lst_true) if include_huber else None
-    return mmd, huber
+    return F.huber_loss(w_lst_pred, w_lst_true)
 
 def higgs_mass_loss(y_pred):
     w0_4, w1_4 = y_pred[..., :4], y_pred[..., 4:8]
@@ -194,10 +132,8 @@ def higgs_mass_loss(y_pred):
     higgs_4 = w0_4 + w1_4
     h_mass2 = invariant_mass2(higgs_4)
     h_mass = torch.sqrt(torch.clamp(h_mass2, min=TOR))
-    # causal_penalty = F.relu(-h_mass2) / H_MASS_SCALE
 
-    # return F.huber_loss(h_mass , torch.full_like(h_mass, H_MASS_SCALE)) + causal_penalty.mean()
-    return F.huber_loss(h_mass , torch.full_like(h_mass, H_MASS_SCALE), delta=1.0)
+    return F.huber_loss(h_mass , torch.full_like(h_mass, H_MASS_SCALE), delta=20)
 
 def dmet_loss(x_batch, y_true, dmet, component_scales):
     true_w0 = y_true[..., :4]
@@ -210,6 +146,51 @@ def dmet_loss(x_batch, y_true, dmet, component_scales):
     residual = (dmet - dmet_target) / component_scales
 
     return F.huber_loss(residual, torch.zeros_like(residual))
+
+
+def kinematic_loss_mmd(x_batch, y_true, y_pred, cond):
+    if cond.shape[-1] == 0:
+        raise ValueError("kinematic local MMD requires the four high-level conditioning features")
+
+    valid = (
+        torch.isfinite(x_batch[..., :8]).all(dim=-1)
+        & torch.isfinite(y_true[..., :8]).all(dim=-1)
+        & torch.isfinite(y_pred).all(dim=-1)
+        & torch.isfinite(cond).all(dim=-1)
+    )
+    if not valid.any():
+        return (
+            torch.nan_to_num(y_true[..., :8], nan=0.0, posinf=0.0, neginf=0.0).sum()
+            + torch.nan_to_num(y_pred, nan=0.0, posinf=0.0, neginf=0.0).sum()
+        ) * 0.0
+    x_batch = x_batch[valid]
+    y_true = y_true[valid]
+    y_pred = y_pred[valid]
+    cond = cond[valid]
+
+    def _features_for_mmd(w_fourvecs):
+        w_pos, w_neg = w_fourvecs[..., :4], w_fourvecs[..., 4:8]
+        nu_pos = w_pos - x_batch[..., :4]
+        nu_neg = w_neg - x_batch[..., 4:8]
+        p_pos = torch.linalg.vector_norm(nu_pos[..., :3], dim=-1)
+        p_neg = torch.linalg.vector_norm(nu_neg[..., :3], dim=-1)
+        total = p_pos + p_neg
+        zero_total = total == 0.0
+        safe_total = torch.where(zero_total, torch.ones_like(total), total)
+        alpha_pos = torch.where(
+            zero_total,
+            torch.full_like(total, 0.5),
+            p_pos / safe_total,
+        )
+        return torch.stack([
+            2.0 * alpha_pos - 1.0,
+            invariant_mass2(w_pos) / W_MASS_SCALE**2,
+            invariant_mass2(w_neg) / W_MASS_SCALE**2,
+        ], dim=-1)
+
+    true_features = _features_for_mmd(y_true[..., :8])
+    pred_features = _features_for_mmd(y_pred)
+    return compute_local_mmd(pred_features, true_features, cond=cond)
 
 def angular_loss_mmd(x_batch, y_true, y_pred, cond):
     if cond.shape[-1] == 0:

@@ -34,7 +34,7 @@ def main():
     ort_session = onnxruntime.InferenceSession(str(onnx_path), providers=["CPUExecutionProvider"])
 
     print(f"Comparing with PyTorch checkpoint: {ckpt_path}")
-    pytorch_model = LightningWBoson.load_from_checkpoint(
+    pytorch_model = LightningWBoson.load_for_inference(
         ckpt_path,
         map_location=torch.device("cpu"),
         weights_only=False,
