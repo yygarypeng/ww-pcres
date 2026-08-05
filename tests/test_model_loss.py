@@ -1,11 +1,12 @@
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import numpy as np
 import torch
 import torch.nn.functional as F
 
 from model import LightningWBoson
+from model import losses as loss_module
 from model.losses import dmet_loss, standardized_fourvec_huber_loss
 from train import train as train_module
 from train.train import compute_w_fourvec_scales
@@ -172,20 +173,37 @@ class LightningModelLossTest(unittest.TestCase):
 
         self.assertEqual(optimizer.param_groups[0]["weight_decay"], 0.0123)
 
-    def test_angular_mmd_requires_high_level_condition_features(self):
+    def test_rejects_unsupported_loss_weight_keys(self):
+        for key in ("w_mass_mmd", "kinematic_loss_mmd_typo"):
+            with self.subTest(key=key):
+                with self.assertRaisesRegex(ValueError, f"unsupported loss_weights key.*{key}"):
+                    LightningWBoson(
+                        input_dim=18,
+                        d_model=8,
+                        num_heads=2,
+                        std_mean_train=np.zeros(18, dtype=np.float32),
+                        std_scale_train=np.ones(18, dtype=np.float32),
+                        loss_weights={key: 1.0},
+                    )
+
+    def test_conditional_mmd_requires_high_level_condition_features(self):
         model = LightningWBoson(
             input_dim=18,
             d_model=8,
             num_heads=2,
             std_mean_train=np.zeros(18, dtype=np.float32),
             std_scale_train=np.ones(18, dtype=np.float32),
-            loss_weights={"huber": 0.0, "angular_loss_mmd": 1.0},
+            loss_weights={
+                "huber": 0.0,
+                "angular_loss_mmd": 1.0,
+                "kinematic_loss_mmd": 1.0,
+            },
         )
 
         with self.assertRaisesRegex(ValueError, "requires the four high-level"):
             model._compute_batch_losses(torch.randn(2, 18), torch.randn(2, 10))
 
-    def test_normalized_periodic_condition_reaches_local_mmd(self):
+    def test_normalized_periodic_condition_reaches_both_local_mmd_losses(self):
         mean = np.arange(6, dtype=np.float32)
         scale = np.arange(1, 7, dtype=np.float32)
         model = LightningWBoson(
@@ -196,7 +214,11 @@ class LightningModelLossTest(unittest.TestCase):
             std_scale_train=np.ones(22, dtype=np.float32),
             mmd_cond_mean_train=mean,
             mmd_cond_scale_train=scale,
-            loss_weights={"huber": 0.0, "angular_loss_mmd": 1.0},
+            loss_weights={
+                "huber": 0.0,
+                "angular_loss_mmd": 1.0,
+                "kinematic_loss_mmd": 1.0,
+            },
             attention_blocks=1,
             attention_dropout=0.0,
             decoder_dropout=0.0,
@@ -222,20 +244,185 @@ class LightningModelLossTest(unittest.TestCase):
             torch.cos(x[:, 21]),
         ], dim=-1)
         expected = (condition - torch.from_numpy(mean)) / torch.from_numpy(scale)
-        captured = {}
+        captured = []
 
-        def capture_local_mmd(pred_angles, true_angles, cond, **kwargs):
-            captured["cond"] = cond.detach().clone()
-            return pred_angles.sum() * 0.0
+        def capture_local_mmd(pred_features, true_features, cond, **kwargs):
+            captured.append((pred_features.shape[-1], cond.detach().clone()))
+            return pred_features.sum() * 0.0
 
         with patch.object(model.model.w_layer, "forward", return_value=prediction) as w_layer:
             with patch("model.losses.compute_local_mmd", side_effect=capture_local_mmd) as local_mmd:
                 model._compute_batch_losses(x, target)
 
         self.assertEqual(w_layer.call_count, 1)
-        self.assertEqual(local_mmd.call_count, 1)
-        torch.testing.assert_close(captured["cond"], expected)
-        self.assertEqual(captured["cond"].shape, (4, 6))
+        self.assertEqual(local_mmd.call_count, 2)
+        self.assertEqual([feature_count for feature_count, _ in captured], [3, 6])
+        for _, captured_condition in captured:
+            torch.testing.assert_close(captured_condition, expected)
+            self.assertEqual(captured_condition.shape, (4, 6))
+
+
+class KinematicMMDTest(unittest.TestCase):
+    def test_uses_charge_associated_neutrinos_and_ordered_scaled_features(self):
+        x = torch.zeros((1, 18))
+        x[0, :4] = torch.tensor([1.0, 0.0, 0.0, 1.0])
+        x[0, 4:8] = torch.tensor([0.0, 2.0, 0.0, 2.0])
+        y_true = torch.tensor([[4.0, 0.0, 0.0, 10.0, 0.0, 3.0, 0.0, 8.0, 0.0, 0.0]])
+        y_pred = torch.tensor([[2.0, 0.0, 0.0, 6.0, 0.0, 5.0, 0.0, 9.0]])
+        condition = torch.randn(1, 6)
+        captured = {}
+
+        def capture_local_mmd(pred_features, true_features, cond, **kwargs):
+            captured["pred"] = pred_features
+            captured["true"] = true_features
+            captured["cond"] = cond
+            return pred_features.sum() * 0.0
+
+        with patch("model.losses.compute_local_mmd", side_effect=capture_local_mmd):
+            loss_module.kinematic_loss_mmd(x, y_true, y_pred, condition)
+
+        scale2 = loss_module.W_MASS_SCALE**2
+        expected_true = torch.tensor([[0.5, 84.0 / scale2, 55.0 / scale2]])
+        expected_pred = torch.tensor([[-0.5, 32.0 / scale2, 56.0 / scale2]])
+        torch.testing.assert_close(captured["true"], expected_true)
+        torch.testing.assert_close(captured["pred"], expected_pred)
+        torch.testing.assert_close(captured["cond"], condition)
+
+    def test_zero_total_neutrino_momentum_centers_alpha(self):
+        x = torch.zeros((1, 18))
+        x[0, :4] = torch.tensor([1.0, 2.0, 3.0, 4.0])
+        x[0, 4:8] = torch.tensor([-1.0, -2.0, -3.0, 4.0])
+        y_true = torch.cat([x[:, :8], torch.zeros((1, 2))], dim=-1)
+        y_pred = x[:, :8].clone()
+        captured = {}
+
+        def capture_local_mmd(pred_features, true_features, cond, **kwargs):
+            captured["pred"] = pred_features
+            captured["true"] = true_features
+            return pred_features.sum() * 0.0
+
+        with patch("model.losses.compute_local_mmd", side_effect=capture_local_mmd):
+            loss_module.kinematic_loss_mmd(x, y_true, y_pred, torch.zeros((1, 6)))
+
+        torch.testing.assert_close(captured["true"][:, 0], torch.zeros(1))
+        torch.testing.assert_close(captured["pred"][:, 0], torch.zeros(1))
+
+    def test_positive_sub_epsilon_total_preserves_alpha_ratio(self):
+        tiny = torch.finfo(torch.float32).eps / 16.0
+        x = torch.zeros((1, 18))
+        y_true = torch.zeros((1, 10))
+        y_true[0, 0] = tiny
+        y_true[0, 4] = 3.0 * tiny
+        captured = {}
+
+        def capture_local_mmd(pred_features, true_features, cond, **kwargs):
+            captured["true"] = true_features
+            return pred_features.sum() * 0.0
+
+        with patch("model.losses.compute_local_mmd", side_effect=capture_local_mmd):
+            loss_module.kinematic_loss_mmd(x, y_true, y_true[:, :8], torch.zeros((1, 6)))
+
+        torch.testing.assert_close(captured["true"][:, 0], torch.tensor([-0.5]))
+
+    def test_mixed_nonfinite_rows_keep_condition_aligned(self):
+        x = torch.zeros((3, 18))
+        y_true = torch.zeros((3, 10))
+        y_pred = torch.zeros((3, 8))
+        y_pred[1, 0] = float("nan")
+        condition = torch.arange(18, dtype=torch.float32).reshape(3, 6)
+        condition[2, 0] = float("nan")
+        captured = {}
+
+        def capture_local_mmd(pred_features, true_features, cond, **kwargs):
+            captured["rows"] = pred_features.shape[0]
+            captured["cond"] = cond
+            return pred_features.sum() * 0.0
+
+        with patch("model.losses.compute_local_mmd", side_effect=capture_local_mmd):
+            loss_module.kinematic_loss_mmd(x, y_true, y_pred, condition)
+
+        self.assertEqual(captured["rows"], 1)
+        torch.testing.assert_close(captured["cond"], condition[:1])
+
+    def test_valid_and_exact_zero_totals_have_finite_gradients(self):
+        x = torch.zeros((2, 18))
+        y_true = torch.zeros((2, 10))
+        y_pred = torch.zeros((2, 8))
+        y_pred[0, 0] = 1.0
+        y_pred[0, 4] = 3.0
+        y_pred.requires_grad_()
+
+        with patch("model.losses.compute_local_mmd", side_effect=lambda pred, true, cond: pred.sum()):
+            loss = loss_module.kinematic_loss_mmd(x, y_true, y_pred, torch.zeros((2, 6)))
+        loss.backward()
+
+        self.assertTrue(torch.isfinite(y_pred.grad).all())
+
+    def test_requires_condition_features(self):
+        with self.assertRaisesRegex(ValueError, "requires the four high-level"):
+            loss_module.kinematic_loss_mmd(
+                torch.zeros((1, 18)),
+                torch.zeros((1, 10)),
+                torch.zeros((1, 8)),
+                torch.empty((1, 0)),
+            )
+
+    def test_all_nonfinite_rows_return_differentiable_zero(self):
+        y_pred = torch.full((2, 8), float("nan"), requires_grad=True)
+
+        loss = loss_module.kinematic_loss_mmd(
+            torch.zeros((2, 18)),
+            torch.zeros((2, 10)),
+            y_pred,
+            torch.zeros((2, 6)),
+        )
+
+        torch.testing.assert_close(loss, torch.tensor(0.0))
+        loss.backward()
+        self.assertTrue(torch.isfinite(y_pred.grad).all())
+
+
+class AngularMMDTest(unittest.TestCase):
+    def test_uses_common_truth_prediction_validity_mask(self):
+        true_booster = Mock()
+        pred_booster = Mock()
+        true_booster.valid_rest_frame_mask.return_value = torch.tensor([True, True, False])
+        pred_booster.valid_rest_frame_mask.return_value = torch.tensor([True, False, True])
+        angles = tuple(torch.arange(3, dtype=torch.float32) for _ in range(4))
+        true_booster.lep_theta_phi_in_w_rest.return_value = angles
+        pred_booster.lep_theta_phi_in_w_rest.return_value = angles
+        condition = torch.arange(18, dtype=torch.float32).reshape(3, 6)
+        captured = {}
+
+        def capture_local_mmd(pred_features, true_features, cond, **kwargs):
+            captured["rows"] = pred_features.shape[0]
+            captured["cond"] = cond
+            return pred_features.sum() * 0.0
+
+        with patch("model.losses.Booster", side_effect=[true_booster, pred_booster]):
+            with patch("model.losses.compute_local_mmd", side_effect=capture_local_mmd):
+                loss_module.angular_loss_mmd(
+                    torch.zeros((3, 18)),
+                    torch.zeros((3, 10)),
+                    torch.zeros((3, 8)),
+                    condition,
+                )
+
+        self.assertEqual(captured["rows"], 1)
+        torch.testing.assert_close(captured["cond"], condition[:1])
+
+
+class WMassHuberTest(unittest.TestCase):
+    def test_compares_normalized_predicted_mass_squared_to_target_masses(self):
+        y_true = torch.zeros((1, 10))
+        y_true[0, 8:] = torch.tensor([40.2, 80.4])
+        y_pred = torch.tensor([[0.0, 0.0, 0.0, 80.4, 0.0, 0.0, 0.0, 40.2]])
+
+        loss = loss_module.w_mass_huber_loss(y_true, y_pred)
+
+        expected_pred = torch.tensor([[1.0, 0.25]])
+        expected_true = torch.tensor([[0.25, 1.0]])
+        torch.testing.assert_close(loss, F.huber_loss(expected_pred, expected_true))
 
 
 class GradientCosineLoggingTest(unittest.TestCase):

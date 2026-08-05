@@ -88,7 +88,7 @@ def main():
     ckpt_path = find_checkpoint(cfg["paths"]["saved_path"], args.checkpoint)
     print(f"Using checkpoint: {ckpt_path}")
 
-    model = LightningWBoson.load_from_checkpoint(
+    model = LightningWBoson.load_for_inference(
         ckpt_path,
         map_location="cpu",
         weights_only=False,

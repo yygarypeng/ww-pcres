@@ -5,8 +5,8 @@ import pytorch_lightning as L
 
 from model.layers import Standardization, SelfAttentionBlock, ResidualBlock, WBosonFourVectorLayer
 from model.losses import (
-    w_mass_losses, higgs_mass_loss,
-    angular_loss_mmd, dmet_loss, standardized_fourvec_huber_loss
+    angular_loss_mmd, dmet_loss, higgs_mass_loss, kinematic_loss_mmd,
+    standardized_fourvec_huber_loss, w_mass_huber_loss
 )
 
 
@@ -68,7 +68,7 @@ class WBosonRegressor(nn.Module):
             ResidualBlock(128, 128, hidden_dim=128, dropout=decoder_dropout),
         )
 
-        # Latent regression head layout: [delta_nu_px, delta_nu_py, nu0_pz, nu1_pz]
+        # Latent regression head layout: [delta_dinu_px, delta_dinu_py, nu0_pz, nu1_pz]
         self.nu_mom_head = nn.Sequential(
             nn.LayerNorm(128),
             nn.Linear(128, 32),
@@ -196,12 +196,17 @@ class LightningWBoson(L.LightningModule):
             "huber": 1.0, 
             # mass losses
             "higgs_mass": 0.0,
-            "w_mass_mmd": 0.0,
             "w_mass_huber": 0.0,
-            # auxiliary losses
-            "angular_loss_mmd": 0.0, 
+            # met loss
             "dmet": 0.0,
+            # auxiliary losses
+            "kinematic_loss_mmd": 0.0,
+            "angular_loss_mmd": 0.0, 
         }
+        unsupported_loss_weights = set(loss_weights or {}) - defaults.keys()
+        if unsupported_loss_weights:
+            names = ", ".join(sorted(unsupported_loss_weights))
+            raise ValueError(f"unsupported loss_weights key(s): {names}")
         self.loss_weights = {
             name: float(weight)
             for name, weight in {**defaults, **(loss_weights or {})}.items()
@@ -218,6 +223,11 @@ class LightningWBoson(L.LightningModule):
         self.log_loss_gradient_cosines = bool(log_loss_gradient_cosines)
         self._gradient_analysis_batch = None
         self.lr = lr
+
+    @classmethod
+    def load_for_inference(cls, checkpoint_path, **kwargs):
+        kwargs["loss_weights"] = {}
+        return cls.load_from_checkpoint(checkpoint_path, **kwargs)
 
     def forward(self, x, return_aux=False):
         return self.model(x, return_aux=return_aux)
@@ -238,19 +248,10 @@ class LightningWBoson(L.LightningModule):
             )
         if self._loss_enabled("higgs_mass"):
             losses["higgs_mass"] = higgs_mass_loss(y_pred)
-        w_mass_mmd_enabled = self._loss_enabled("w_mass_mmd")
-        w_mass_huber_enabled = self._loss_enabled("w_mass_huber")
-        if w_mass_mmd_enabled or w_mass_huber_enabled:
-            w_mass_mmd, w_mass_huber = w_mass_losses(
-                y,
-                y_pred,
-                include_mmd=w_mass_mmd_enabled,
-                include_huber=w_mass_huber_enabled,
-            )
-            if w_mass_mmd_enabled and w_mass_mmd is not None:
-                losses["w_mass_mmd"] = w_mass_mmd
-            if w_mass_huber_enabled and w_mass_huber is not None:
-                losses["w_mass_huber"] = w_mass_huber
+        if self._loss_enabled("w_mass_huber"):
+            losses["w_mass_huber"] = w_mass_huber_loss(y, y_pred)
+        if self._loss_enabled("kinematic_loss_mmd"):
+            losses["kinematic_loss_mmd"] = kinematic_loss_mmd(x, y, y_pred, cond)
         if self._loss_enabled("angular_loss_mmd"):
             losses["angular_loss_mmd"] = angular_loss_mmd(x, y, y_pred, cond)
         if self._loss_enabled("dmet"):
@@ -311,6 +312,7 @@ class LightningWBoson(L.LightningModule):
             cos_rest = torch.nn.functional.cosine_similarity(grad, rest_grad, dim=0, eps=1.0e-6)
             if not torch.isfinite(cos_total).item() or not torch.isfinite(cos_rest).item():
                 return {}
+            # todo: test either total or rest (math correctly)
             cosines[name] = {
                 "total": cos_total.detach(),
                 "rest": cos_rest.detach(),
@@ -335,9 +337,8 @@ class LightningWBoson(L.LightningModule):
             target = float((raw / raw_sum * self.adaptive_loss_budget).detach().cpu())
             old = float(self.loss_weights.get(name, target))
 
-            # todo
-            # Smooth update instead of hard assignment.
-            rho = 0.1  # 0.01 to 0.10. Smaller = more stable.
+            # todo: smooth update instead of hard assignment.
+            rho = 0.05  # 0.01 to 0.10. Smaller = more stable.
             new = (1.0 - rho) * old + rho * target
 
             self.loss_weights[name] = new
