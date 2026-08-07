@@ -69,6 +69,21 @@ class TrainingOverrideTest(unittest.TestCase):
 
 
 class TrainingScaleTest(unittest.TestCase):
+    def test_mass_mmd_standardization_uses_training_truth_only(self):
+        targets = np.zeros((3, 10), dtype=np.float32)
+        targets[:, 8:10] = np.array(
+            [[20.0, 30.0], [40.0, 50.0], [60.0, 70.0]],
+            dtype=np.float32,
+        )
+
+        center, scale = train_module.compute_mass_mmd_standardization(targets)
+
+        transformed = np.arcsinh((targets[:, 8:10].reshape(-1) / 80.4) ** 2)
+        expected_center = np.median(transformed)
+        q25, q75 = np.percentile(transformed, [25.0, 75.0])
+        np.testing.assert_allclose(center, expected_center)
+        np.testing.assert_allclose(scale, (q75 - q25) / 1.349)
+
     def test_build_datamodule_computes_dmet_scales_from_training_split(self):
         x_train = np.zeros((3, 22), dtype=np.float32)
         y_train = np.zeros((3, 10), dtype=np.float32)
