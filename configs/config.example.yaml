@@ -21,10 +21,25 @@ parameters:
   loss_weights:
     huber: 1.0
     higgs_mass: 1.0
-    kinematic_loss_mmd: 1.0
+    alpha_mmd: 1.0
+    mass_mmd: 1.0
     w_mass_huber: 0.001
-    angular_loss_mmd: 10.0
+    angular_mmd: 10.0
     dmet: 10.0
+
+mmd:
+  condition:
+    kernel: rbf
+    bandwidth_multipliers: [0.5, 1.0, 2.0]
+  alpha:
+    kernel: imq
+    bandwidth_multipliers: [0.1, 0.25, 0.5, 1.0, 2.0]
+  mass:
+    kernel: imq
+    bandwidth_multipliers: [0.1, 0.25, 0.5, 1.0, 2.0]
+  angular:
+    kernel: rbf
+    bandwidth_multipliers: [0.25, 0.5, 1.0, 2.0]
 
 data:
   categories: null
