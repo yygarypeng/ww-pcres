@@ -83,6 +83,34 @@ Outputs are written under `paths.saved_path`. Training deletes that output direc
 
 Adaptive loss weights, when enabled, are updated once at the end of each training epoch using the first training batch from that epoch. The cosine metrics are logged as `grad_cos/{loss}__total`.
 
+### Local MMD configuration
+
+The local MMD losses use a product of two independently configured kernel mixtures:
+
+- an output-feature kernel for `alpha_mmd`, joint charge-ordered `mass_mmd`, or `angular_mmd`;
+- a condition kernel over standardized `(m_ll, deta_ll, sin/cos(dphi_ll), sin/cos(dphi_llmet))` features.
+
+Feature and condition bandwidth lists form a normalized Cartesian-product mixture. Adding another bandwidth therefore changes kernel coverage without mechanically rescaling the loss. The mass loss applies `asinh(m_W^2 / 80.4^2)` and fixed robust statistics fitted on the training truth split. Angular theta inputs use `2 * theta / pi - 1`; phi inputs retain their periodic `sin(phi), cos(phi)` representation.
+
+Configure the two sides separately under the top-level `mmd` section; see `configs/config.example.yaml` for the supported keys. Older local configs must replace:
+
+- `kinematic_loss_mmd` with separate `alpha_mmd` and `mass_mmd` weights;
+- `angular_loss_mmd` with `angular_mmd`.
+
+Unsupported or retired names fail with an explicit migration message instead of being ignored.
+
+### Visualization and inference check
+
+`notebooks/visualize.ipynb` reads the component losses, effective weights, and gradient-cosine columns from the Lightning `metrics.csv`. Its loss panels include the separate alpha and joint-mass MMD histories.
+
+To verify checkpoint reload and export aligned test-set arrays plus quick parity/residual plots:
+
+```bash
+python scripts/save_pcres_io.py --config configs/config.yaml
+```
+
+See `docs/pcres_io.md` for the output schema.
+
 ## Data
 
 The HDF5 file should contain top-level categories such as `ggF_train`, `ggF_val`, `ggF_test`, or `VBF_train`. Each selected category needs these groups and fields:
