@@ -80,9 +80,10 @@ def test_partial_loss_weights_inherit_model_defaults():
     expected_weights = {
         "huber": 1.0,
         "higgs_mass": 0.0,
-        "kinematic_loss_mmd": 0.0,
+        "alpha_mmd": 0.0,
+        "mass_mmd": 0.0,
         "w_mass_huber": 0.0,
-        "angular_loss_mmd": 0.0,
+        "angular_mmd": 0.0,
         "dmet": 2.0,
     }
     df = sparse_metrics(
@@ -243,7 +244,7 @@ def test_plot_loss_curves_builds_two_slide_subplot_figures(tmp_path, capsys):
     diagnostics = namespace["plot_loss_curves"](metrics_path, cfg)
 
     assert diagnostics["mismatches"] == ["val"]
-    assert [len(figure.axes) for figure in diagnostics["figures"]] == [8, 6]
+    assert [len(figure.axes) for figure in diagnostics["figures"]] == [8, 8]
     assert "summary" not in diagnostics
     assert "contribution_shares" not in diagnostics
 
@@ -251,7 +252,7 @@ def test_plot_loss_curves_builds_two_slide_subplot_figures(tmp_path, capsys):
     assert (raw_figure.axes[0].get_subplotspec().get_gridspec().nrows,
             raw_figure.axes[0].get_subplotspec().get_gridspec().ncols) == (2, 4)
     assert (weighted_figure.axes[0].get_subplotspec().get_gridspec().nrows,
-            weighted_figure.axes[0].get_subplotspec().get_gridspec().ncols) == (2, 3)
+            weighted_figure.axes[0].get_subplotspec().get_gridspec().ncols) == (2, 4)
 
     for index, (name, label) in enumerate(namespace["LOSS_COMPONENTS"]):
         raw_axis = raw_figure.axes[index]
@@ -284,28 +285,35 @@ def test_plot_loss_curves_builds_two_slide_subplot_figures(tmp_path, capsys):
         assert raw_axis.get_yscale() == "linear"
         assert weighted_axis.get_yscale() == "linear"
 
-    total_axis = raw_figure.axes[6]
+    total_axis = raw_figure.axes[len(component_names)]
     total_lines = {line.get_label(): line for line in total_axis.lines}
     assert total_axis.get_title(loc="left") == "Logged Total"
-    np.testing.assert_array_equal(total_lines["total:train"].get_ydata(), [112.0, 91.0])
-    np.testing.assert_array_equal(total_lines["total:val"].get_ydata(), [123.5, 102.5])
+    np.testing.assert_array_equal(total_lines["total:train"].get_ydata(), [168.0, 140.0])
+    np.testing.assert_array_equal(total_lines["total:val"].get_ydata(), [183.0, 155.0])
     assert total_lines["total:train"].get_color() == "tab:blue"
     assert total_lines["total:val"].get_color() == "tab:orange"
     np.testing.assert_array_equal(total_lines["best_epoch"].get_xdata(), [1, 1])
-    assert not raw_figure.axes[7].axison
+    assert raw_figure.axes[7].axison
+    assert not weighted_figure.axes[7].axison
     assert len(raw_figure.legends) == 0
     assert len(weighted_figure.legends) == 0
     assert raw_figure.axes[3].get_legend() is not None
-    assert weighted_figure.axes[2].get_legend() is not None
+    assert weighted_figure.axes[3].get_legend() is not None
     for figure, legend_index in (
         (raw_figure, 3),
-        (weighted_figure, 2),
+        (weighted_figure, 3),
     ):
         figure.canvas.draw()
         renderer = figure.canvas.get_renderer()
         title_bounds = figure._suptitle.get_window_extent(renderer)
         legend_bounds = figure.axes[legend_index].get_legend().get_window_extent(renderer)
         assert not title_bounds.overlaps(legend_bounds)
+        for axis in figure.axes:
+            if not axis.axison:
+                continue
+            component_title_bounds = axis.title.get_window_extent(renderer)
+            assert figure.bbox.contains(component_title_bounds.x0, component_title_bounds.y0)
+            assert figure.bbox.contains(component_title_bounds.x1, component_title_bounds.y1)
     output = capsys.readouterr().out
     assert "could not be reconstructed exactly for: validation" in output
     plt.close("all")
@@ -349,10 +357,9 @@ def test_plot_loss_curves_reports_when_all_components_are_unavailable(tmp_path, 
     diagnostics = namespace["plot_loss_curves"](metrics_path, {"parameters": {}})
 
     raw_figure, weighted_figure = diagnostics["figures"]
-    assert [len(figure.axes) for figure in diagnostics["figures"]] == [8, 6]
-    assert all(not axis.axison for axis in raw_figure.axes[:6])
-    assert raw_figure.axes[6].axison
-    assert not raw_figure.axes[7].axison
+    assert [len(figure.axes) for figure in diagnostics["figures"]] == [8, 8]
+    assert all(not axis.axison for axis in raw_figure.axes[:7])
+    assert raw_figure.axes[7].axison
     assert all(not axis.axison for axis in weighted_figure.axes)
     assert "summary" not in diagnostics
     assert "contribution_shares" not in diagnostics

@@ -1,3 +1,5 @@
+import math
+
 import torch
 import torch.nn as nn
 from torch.nn.utils import parameters_to_vector
@@ -5,9 +7,63 @@ import pytorch_lightning as L
 
 from model.layers import Standardization, SelfAttentionBlock, ResidualBlock, WBosonFourVectorLayer
 from model.losses import (
-    angular_loss_mmd, dmet_loss, higgs_mass_loss, kinematic_loss_mmd,
-    standardized_fourvec_huber_loss, w_mass_huber_loss
+    alpha_mmd,
+    angular_mmd,
+    dmet_loss,
+    higgs_mass_loss,
+    mass_mmd,
+    standardized_fourvec_huber_loss,
+    w_mass_huber_loss,
 )
+
+
+DEFAULT_MMD_CONFIG = {
+    "condition": {
+        "kernel": "rbf",
+        "bandwidth_multipliers": [0.5, 1.0, 2.0],
+    },
+    "alpha": {
+        "kernel": "imq",
+        "bandwidth_multipliers": [0.1, 0.25, 0.5, 1.0, 2.0],
+    },
+    "mass": {
+        "kernel": "imq",
+        "bandwidth_multipliers": [0.1, 0.25, 0.5, 1.0, 2.0],
+    },
+    "angular": {
+        "kernel": "rbf",
+        "bandwidth_multipliers": [0.25, 0.5, 1.0, 2.0],
+    },
+}
+
+
+def resolve_mmd_config(config=None):
+    config = {} if config is None else config
+    unknown_sections = set(config) - set(DEFAULT_MMD_CONFIG)
+    if unknown_sections:
+        names = ", ".join(sorted(unknown_sections))
+        raise ValueError(f"unsupported MMD config section(s): {names}")
+
+    resolved = {}
+    for section, defaults in DEFAULT_MMD_CONFIG.items():
+        supplied = config.get(section, {})
+        unknown_keys = set(supplied) - set(defaults)
+        if unknown_keys:
+            names = ", ".join(sorted(unknown_keys))
+            raise ValueError(f"unsupported MMD config key(s) in {section}: {names}")
+        resolved_section = {**defaults, **supplied}
+        if resolved_section["kernel"] not in {"rbf", "imq"}:
+            raise ValueError(f"unsupported MMD kernel in {section}: {resolved_section['kernel']}")
+        multipliers = resolved_section["bandwidth_multipliers"]
+        if not multipliers or not all(
+            math.isfinite(float(value)) and float(value) > 0.0
+            for value in multipliers
+        ):
+            raise ValueError(
+                f"MMD bandwidth_multipliers in {section} must be finite and positive"
+            )
+        resolved[section] = resolved_section
+    return resolved
 
 
 class WBosonRegressor(nn.Module):
@@ -166,7 +222,10 @@ class LightningWBoson(L.LightningModule):
             mmd_cond_scale_train=None,
             w_fourvec_scales=None,
             dmet_scales=None,
+            mass_mmd_center=0.0,
+            mass_mmd_scale=1.0,
             lr=1e-4, weight_decay=1e-4, loss_weights=None,
+            mmd_config=None,
             adaptive_loss_weights=False,
             log_loss_gradient_cosines=False,
             attention_blocks=4,
@@ -174,6 +233,7 @@ class LightningWBoson(L.LightningModule):
             decoder_dropout=0.1,
         ):
         super().__init__()
+        mmd_config = resolve_mmd_config(mmd_config)
         self.save_hyperparameters()
         if w_fourvec_scales is None:
             w_fourvec_scales = torch.ones(4, dtype=torch.float32)
@@ -186,6 +246,14 @@ class LightningWBoson(L.LightningModule):
         self.register_buffer(
             "dmet_scales",
             torch.as_tensor(dmet_scales, dtype=torch.float32).clamp_min(torch.finfo(torch.float32).eps),
+        )
+        self.register_buffer(
+            "mass_mmd_center",
+            torch.as_tensor(mass_mmd_center, dtype=torch.float32),
+        )
+        self.register_buffer(
+            "mass_mmd_scale",
+            torch.as_tensor(mass_mmd_scale, dtype=torch.float32).clamp_min(torch.finfo(torch.float32).eps),
         )
         self.model = WBosonRegressor(
             input_dim, 
@@ -206,9 +274,21 @@ class LightningWBoson(L.LightningModule):
             # met loss
             "dmet": 0.0,
             # auxiliary losses
-            "kinematic_loss_mmd": 0.0,
-            "angular_loss_mmd": 0.0, 
+            "alpha_mmd": 0.0,
+            "mass_mmd": 0.0,
+            "angular_mmd": 0.0,
         }
+        deprecated_loss_names = {
+            "kinematic_loss_mmd": "replace it with separate alpha_mmd and mass_mmd weights",
+            "angular_loss_mmd": "rename it to angular_mmd",
+        }
+        deprecated = set(loss_weights or {}) & deprecated_loss_names.keys()
+        if deprecated:
+            details = "; ".join(
+                f"{name}: {deprecated_loss_names[name]}"
+                for name in sorted(deprecated)
+            )
+            raise ValueError(f"deprecated loss_weights key(s): {details}")
         unsupported_loss_weights = set(loss_weights or {}) - defaults.keys()
         if unsupported_loss_weights:
             names = ", ".join(sorted(unsupported_loss_weights))
@@ -228,6 +308,7 @@ class LightningWBoson(L.LightningModule):
         )
         self.log_loss_gradient_cosines = bool(log_loss_gradient_cosines)
         self._gradient_analysis_batch = None
+        self.mmd_config = mmd_config
         self.lr = lr
 
     @classmethod
@@ -244,6 +325,16 @@ class LightningWBoson(L.LightningModule):
             or self.adaptive_loss_weights and name in self.adaptive_loss_names
         )
 
+    def _mmd_kwargs(self, feature_name):
+        condition = self.mmd_config["condition"]
+        feature = self.mmd_config[feature_name]
+        return {
+            "feature_kernel": feature["kernel"],
+            "condition_kernel": condition["kernel"],
+            "feature_bandwidth_multipliers": feature["bandwidth_multipliers"],
+            "condition_bandwidth_multipliers": condition["bandwidth_multipliers"],
+        }
+
     def _compute_losses(self, x, y, y_pred, cond, aux=None):
         losses = {}
         if self._loss_enabled("huber"):
@@ -256,10 +347,32 @@ class LightningWBoson(L.LightningModule):
             losses["higgs_mass"] = higgs_mass_loss(y_pred)
         if self._loss_enabled("w_mass_huber"):
             losses["w_mass_huber"] = w_mass_huber_loss(y, y_pred)
-        if self._loss_enabled("kinematic_loss_mmd"):
-            losses["kinematic_loss_mmd"] = kinematic_loss_mmd(x, y, y_pred, cond)
-        if self._loss_enabled("angular_loss_mmd"):
-            losses["angular_loss_mmd"] = angular_loss_mmd(x, y, y_pred, cond)
+        if self._loss_enabled("alpha_mmd"):
+            losses["alpha_mmd"] = alpha_mmd(
+                x,
+                y,
+                y_pred,
+                cond,
+                **self._mmd_kwargs("alpha"),
+            )
+        if self._loss_enabled("mass_mmd"):
+            losses["mass_mmd"] = mass_mmd(
+                x,
+                y,
+                y_pred,
+                cond,
+                self.mass_mmd_center,
+                self.mass_mmd_scale,
+                **self._mmd_kwargs("mass"),
+            )
+        if self._loss_enabled("angular_mmd"):
+            losses["angular_mmd"] = angular_mmd(
+                x,
+                y,
+                y_pred,
+                cond,
+                **self._mmd_kwargs("angular"),
+            )
         if self._loss_enabled("dmet"):
             if aux is None or "dmet" not in aux:
                 raise ValueError("dmet loss requires forward(..., return_aux=True) outputs")

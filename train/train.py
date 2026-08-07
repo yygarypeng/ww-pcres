@@ -19,6 +19,7 @@ DEFAULT_CONFIG = REPO_ROOT / "configs/config.yaml"
 
 
 from model import LightningWBoson
+from model.losses import W_MASS_SCALE
 from data import load_data as data
 from data.data_module import WBosonDataModule
 
@@ -117,6 +118,21 @@ def compute_dmet_scales(features, targets):
     return np.maximum(scales, np.finfo(np.float32).eps).astype(np.float32)
 
 
+def compute_mass_mmd_standardization(targets):
+    """Fit one robust scale shared by both charge-ordered W-mass slots."""
+    masses = np.asarray(targets[:, 8:10], dtype=np.float64)
+    transformed = np.arcsinh((masses / W_MASS_SCALE) ** 2).reshape(-1)
+    transformed = transformed[np.isfinite(transformed)]
+    if transformed.size == 0:
+        raise ValueError("cannot fit mass MMD standardization without finite training masses")
+
+    center = np.median(transformed)
+    q25, q75 = np.percentile(transformed, [25.0, 75.0])
+    scale = (q75 - q25) / 1.349
+    scale = max(scale, np.finfo(np.float32).eps)
+    return np.float32(center), np.float32(scale)
+
+
 def build_datamodule(cfg, data_path):
     params = cfg["parameters"]
     splits = data.load_presplit_data(
@@ -145,6 +161,7 @@ def build_datamodule(cfg, data_path):
     standardization, _ = data.compute_standardization_stats(X_train, Y_train)
     mmd_condition_standardization = data.compute_mmd_condition_stats(X_train)
     w_fourvec_scales = compute_w_fourvec_scales(Y_train)
+    mass_mmd_standardization = compute_mass_mmd_standardization(Y_train)
     dmet_scales = compute_dmet_scales(X_train, Y_train)
     return (
         dm,
@@ -152,6 +169,7 @@ def build_datamodule(cfg, data_path):
         standardization,
         mmd_condition_standardization,
         w_fourvec_scales,
+        mass_mmd_standardization,
         dmet_scales,
     )
 
@@ -203,6 +221,7 @@ def run_training(
     standardization,
     mmd_condition_standardization,
     w_fourvec_scales,
+    mass_mmd_standardization,
     dmet_scales,
     saved_path,
     arg,
@@ -210,6 +229,7 @@ def run_training(
     params = cfg["parameters"]
     std_mean_train, std_scale_train = standardization
     mmd_cond_mean_train, mmd_cond_scale_train = mmd_condition_standardization
+    mass_mmd_center, mass_mmd_scale = mass_mmd_standardization
     print("Starting training...")
     print(f"Input dimension: {input_dim}")
     model = LightningWBoson(
@@ -219,10 +239,13 @@ def run_training(
         mmd_cond_mean_train=mmd_cond_mean_train,
         mmd_cond_scale_train=mmd_cond_scale_train,
         w_fourvec_scales=w_fourvec_scales,
+        mass_mmd_center=mass_mmd_center,
+        mass_mmd_scale=mass_mmd_scale,
         dmet_scales=dmet_scales,
         lr=params["learning_rate"],
         weight_decay=params.get("weight_decay", 1e-4),
         loss_weights=params["loss_weights"],
+        mmd_config=cfg.get("mmd", {}),
         adaptive_loss_weights=params.get("adaptive_loss_weights", False),
         log_loss_gradient_cosines=params.get("log_loss_gradient_cosines", False),
         d_model=params["d_model"],
@@ -299,6 +322,7 @@ def main(train=True, arg=None, config_path=DEFAULT_CONFIG):
         standardization,
         mmd_condition_standardization,
         w_fourvec_scales,
+        mass_mmd_standardization,
         dmet_scales,
     ) = build_datamodule(cfg, data_path)
     if not train:
@@ -313,6 +337,7 @@ def main(train=True, arg=None, config_path=DEFAULT_CONFIG):
         standardization,
         mmd_condition_standardization,
         w_fourvec_scales,
+        mass_mmd_standardization,
         dmet_scales,
         saved_path,
         arg,
