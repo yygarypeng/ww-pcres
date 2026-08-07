@@ -133,7 +133,8 @@ def higgs_mass_loss(y_pred):
     h_mass2 = invariant_mass2(higgs_4)
     h_mass = torch.sqrt(torch.clamp(h_mass2, min=TOR))
 
-    return F.huber_loss(h_mass , torch.full_like(h_mass, H_MASS_SCALE), delta=20)
+    return F.huber_loss(h_mass , torch.full_like(h_mass, H_MASS_SCALE), delta=2)
+    # return F.l1_loss(h_mass , torch.full_like(h_mass, H_MASS_SCALE))
 
 def dmet_loss(x_batch, y_true, dmet, component_scales):
     true_w0 = y_true[..., :4]
@@ -190,7 +191,8 @@ def kinematic_loss_mmd(x_batch, y_true, y_pred, cond):
 
     true_features = _features_for_mmd(y_true[..., :8])
     pred_features = _features_for_mmd(y_pred)
-    return compute_local_mmd(pred_features, true_features, cond=cond)
+    _sig_lst = [0.01, 0.03, 0.05, 0.1]
+    return compute_local_mmd(pred_features, true_features, cond=cond, base_bandwidth_range=_sig_lst, kernel="imq")
 
 def angular_loss_mmd(x_batch, y_true, y_pred, cond):
     if cond.shape[-1] == 0:
@@ -231,8 +233,8 @@ def angular_loss_mmd(x_batch, y_true, y_pred, cond):
     pred_ang = _features_for_mmd(pred_ang)
 
     cond = cond[valid]
-    _sigma_lst = [0.01, 0.03, 0.05, 0.07, 0.1, 0.3, 0.5, 0.7]
-    return compute_local_mmd(pred_ang, true_ang, cond=cond, base_bandwidth_range=_sigma_lst)
+    _sigma_lst = [0.01, 0.05, 0.1, 0.5, 1.0]
+    return compute_local_mmd(pred_ang, true_ang, cond=cond, base_bandwidth_range=_sigma_lst, kernel="rbf")
 
 #############################
 ## Archived loss functions ##
