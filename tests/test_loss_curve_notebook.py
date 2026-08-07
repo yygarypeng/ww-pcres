@@ -293,13 +293,18 @@ def test_plot_loss_curves_builds_two_slide_subplot_figures(tmp_path, capsys):
     assert total_lines["total:val"].get_color() == "tab:orange"
     np.testing.assert_array_equal(total_lines["best_epoch"].get_xdata(), [1, 1])
     assert not raw_figure.axes[7].axison
-    assert len(raw_figure.legends) == 1
-    assert len(weighted_figure.legends) == 1
-    for figure in diagnostics["figures"]:
+    assert len(raw_figure.legends) == 0
+    assert len(weighted_figure.legends) == 0
+    assert raw_figure.axes[3].get_legend() is not None
+    assert weighted_figure.axes[2].get_legend() is not None
+    for figure, legend_index in (
+        (raw_figure, 3),
+        (weighted_figure, 2),
+    ):
         figure.canvas.draw()
         renderer = figure.canvas.get_renderer()
         title_bounds = figure._suptitle.get_window_extent(renderer)
-        legend_bounds = figure.legends[0].get_window_extent(renderer)
+        legend_bounds = figure.axes[legend_index].get_legend().get_window_extent(renderer)
         assert not title_bounds.overlaps(legend_bounds)
     output = capsys.readouterr().out
     assert "could not be reconstructed exactly for: validation" in output
