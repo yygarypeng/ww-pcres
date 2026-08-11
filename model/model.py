@@ -42,6 +42,7 @@ DEFAULT_MMD_CONFIG = {
         "bandwidth_multipliers": [0.01, 0.05, 0.1, 0.5, 1.0, 5],
     },
 }
+MMD_LOSS_NAMES = {"alpha_mmd", "mass_mmd", "angular_mmd"}
 
 
 def resolve_mmd_config(config=None):
@@ -238,6 +239,7 @@ class LightningWBoson(L.LightningModule):
             mass_mmd_scale=1.0,
             lr=1e-4, weight_decay=1e-4, loss_weights=None,
             mmd_config=None,
+            mmd_start_epoch=0,
             adaptive_loss_weights=False,
             log_loss_gradient_cosines=False,
             higgs_mass_delta=2.0,
@@ -252,6 +254,8 @@ class LightningWBoson(L.LightningModule):
                 f"input preprocessing version must be {INPUT_PREPROCESSING_VERSION}; "
                 "retraining required for incompatible checkpoints"
             )
+        if mmd_start_epoch < 0:
+            raise ValueError("mmd_start_epoch must be non-negative")
         mmd_config = resolve_mmd_config(mmd_config)
         self.save_hyperparameters()
         if w_fourvec_scales is None:
@@ -328,6 +332,7 @@ class LightningWBoson(L.LightningModule):
         self.log_loss_gradient_cosines = bool(log_loss_gradient_cosines)
         self._gradient_analysis_batch = None
         self.mmd_config = mmd_config
+        self.mmd_start_epoch = mmd_start_epoch
         self.higgs_mass_delta = float(higgs_mass_delta)
         self.lr = lr
 
@@ -357,10 +362,29 @@ class LightningWBoson(L.LightningModule):
     def forward(self, x, return_aux=False):
         return self.model(x, return_aux=return_aux)
 
-    def _loss_enabled(self, name):
+    def _mmd_is_warming_up(self):
         return (
-            self.loss_weights.get(name, 0.0) != 0.0
-            or self.adaptive_loss_weights and name in self.adaptive_loss_names
+            self.training
+            and self.current_epoch < self.mmd_start_epoch
+        )
+
+    def _effective_loss_weights(self):
+        if not self._mmd_is_warming_up():
+            return self.loss_weights
+        return {
+            name: 0.0 if name in MMD_LOSS_NAMES else weight
+            for name, weight in self.loss_weights.items()
+        }
+
+    def _loss_enabled(self, name, weights=None):
+        weights = self._effective_loss_weights() if weights is None else weights
+        return (
+            weights.get(name, 0.0) != 0.0
+            or (
+                self.adaptive_loss_weights
+                and name in self.adaptive_loss_names
+                and not (name in MMD_LOSS_NAMES and self._mmd_is_warming_up())
+            )
         )
 
     def _mmd_kwargs(self, feature_name):
@@ -375,20 +399,21 @@ class LightningWBoson(L.LightningModule):
 
     def _compute_losses(self, x, y, y_pred, cond, aux=None):
         losses = {}
-        if self._loss_enabled("huber"):
+        weights = self._effective_loss_weights()
+        if self._loss_enabled("huber", weights):
             losses["huber"] = standardized_fourvec_huber_loss(
                 y,
                 y_pred,
                 self.w_fourvec_scales,
             )
-        if self._loss_enabled("higgs_mass"):
+        if self._loss_enabled("higgs_mass", weights):
             losses["higgs_mass"] = higgs_mass_loss(
                 y_pred,
                 delta=self.higgs_mass_delta,
             )
-        if self._loss_enabled("w_mass_huber"):
+        if self._loss_enabled("w_mass_huber", weights):
             losses["w_mass_huber"] = w_mass_huber_loss(y, y_pred)
-        if self._loss_enabled("alpha_mmd"):
+        if self._loss_enabled("alpha_mmd", weights):
             losses["alpha_mmd"] = alpha_mmd(
                 x,
                 y,
@@ -396,7 +421,7 @@ class LightningWBoson(L.LightningModule):
                 cond,
                 **self._mmd_kwargs("alpha"),
             )
-        if self._loss_enabled("mass_mmd"):
+        if self._loss_enabled("mass_mmd", weights):
             losses["mass_mmd"] = mass_mmd(
                 x,
                 y,
@@ -406,7 +431,7 @@ class LightningWBoson(L.LightningModule):
                 self.mass_mmd_scale,
                 **self._mmd_kwargs("mass"),
             )
-        if self._loss_enabled("angular_mmd"):
+        if self._loss_enabled("angular_mmd", weights):
             losses["angular_mmd"] = angular_mmd(
                 x,
                 y,
@@ -414,12 +439,12 @@ class LightningWBoson(L.LightningModule):
                 cond,
                 **self._mmd_kwargs("angular"),
             )
-        if self._loss_enabled("dmet"):
+        if self._loss_enabled("dmet", weights):
             if aux is None or "dmet" not in aux:
                 raise ValueError("dmet loss requires forward(..., return_aux=True) outputs")
             losses["dmet"] = dmet_loss(x, y, aux["dmet"], self.dmet_scales)
 
-        total = self._weighted_total_loss(losses)
+        total = self._weighted_total_loss(losses, weights)
         return total, losses
 
     def _compute_batch_losses(self, x, y):
@@ -509,7 +534,7 @@ class LightningWBoson(L.LightningModule):
             self.log(f"{prefix}{k}_loss", v.detach(), prog_bar=False, on_step=False, on_epoch=True)
 
     def _log_loss_weights(self):
-        for name, weight in self.loss_weights.items():
+        for name, weight in self._effective_loss_weights().items():
             self.log(f"loss_weight/{name}", weight, prog_bar=False, on_step=True, on_epoch=False)
 
     def _log_grad_cosines(self, cosines):

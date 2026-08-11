@@ -6,6 +6,7 @@ parameters:
   weight_decay: 1.0e-4
   early_stopping_patience: 32
   early_stopping_min_delta: 0.0
+  mmd_start_epoch: 0
   gradient_clip_val: 1.0
   adaptive_loss_weights: false
   log_loss_gradient_cosines: false

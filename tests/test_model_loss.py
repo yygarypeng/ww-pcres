@@ -1,4 +1,5 @@
 import unittest
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import numpy as np
@@ -204,6 +205,100 @@ class HiggsMassLossTest(unittest.TestCase):
 
 
 class LightningModelLossTest(unittest.TestCase):
+    def _warmup_model(self, mmd_start_epoch=100):
+        kwargs = {}
+        if mmd_start_epoch is not None:
+            kwargs["mmd_start_epoch"] = mmd_start_epoch
+        return LightningWBoson(
+            input_dim=22,
+            d_model=8,
+            num_heads=2,
+            std_mean_train=np.zeros(24, dtype=np.float32),
+            std_scale_train=np.ones(24, dtype=np.float32),
+            loss_weights={
+                "huber": 2.0,
+                "alpha_mmd": 3.0,
+                "mass_mmd": 4.0,
+                "angular_mmd": 5.0,
+            },
+            **kwargs,
+        )
+
+    def _computed_loss_names(self, model):
+        inputs = torch.zeros((2, 22))
+        targets = torch.zeros((2, 10))
+        predictions = torch.zeros((2, 8))
+        condition = torch.zeros((2, 6))
+        loss_value = torch.tensor(1.0)
+        with (
+            patch("model.model.standardized_fourvec_huber_loss", return_value=loss_value),
+            patch("model.model.alpha_mmd", return_value=loss_value),
+            patch("model.model.mass_mmd", return_value=loss_value),
+            patch("model.model.angular_mmd", return_value=loss_value),
+        ):
+            _, losses = model._compute_losses(inputs, targets, predictions, condition)
+        return set(losses)
+
+    def test_training_warmup_disables_mmd_but_keeps_non_mmd_losses(self):
+        model = self._warmup_model()
+        model.trainer = SimpleNamespace(current_epoch=99)
+
+        self.assertEqual(self._computed_loss_names(model), {"huber"})
+
+    def test_evaluation_keeps_mmd_enabled_during_training_warmup(self):
+        model = self._warmup_model().eval()
+        model.trainer = SimpleNamespace(current_epoch=99)
+
+        self.assertEqual(
+            self._computed_loss_names(model),
+            {"huber", "alpha_mmd", "mass_mmd", "angular_mmd"},
+        )
+
+    def test_training_enables_mmd_at_start_epoch(self):
+        model = self._warmup_model()
+        model.trainer = SimpleNamespace(current_epoch=100)
+
+        self.assertEqual(
+            self._computed_loss_names(model),
+            {"huber", "alpha_mmd", "mass_mmd", "angular_mmd"},
+        )
+
+    def test_default_mmd_start_epoch_enables_mmd_immediately(self):
+        model = self._warmup_model(mmd_start_epoch=None)
+
+        self.assertEqual(
+            self._computed_loss_names(model),
+            {"huber", "alpha_mmd", "mass_mmd", "angular_mmd"},
+        )
+
+    def test_rejects_negative_mmd_start_epoch(self):
+        with self.assertRaisesRegex(ValueError, "mmd_start_epoch"):
+            self._warmup_model(mmd_start_epoch=-1)
+
+    def test_logs_effective_mmd_weights_without_mutating_configured_weights(self):
+        model = self._warmup_model()
+        configured_weights = dict(model.loss_weights)
+        model.trainer = SimpleNamespace(current_epoch=99)
+
+        with patch.object(model, "log") as log:
+            model._log_loss_weights()
+        warmup_logs = {call.args[0]: call.args[1] for call in log.call_args_list}
+
+        self.assertEqual(warmup_logs["loss_weight/huber"], 2.0)
+        self.assertEqual(warmup_logs["loss_weight/alpha_mmd"], 0.0)
+        self.assertEqual(warmup_logs["loss_weight/mass_mmd"], 0.0)
+        self.assertEqual(warmup_logs["loss_weight/angular_mmd"], 0.0)
+
+        model.trainer = SimpleNamespace(current_epoch=100)
+        with patch.object(model, "log") as log:
+            model._log_loss_weights()
+        active_logs = {call.args[0]: call.args[1] for call in log.call_args_list}
+
+        self.assertEqual(active_logs["loss_weight/alpha_mmd"], 3.0)
+        self.assertEqual(active_logs["loss_weight/mass_mmd"], 4.0)
+        self.assertEqual(active_logs["loss_weight/angular_mmd"], 5.0)
+        self.assertEqual(model.loss_weights, configured_weights)
+
     def test_weight_decay_is_forwarded_to_optimizer(self):
         model = LightningWBoson(
             input_dim=22,
