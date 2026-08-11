@@ -5,6 +5,13 @@ import torch.nn as nn
 from torch.nn.utils import parameters_to_vector
 import pytorch_lightning as L
 
+from data.preprocessing import (
+    INPUT_PREPROCESSING_VERSION,
+    NEURAL_INPUT_DIM,
+    RAW_INPUT_DIM,
+    neural_input_features_torch,
+    normalize_negative_energy_jets_torch,
+)
 from model.layers import Standardization, SelfAttentionBlock, ResidualBlock, WBosonFourVectorLayer
 from model.losses import (
     alpha_mmd,
@@ -19,20 +26,20 @@ from model.losses import (
 
 DEFAULT_MMD_CONFIG = {
     "condition": {
-        "kernel": "rbf",
-        "bandwidth_multipliers": [0.5, 1.0, 2.0],
+        "kernel": "imq",
+        "bandwidth_multipliers": [0.01, 0.05, 0.1, 0.5, 1.0, 5],
     },
     "alpha": {
         "kernel": "imq",
-        "bandwidth_multipliers": [0.1, 0.25, 0.5, 1.0, 2.0],
+        "bandwidth_multipliers": [0.01, 0.05, 0.1, 0.5, 1.0, 5],
     },
     "mass": {
         "kernel": "imq",
-        "bandwidth_multipliers": [0.1, 0.25, 0.5, 1.0, 2.0],
+        "bandwidth_multipliers": [0.01, 0.05, 0.1, 0.5, 1.0, 5],
     },
     "angular": {
-        "kernel": "rbf",
-        "bandwidth_multipliers": [0.25, 0.5, 1.0, 2.0],
+        "kernel": "imq",
+        "bandwidth_multipliers": [0.01, 0.05, 0.1, 0.5, 1.0, 5],
     },
 }
 
@@ -79,7 +86,18 @@ class WBosonRegressor(nn.Module):
             decoder_dropout=0.1,
         ):
         super().__init__()
-        
+
+        if input_dim != RAW_INPUT_DIM:
+            raise ValueError(
+                f"raw input contract requires input_dim={RAW_INPUT_DIM}, got {input_dim}; "
+                "retraining required for incompatible checkpoints"
+            )
+        if len(std_mean_train) != NEURAL_INPUT_DIM or len(std_scale_train) != NEURAL_INPUT_DIM:
+            raise ValueError(
+                f"normalization statistics must each contain {NEURAL_INPUT_DIM} values; "
+                "retraining required for incompatible checkpoints"
+            )
+
         # do the normalization (need to use large batch size for stable stats)
         self.norm = Standardization(std_mean_train, std_scale_train)
         if (mmd_cond_mean_train is None) != (mmd_cond_scale_train is None):
@@ -91,9 +109,7 @@ class WBosonRegressor(nn.Module):
             raise ValueError("MMD condition mean and scale must each contain 6 values")
         self.cond_norm = Standardization(mmd_cond_mean_train, mmd_cond_scale_train)
         self.base_input_dim = 18 # w/o high-level features
-        self.hl_input_dim = input_dim - self.base_input_dim
-        if self.hl_input_dim < 0:
-            raise ValueError(f"input_dim must be at least {self.base_input_dim}, got {input_dim}")
+        self.hl_input_dim = NEURAL_INPUT_DIM - self.base_input_dim
         
         # Object-specific embeddings avoid forcing charge/order symmetry too early.
         self.lep0_embed = nn.Linear(4, d_model)
@@ -120,9 +136,7 @@ class WBosonRegressor(nn.Module):
             ResidualBlock(512, 512, hidden_dim=512, dropout=decoder_dropout),
             ResidualBlock(512, 256, hidden_dim=512, dropout=decoder_dropout),
             ResidualBlock(256, 256, hidden_dim=256, dropout=decoder_dropout),
-            ResidualBlock(256, 256, hidden_dim=256, dropout=decoder_dropout),
             ResidualBlock(256, 128, hidden_dim=256, dropout=decoder_dropout),
-            ResidualBlock(128, 128, hidden_dim=128, dropout=decoder_dropout),
             ResidualBlock(128, 128, hidden_dim=128, dropout=decoder_dropout),
         )
 
@@ -131,26 +145,22 @@ class WBosonRegressor(nn.Module):
             nn.LayerNorm(128),
             nn.Linear(128, 64),
             nn.GELU(),
-            nn.Linear(64, 16),
-            nn.GELU(),
-            nn.Linear(16, 4)
+            nn.Linear(64, 4)
         )
         # Latent regression head layout: [dmet_x, dmet_y]
         self.nu_dmet_head = nn.Sequential(
             nn.LayerNorm(128),
             nn.Linear(128, 32),
             nn.GELU(),
-            nn.Linear(32, 8),
-            nn.GELU(),
-            nn.Linear(8, 2)
+            nn.Linear(32, 2)
         )
         
         # W bosons decoder
         self.w_layer = WBosonFourVectorLayer()
 
     def global_feature_aggregation(self, x):
-        # standardize input features
-        x_std = self.norm(x)
+        x = normalize_negative_energy_jets_torch(x)
+        x_std = self.norm(neural_input_features_torch(x))
 
         # embedding to get initial context
         l0 = self.lep0_embed(x_std[:, 0:4])
@@ -179,8 +189,8 @@ class WBosonRegressor(nn.Module):
         return context.reshape(batch_size, -1)
 
     def _mmd_condition(self, x):
-        if x.shape[-1] < 22:
-            return x.new_empty((*x.shape[:-1], 0))
+        if x.shape[-1] != RAW_INPUT_DIM:
+            raise ValueError(f"raw input contract requires {RAW_INPUT_DIM} features")
 
         condition = torch.stack([
             x[..., 18],
@@ -190,9 +200,11 @@ class WBosonRegressor(nn.Module):
             torch.sin(x[..., 21]),
             torch.cos(x[..., 21]),
         ], dim=-1)
-        return self.cond_norm(condition)
+        standardized = self.cond_norm(condition)
+        return torch.cat([standardized[..., :2], condition[..., 2:]], dim=-1)
 
     def forward(self, x, return_aux=False):
+        x = normalize_negative_energy_jets_torch(x)
         lep0, lep1 = x[..., :4], x[..., 4:8]
         met = x[..., 16:18]
         h = self.global_feature_aggregation(x)
@@ -228,11 +240,18 @@ class LightningWBoson(L.LightningModule):
             mmd_config=None,
             adaptive_loss_weights=False,
             log_loss_gradient_cosines=False,
+            higgs_mass_delta=2.0,
+            input_preprocessing_version=INPUT_PREPROCESSING_VERSION,
             attention_blocks=4,
             attention_dropout=0.1,
             decoder_dropout=0.1,
         ):
         super().__init__()
+        if input_preprocessing_version != INPUT_PREPROCESSING_VERSION:
+            raise ValueError(
+                f"input preprocessing version must be {INPUT_PREPROCESSING_VERSION}; "
+                "retraining required for incompatible checkpoints"
+            )
         mmd_config = resolve_mmd_config(mmd_config)
         self.save_hyperparameters()
         if w_fourvec_scales is None:
@@ -301,7 +320,7 @@ class LightningWBoson(L.LightningModule):
         # todo: exclude huber
         self.adaptive_loss_names = [
             name for name, weight in self.loss_weights.items()
-            if weight != 0.0 and name not in {"huber"}
+            # if weight != 0.0 and name not in {"huber"}
         ]
         self.adaptive_loss_budget = sum(
             self.loss_weights[name] for name in self.adaptive_loss_names
@@ -309,12 +328,31 @@ class LightningWBoson(L.LightningModule):
         self.log_loss_gradient_cosines = bool(log_loss_gradient_cosines)
         self._gradient_analysis_batch = None
         self.mmd_config = mmd_config
+        self.higgs_mass_delta = float(higgs_mass_delta)
         self.lr = lr
 
     @classmethod
     def load_for_inference(cls, checkpoint_path, **kwargs):
         kwargs["loss_weights"] = {}
         return cls.load_from_checkpoint(checkpoint_path, **kwargs)
+
+    def on_load_checkpoint(self, checkpoint):
+        hparams = checkpoint.get("hyper_parameters", {})
+        state = checkpoint.get("state_dict", {})
+        version = hparams.get("input_preprocessing_version")
+        expected_shapes = {
+            "model.norm.mean": (NEURAL_INPUT_DIM,),
+            "model.norm.std": (NEURAL_INPUT_DIM,),
+            "model.hl_embed.weight": (self.model.hl_embed.out_features, self.model.hl_input_dim),
+        }
+        invalid_shape = any(
+            name not in state or tuple(state[name].shape) != expected
+            for name, expected in expected_shapes.items()
+        )
+        if version != INPUT_PREPROCESSING_VERSION or invalid_shape:
+            raise RuntimeError(
+                "checkpoint uses an incompatible input preprocessing schema; retraining required"
+            )
 
     def forward(self, x, return_aux=False):
         return self.model(x, return_aux=return_aux)
@@ -344,7 +382,10 @@ class LightningWBoson(L.LightningModule):
                 self.w_fourvec_scales,
             )
         if self._loss_enabled("higgs_mass"):
-            losses["higgs_mass"] = higgs_mass_loss(y_pred)
+            losses["higgs_mass"] = higgs_mass_loss(
+                y_pred,
+                delta=self.higgs_mass_delta,
+            )
         if self._loss_enabled("w_mass_huber"):
             losses["w_mass_huber"] = w_mass_huber_loss(y, y_pred)
         if self._loss_enabled("alpha_mmd"):

@@ -3,6 +3,8 @@ AGENTS.md
 
 # Local configuration
 configs/config.yaml
+configs/config_v4.yaml
+configs/config_v61.yaml
 
 # Python caches and build outputs
 __pycache__/

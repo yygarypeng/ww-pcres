@@ -11,6 +11,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.append(str(REPO_ROOT))
 
 from model import LightningWBoson
+from data import RAW_INPUT_DIM
 from train import load_config
 
 
@@ -75,6 +76,26 @@ def find_checkpoint(saved_path, checkpoint=None):
     return candidates[0]
 
 
+def make_valid_raw_inputs(batch_size, seed=0):
+    generator = torch.Generator(device="cpu").manual_seed(seed)
+    inputs = torch.randn(batch_size, RAW_INPUT_DIM, generator=generator)
+
+    for start in (0, 4, 8, 12):
+        momentum = inputs[:, start:start + 3]
+        inputs[:, start + 3] = (
+            torch.linalg.vector_norm(momentum, dim=1)
+            + torch.rand(batch_size, generator=generator)
+            + 0.1
+        )
+
+    missing_slots = ((), (0,), (1,), (0, 1))
+    for row in range(batch_size):
+        for slot in missing_slots[row % len(missing_slots)]:
+            start = 8 + 4 * slot
+            inputs[row, start:start + 4] = 0.0
+    return inputs
+
+
 def main():
     parser = argparse.ArgumentParser(description="Export a Lightning checkpoint to ONNX")
     parser.add_argument("--config", "-c", default=str(REPO_ROOT / "configs/config.yaml"), help="Path to YAML config file")
@@ -98,8 +119,7 @@ def main():
     if args.opset <= 11:
         replace_multihead_attention_for_opset11(model)
 
-    input_dim = int(model.hparams.input_dim)
-    example_input = torch.randn(args.batch_size, input_dim, device="cpu")
+    example_input = make_valid_raw_inputs(args.batch_size)
     output_path = Path(args.output)
 
     torch.onnx.export(

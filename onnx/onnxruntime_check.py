@@ -8,7 +8,7 @@ import torch
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.append(str(REPO_ROOT))
 
-from convert_to_onnx import find_checkpoint
+from convert_to_onnx import find_checkpoint, make_valid_raw_inputs
 from model import LightningWBoson
 from train import load_config
 
@@ -42,9 +42,7 @@ def main():
     )
     pytorch_model.eval()
 
-    rng = np.random.default_rng(args.seed)
-    input_dim = int(pytorch_model.hparams.input_dim)
-    test_input = rng.standard_normal((args.batch_size, input_dim), dtype=np.float32)
+    test_input = make_valid_raw_inputs(args.batch_size, seed=args.seed).numpy()
 
     input_name = ort_session.get_inputs()[0].name
     ort_result = ort_session.run(None, {input_name: test_input})[0]
