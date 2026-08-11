@@ -205,7 +205,7 @@ class HiggsMassLossTest(unittest.TestCase):
 
 
 class LightningModelLossTest(unittest.TestCase):
-    def _warmup_model(self, mmd_start_epoch=100):
+    def _warmup_model(self, mmd_start_epoch=100, adaptive_loss_weights=False):
         kwargs = {}
         if mmd_start_epoch is not None:
             kwargs["mmd_start_epoch"] = mmd_start_epoch
@@ -221,6 +221,7 @@ class LightningModelLossTest(unittest.TestCase):
                 "mass_mmd": 4.0,
                 "angular_mmd": 5.0,
             },
+            adaptive_loss_weights=adaptive_loss_weights,
             **kwargs,
         )
 
@@ -298,6 +299,26 @@ class LightningModelLossTest(unittest.TestCase):
         self.assertEqual(active_logs["loss_weight/mass_mmd"], 4.0)
         self.assertEqual(active_logs["loss_weight/angular_mmd"], 5.0)
         self.assertEqual(model.loss_weights, configured_weights)
+
+    def test_adaptive_warmup_preserves_budget_and_mmd_weights(self):
+        model = self._warmup_model(adaptive_loss_weights=True)
+        model.trainer = SimpleNamespace(current_epoch=99)
+        configured_weights = dict(model.loss_weights)
+        cosines = {
+            "huber": {"total": torch.tensor(0.0)},
+            "higgs_mass": {"total": torch.tensor(0.5)},
+        }
+
+        model._update_adaptive_loss_weights(cosines)
+
+        self.assertAlmostEqual(
+            sum(model.loss_weights.values()),
+            sum(configured_weights.values()),
+        )
+        for name in ("alpha_mmd", "mass_mmd", "angular_mmd"):
+            self.assertEqual(model.loss_weights[name], configured_weights[name])
+        self.assertNotEqual(model.loss_weights["huber"], configured_weights["huber"])
+        self.assertNotEqual(model.loss_weights["higgs_mass"], configured_weights["higgs_mass"])
 
     def test_weight_decay_is_forwarded_to_optimizer(self):
         model = LightningWBoson(
