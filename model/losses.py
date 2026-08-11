@@ -157,14 +157,14 @@ def w_mass_huber_loss(y_true, y_pred):
     w_lst_pred = torch.stack([w0_mass2, w1_mass2], dim=-1) / W_MASS_SCALE**2
     return F.huber_loss(w_lst_pred, w_lst_true)
 
-def higgs_mass_loss(y_pred):
+def higgs_mass_loss(y_pred, delta=2):
     w0_4, w1_4 = y_pred[..., :4], y_pred[..., 4:8]
 
     higgs_4 = w0_4 + w1_4
     h_mass2 = invariant_mass2(higgs_4)
     h_mass = torch.sqrt(torch.clamp(h_mass2, min=TOR))
 
-    return F.huber_loss(h_mass , torch.full_like(h_mass, H_MASS_SCALE), delta=2)
+    return F.huber_loss(h_mass , torch.full_like(h_mass, H_MASS_SCALE), delta=delta)
     # return F.l1_loss(h_mass , torch.full_like(h_mass, H_MASS_SCALE))
 
 def dmet_loss(x_batch, y_true, dmet, component_scales):

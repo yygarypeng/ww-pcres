@@ -20,6 +20,7 @@ DEFAULT_CONFIG = REPO_ROOT / "configs/config.yaml"
 
 from model import LightningWBoson
 from model.losses import W_MASS_SCALE
+from data import compute_neural_input_stats
 from data import load_data as data
 from data.data_module import WBosonDataModule
 
@@ -158,7 +159,7 @@ def build_datamodule(cfg, data_path):
         prefetch_factor=params.get("prefetch_factor", 2),
     )
     dm.setup()
-    standardization, _ = data.compute_standardization_stats(X_train, Y_train)
+    standardization = compute_neural_input_stats(X_train)
     mmd_condition_standardization = data.compute_mmd_condition_stats(X_train)
     w_fourvec_scales = compute_w_fourvec_scales(Y_train)
     mass_mmd_standardization = compute_mass_mmd_standardization(Y_train)
@@ -248,6 +249,7 @@ def run_training(
         mmd_config=cfg.get("mmd", {}),
         adaptive_loss_weights=params.get("adaptive_loss_weights", False),
         log_loss_gradient_cosines=params.get("log_loss_gradient_cosines", False),
+        higgs_mass_delta=params.get("higgs_mass_delta", 2.0),
         d_model=params["d_model"],
         num_heads=params["n_heads"],
         attention_blocks=params.get("attention_blocks", 4),
@@ -270,6 +272,16 @@ def run_training(
         log_every_n_steps=steps_per_epoch,
         gradient_clip_val=params.get("gradient_clip_val", 1.0),
     )
+    resume_from = getattr(arg, "resume_from", None)
+    if resume_from:
+        resume_path = resolve_repo_path(resume_from)
+        print(f"Loading weights from checkpoint: {resume_path}")
+        checkpoint_model = LightningWBoson.load_from_checkpoint(
+            resume_path,
+            map_location="cpu",
+            weights_only=False,
+        )
+        model.load_state_dict(checkpoint_model.state_dict(), strict=True)
     trainer.fit(model, datamodule=dm)
 
     if dm.test_ds is not None and len(dm.test_ds) > 0:
@@ -360,6 +372,10 @@ def parse_args():
         "--max-events-per-category",
         type=int,
         help="Override data.max_events_per_category for short ablation runs",
+    )
+    parser.add_argument(
+        "--resume-from",
+        help="Path to a checkpoint to resume training from (weights + optimizer state)",
     )
     parser.add_argument("--run-name", help="Optional run name for loggers")
     parser.add_argument("--wandb-project", default="PCRES-regressor", help="W&B project name")

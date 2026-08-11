@@ -3,6 +3,7 @@ import h5py
 
 from sklearn.preprocessing import StandardScaler
 
+from data.preprocessing import normalize_negative_energy_jets_numpy, valid_input_energy_rows
 from physics import eta, phi, deta, dphi
 
 
@@ -70,8 +71,12 @@ def mmd_condition_features(features):
 
 def compute_mmd_condition_stats(train_obj):
     condition = mmd_condition_features(train_obj)
-    scaler = StandardScaler().fit(condition)
-    return scaler.mean_, scaler.scale_
+    scaler = StandardScaler().fit(condition[:, :2])
+    mean = np.zeros(condition.shape[1], dtype=scaler.mean_.dtype)
+    scale = np.ones(condition.shape[1], dtype=scaler.scale_.dtype)
+    mean[:2] = scaler.mean_
+    scale[:2] = scaler.scale_
+    return mean, scale
 
 
 def compute_standardization_stats(train_obj, target_obj=None, train_indices=None):
@@ -278,11 +283,14 @@ def load_data(
     print("Training objects shape:", train_obj.shape)
     print("Target objects shape:", target_obj.shape)
 
+    train_obj = normalize_negative_energy_jets_numpy(train_obj)
+
     # Remove rows with non-finite values or invalid truth W kinematics
     valid_train = np.isfinite(train_obj).all(axis=1)
     valid_target = np.isfinite(target_obj).all(axis=1)
     valid_physics = _valid_truth_w_rows(target_obj)
-    valid_idx = valid_train & valid_target & valid_physics
+    valid_input_energy = valid_input_energy_rows(train_obj)
+    valid_idx = valid_train & valid_target & valid_physics & valid_input_energy
 
     train_obj = train_obj[valid_idx]
     target_obj = target_obj[valid_idx]
@@ -290,7 +298,7 @@ def load_data(
     print(
         "Removed",
         (~valid_idx).sum(),
-        "rows with non-finite features/targets or physically invalid truth W kinematics",
+        "rows with non-finite values, invalid input energies, or invalid truth W kinematics",
     )
     
     (std_mean_train, std_scale_train), (std_mean_target, std_scale_target) = compute_standardization_stats(

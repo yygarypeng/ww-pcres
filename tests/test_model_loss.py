@@ -61,11 +61,11 @@ class StandardizedFourVectorHuberTest(unittest.TestCase):
     def test_scales_are_saved_in_model_state(self):
         scales = np.array([2.0, 3.0, 4.0, 5.0], dtype=np.float32)
         model = LightningWBoson(
-            input_dim=18,
+            input_dim=22,
             d_model=8,
             num_heads=2,
-            std_mean_train=np.zeros(18, dtype=np.float32),
-            std_scale_train=np.ones(18, dtype=np.float32),
+            std_mean_train=np.zeros(24, dtype=np.float32),
+            std_scale_train=np.ones(24, dtype=np.float32),
             w_fourvec_scales=scales,
         )
 
@@ -75,7 +75,7 @@ class StandardizedFourVectorHuberTest(unittest.TestCase):
 
 class StandardizedDmetHuberTest(unittest.TestCase):
     def test_compute_scales_uses_training_dmet_components(self):
-        features = np.zeros((3, 18), dtype=np.float32)
+        features = np.zeros((3, 22), dtype=np.float32)
         targets = np.zeros((3, 10), dtype=np.float32)
         nu0_t = np.array([[2.0, -1.0], [4.0, -2.0], [6.0, -3.0]], dtype=np.float32)
         nu1_t = np.array([[-3.0, 5.0], [-6.0, 10.0], [-9.0, 15.0]], dtype=np.float32)
@@ -91,7 +91,7 @@ class StandardizedDmetHuberTest(unittest.TestCase):
         np.testing.assert_allclose(scales, np.std(expected_dmet, axis=0))
 
     def test_compute_scales_clamps_constant_components(self):
-        features = np.zeros((3, 18), dtype=np.float32)
+        features = np.zeros((3, 22), dtype=np.float32)
         targets = np.zeros((3, 10), dtype=np.float32)
 
         scales = train_module.compute_dmet_scales(features, targets)
@@ -99,7 +99,7 @@ class StandardizedDmetHuberTest(unittest.TestCase):
         self.assertTrue(np.all(scales > 0.0))
 
     def test_loss_standardizes_each_dmet_component(self):
-        features = torch.zeros((1, 18))
+        features = torch.zeros((1, 22))
         features[:, :2] = torch.tensor([[1.0, 2.0]])
         features[:, 4:6] = torch.tensor([[-3.0, 4.0]])
         features[:, 16:18] = torch.tensor([[20.0, 30.0]])
@@ -117,15 +117,15 @@ class StandardizedDmetHuberTest(unittest.TestCase):
 
     def test_model_loss_uses_registered_scales(self):
         model = LightningWBoson(
-            input_dim=18,
+            input_dim=22,
             d_model=8,
             num_heads=2,
-            std_mean_train=np.zeros(18, dtype=np.float32),
-            std_scale_train=np.ones(18, dtype=np.float32),
+            std_mean_train=np.zeros(24, dtype=np.float32),
+            std_scale_train=np.ones(24, dtype=np.float32),
             dmet_scales=np.array([2.0, 3.0], dtype=np.float32),
             loss_weights={"huber": 0.0, "dmet": 1.0},
         )
-        features = torch.zeros((1, 18))
+        features = torch.zeros((1, 22))
         features[:, 16:18] = torch.tensor([[4.0, 5.0]])
         targets = torch.zeros((1, 10))
         prediction = torch.tensor([[6.0, 11.0]])
@@ -146,11 +146,11 @@ class StandardizedDmetHuberTest(unittest.TestCase):
     def test_scales_are_saved_in_model_state(self):
         scales = np.array([2.0, 3.0], dtype=np.float32)
         model = LightningWBoson(
-            input_dim=18,
+            input_dim=22,
             d_model=8,
             num_heads=2,
-            std_mean_train=np.zeros(18, dtype=np.float32),
-            std_scale_train=np.ones(18, dtype=np.float32),
+            std_mean_train=np.zeros(24, dtype=np.float32),
+            std_scale_train=np.ones(24, dtype=np.float32),
             dmet_scales=scales,
         )
 
@@ -158,14 +158,59 @@ class StandardizedDmetHuberTest(unittest.TestCase):
         torch.testing.assert_close(model.state_dict()["dmet_scales"], torch.from_numpy(scales))
 
 
+class HiggsMassLossTest(unittest.TestCase):
+    def _predictions(self, m_h):
+        # Two zero-pz W four-vectors whose sum is a rest-frame Higgs of mass m_h.
+        m_h = np.asarray(m_h, dtype=np.float32)
+        pred = np.zeros((len(m_h), 8), dtype=np.float32)
+        pred[:, 3] = pred[:, 7] = 0.5 * m_h
+        return torch.from_numpy(pred)
+
+    def test_loss_matches_direct_huber_on_higgs_mass(self):
+        pred = self._predictions([145.0])
+        h_mass = torch.tensor([145.0])
+
+        loss = loss_module.higgs_mass_loss(pred)
+        expected = F.huber_loss(h_mass, torch.full_like(h_mass, 125.0), delta=2)
+
+        torch.testing.assert_close(loss, expected)
+
+    def test_larger_delta_punishes_off_peak_more(self):
+        pred = self._predictions([155.0])
+
+        loss_small_delta = loss_module.higgs_mass_loss(pred, delta=2)
+        loss_large_delta = loss_module.higgs_mass_loss(pred, delta=20)
+
+        self.assertGreater(loss_large_delta.item(), loss_small_delta.item())
+
+    def test_gradient_magnitude_grows_with_delta_off_peak(self):
+        pred = self._predictions([155.0]).requires_grad_(True)
+        grads = {}
+        for delta in (2, 20):
+            pred.grad = None
+            loss = loss_module.higgs_mass_loss(pred, delta=delta)
+            loss.backward()
+            grads[delta] = pred.grad.abs().sum().item()
+
+        self.assertGreater(grads[20], grads[2])
+
+    def test_extreme_spacelike_sum_stays_finite(self):
+        # E^2 - p^2 hugely negative: mass clamps to TOR, loss must stay finite.
+        pred = torch.tensor([[0.0, 0.0, 1e6, 1.0, 0.0, 0.0, 1e6, 1.0]])
+
+        loss = loss_module.higgs_mass_loss(pred, delta=8)
+
+        self.assertTrue(torch.isfinite(loss))
+
+
 class LightningModelLossTest(unittest.TestCase):
     def test_weight_decay_is_forwarded_to_optimizer(self):
         model = LightningWBoson(
-            input_dim=18,
+            input_dim=22,
             d_model=8,
             num_heads=2,
-            std_mean_train=np.zeros(18, dtype=np.float32),
-            std_scale_train=np.ones(18, dtype=np.float32),
+            std_mean_train=np.zeros(24, dtype=np.float32),
+            std_scale_train=np.ones(24, dtype=np.float32),
             weight_decay=0.0123,
         )
 
@@ -175,11 +220,11 @@ class LightningModelLossTest(unittest.TestCase):
 
     def test_feature_and_condition_mmd_config_are_routed_independently(self):
         model = LightningWBoson(
-            input_dim=18,
+            input_dim=22,
             d_model=8,
             num_heads=2,
-            std_mean_train=np.zeros(18, dtype=np.float32),
-            std_scale_train=np.ones(18, dtype=np.float32),
+            std_mean_train=np.zeros(24, dtype=np.float32),
+            std_scale_train=np.ones(24, dtype=np.float32),
             mmd_config={
                 "condition": {"kernel": "imq", "bandwidth_multipliers": [3.0]},
                 "alpha": {"kernel": "rbf", "bandwidth_multipliers": [0.2, 0.4]},
@@ -199,11 +244,11 @@ class LightningModelLossTest(unittest.TestCase):
     def test_rejects_invalid_mmd_config_at_model_construction(self):
         with self.assertRaisesRegex(ValueError, "finite and positive"):
             LightningWBoson(
-                input_dim=18,
+                input_dim=22,
                 d_model=8,
                 num_heads=2,
-                std_mean_train=np.zeros(18, dtype=np.float32),
-                std_scale_train=np.ones(18, dtype=np.float32),
+                std_mean_train=np.zeros(24, dtype=np.float32),
+                std_scale_train=np.ones(24, dtype=np.float32),
                 mmd_config={
                     "condition": {"bandwidth_multipliers": [0.0]},
                 },
@@ -214,11 +259,11 @@ class LightningModelLossTest(unittest.TestCase):
             with self.subTest(key=key):
                 with self.assertRaisesRegex(ValueError, f"unsupported loss_weights key.*{key}"):
                     LightningWBoson(
-                        input_dim=18,
+                        input_dim=22,
                         d_model=8,
                         num_heads=2,
-                        std_mean_train=np.zeros(18, dtype=np.float32),
-                        std_scale_train=np.ones(18, dtype=np.float32),
+                        std_mean_train=np.zeros(24, dtype=np.float32),
+                        std_scale_train=np.ones(24, dtype=np.float32),
                         loss_weights={key: 1.0},
                     )
 
@@ -230,41 +275,23 @@ class LightningModelLossTest(unittest.TestCase):
             with self.subTest(key=key):
                 with self.assertRaisesRegex(ValueError, replacement):
                     LightningWBoson(
-                        input_dim=18,
+                        input_dim=22,
                         d_model=8,
                         num_heads=2,
-                        std_mean_train=np.zeros(18, dtype=np.float32),
-                        std_scale_train=np.ones(18, dtype=np.float32),
+                        std_mean_train=np.zeros(24, dtype=np.float32),
+                        std_scale_train=np.ones(24, dtype=np.float32),
                         loss_weights={key: 1.0},
                     )
 
-    def test_conditional_mmd_requires_high_level_condition_features(self):
-        model = LightningWBoson(
-            input_dim=18,
-            d_model=8,
-            num_heads=2,
-            std_mean_train=np.zeros(18, dtype=np.float32),
-            std_scale_train=np.ones(18, dtype=np.float32),
-            loss_weights={
-                "huber": 0.0,
-                "alpha_mmd": 1.0,
-                "mass_mmd": 1.0,
-                "angular_mmd": 1.0,
-            },
-        )
-
-        with self.assertRaisesRegex(ValueError, "requires the four high-level"):
-            model._compute_batch_losses(torch.randn(2, 18), torch.randn(2, 10))
-
     def test_normalized_periodic_condition_reaches_both_local_mmd_losses(self):
-        mean = np.arange(6, dtype=np.float32)
-        scale = np.arange(1, 7, dtype=np.float32)
+        mean = np.array([3.0, -2.0, 0.0, 0.0, 0.0, 0.0], dtype=np.float32)
+        scale = np.array([2.0, 4.0, 1.0, 1.0, 1.0, 1.0], dtype=np.float32)
         model = LightningWBoson(
             input_dim=22,
             d_model=8,
             num_heads=2,
-            std_mean_train=np.zeros(22, dtype=np.float32),
-            std_scale_train=np.ones(22, dtype=np.float32),
+            std_mean_train=np.zeros(24, dtype=np.float32),
+            std_scale_train=np.ones(24, dtype=np.float32),
             mmd_cond_mean_train=mean,
             mmd_cond_scale_train=scale,
             loss_weights={
@@ -374,7 +401,7 @@ class LocalMMDTest(unittest.TestCase):
 
 class AlphaMMDTest(unittest.TestCase):
     def test_uses_charge_associated_neutrino_momentum_fraction(self):
-        x = torch.zeros((1, 18))
+        x = torch.zeros((1, 22))
         x[0, :4] = torch.tensor([1.0, 0.0, 0.0, 1.0])
         x[0, 4:8] = torch.tensor([0.0, 2.0, 0.0, 2.0])
         y_true = torch.tensor([[4.0, 0.0, 0.0, 10.0, 0.0, 3.0, 0.0, 8.0, 0.0, 0.0]])
@@ -398,7 +425,7 @@ class AlphaMMDTest(unittest.TestCase):
         torch.testing.assert_close(captured["cond"], condition)
 
     def test_zero_total_neutrino_momentum_centers_alpha(self):
-        x = torch.zeros((1, 18))
+        x = torch.zeros((1, 22))
         x[0, :4] = torch.tensor([1.0, 2.0, 3.0, 4.0])
         x[0, 4:8] = torch.tensor([-1.0, -2.0, -3.0, 4.0])
         y_true = torch.cat([x[:, :8], torch.zeros((1, 2))], dim=-1)
@@ -418,7 +445,7 @@ class AlphaMMDTest(unittest.TestCase):
 
     def test_positive_sub_epsilon_total_preserves_alpha_ratio(self):
         tiny = torch.finfo(torch.float32).eps / 16.0
-        x = torch.zeros((1, 18))
+        x = torch.zeros((1, 22))
         y_true = torch.zeros((1, 10))
         y_true[0, 0] = tiny
         y_true[0, 4] = 3.0 * tiny
@@ -434,7 +461,7 @@ class AlphaMMDTest(unittest.TestCase):
         torch.testing.assert_close(captured["true"][:, 0], torch.tensor([-0.5]))
 
     def test_mixed_nonfinite_rows_keep_condition_aligned(self):
-        x = torch.zeros((3, 18))
+        x = torch.zeros((3, 22))
         y_true = torch.zeros((3, 10))
         y_pred = torch.zeros((3, 8))
         y_pred[1, 0] = float("nan")
@@ -454,7 +481,7 @@ class AlphaMMDTest(unittest.TestCase):
         torch.testing.assert_close(captured["cond"], condition[:1])
 
     def test_valid_and_exact_zero_totals_have_finite_gradients(self):
-        x = torch.zeros((2, 18))
+        x = torch.zeros((2, 22))
         y_true = torch.zeros((2, 10))
         y_pred = torch.zeros((2, 8))
         y_pred[0, 0] = 1.0
@@ -470,7 +497,7 @@ class AlphaMMDTest(unittest.TestCase):
     def test_requires_condition_features(self):
         with self.assertRaisesRegex(ValueError, "requires the four high-level"):
             loss_module.alpha_mmd(
-                torch.zeros((1, 18)),
+                torch.zeros((1, 22)),
                 torch.zeros((1, 10)),
                 torch.zeros((1, 8)),
                 torch.empty((1, 0)),
@@ -480,7 +507,7 @@ class AlphaMMDTest(unittest.TestCase):
         y_pred = torch.full((2, 8), float("nan"), requires_grad=True)
 
         loss = loss_module.alpha_mmd(
-            torch.zeros((2, 18)),
+            torch.zeros((2, 22)),
             torch.zeros((2, 10)),
             y_pred,
             torch.zeros((2, 6)),
@@ -493,7 +520,7 @@ class AlphaMMDTest(unittest.TestCase):
 
 class MassMMDTest(unittest.TestCase):
     def test_uses_charge_ordered_asinh_mass2_with_shared_training_scale(self):
-        x = torch.zeros((1, 18))
+        x = torch.zeros((1, 22))
         y_true = torch.tensor([[0.0, 0.0, 0.0, 80.4, 0.0, 0.0, 0.0, 40.2, 80.4, 40.2]])
         y_pred = torch.tensor([[0.0, 0.0, 0.0, 40.2, 0.0, 0.0, 0.0, 80.4]])
         captured = {}
@@ -534,11 +561,11 @@ class MassMMDTest(unittest.TestCase):
 
     def test_standardization_is_saved_in_model_state(self):
         model = LightningWBoson(
-            input_dim=18,
+            input_dim=22,
             d_model=8,
             num_heads=2,
-            std_mean_train=np.zeros(18, dtype=np.float32),
-            std_scale_train=np.ones(18, dtype=np.float32),
+            std_mean_train=np.zeros(24, dtype=np.float32),
+            std_scale_train=np.ones(24, dtype=np.float32),
             mass_mmd_center=0.25,
             mass_mmd_scale=0.75,
         )
@@ -567,7 +594,7 @@ class AngularMMDTest(unittest.TestCase):
         with patch("model.losses.Booster", side_effect=[true_booster, pred_booster]):
             with patch("model.losses.compute_local_mmd", side_effect=capture_local_mmd):
                 loss_module.angular_mmd(
-                    torch.zeros((3, 18)),
+                    torch.zeros((3, 22)),
                     torch.zeros((3, 10)),
                     torch.zeros((3, 8)),
                     condition,
@@ -593,11 +620,11 @@ class WMassHuberTest(unittest.TestCase):
 class GradientCosineLoggingTest(unittest.TestCase):
     def test_logging_only_mode_emits_cosines_without_changing_weights(self):
         model = LightningWBoson(
-            input_dim=18,
+            input_dim=22,
             d_model=8,
             num_heads=2,
-            std_mean_train=np.zeros(18, dtype=np.float32),
-            std_scale_train=np.ones(18, dtype=np.float32),
+            std_mean_train=np.zeros(24, dtype=np.float32),
+            std_scale_train=np.ones(24, dtype=np.float32),
             loss_weights={"huber": 1.0, "higgs_mass": 2.0},
             adaptive_loss_weights=False,
             log_loss_gradient_cosines=True,
@@ -611,7 +638,12 @@ class GradientCosineLoggingTest(unittest.TestCase):
             "higgs_mass": parameter.sum(),
         }
         total = losses["huber"] + 2.0 * losses["higgs_mass"]
-        batch = (torch.randn(2, 18), torch.randn(2, 10))
+        inputs = torch.randn(2, 22)
+        for start in (0, 4, 8, 12):
+            inputs[:, start + 3] = torch.linalg.vector_norm(
+                inputs[:, start:start + 3], dim=1
+            ) + torch.rand(2) + 0.1
+        batch = (inputs, torch.randn(2, 10))
         original_weights = dict(model.loss_weights)
 
         with patch.object(model, "_compute_batch_losses", return_value=(total, losses)):

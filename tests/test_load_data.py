@@ -1,10 +1,12 @@
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 
 from data.load_data import (
     _valid_truth_w_rows,
     compute_mmd_condition_stats,
+    load_data,
     mmd_condition_features,
 )
 
@@ -25,7 +27,7 @@ class MMDConditionFeaturesTest(unittest.TestCase):
         ])
         np.testing.assert_allclose(condition, expected, atol=1.0e-6)
 
-    def test_statistics_are_fitted_to_transformed_training_features(self):
+    def test_only_nonperiodic_statistics_are_fitted(self):
         features = np.zeros((3, 22), dtype=np.float32)
         features[:, 18:22] = [
             [10.0, -1.0, -0.5, -1.0],
@@ -34,10 +36,12 @@ class MMDConditionFeaturesTest(unittest.TestCase):
         ]
 
         mean, scale = compute_mmd_condition_stats(features)
-        transformed = mmd_condition_features(features)
+        transformed = mmd_condition_features(features)[:, :2]
 
-        np.testing.assert_allclose(mean, transformed.mean(axis=0))
-        np.testing.assert_allclose(scale, transformed.std(axis=0))
+        np.testing.assert_allclose(mean[:2], transformed.mean(axis=0))
+        np.testing.assert_allclose(scale[:2], transformed.std(axis=0))
+        np.testing.assert_array_equal(mean[2:], np.zeros(4))
+        np.testing.assert_array_equal(scale[2:], np.ones(4))
 
     def test_condition_features_require_all_four_observables(self):
         with self.assertRaisesRegex(ValueError, "at least 22 features"):
@@ -58,6 +62,51 @@ class ValidTruthWRowsTest(unittest.TestCase):
         )
 
         np.testing.assert_array_equal(_valid_truth_w_rows(target), [False])
+
+
+class TestInputEnergyValidation(unittest.TestCase):
+    @staticmethod
+    def _category():
+        count = 2
+
+        def group(**values):
+            return {name: np.asarray(value, dtype=np.float64) for name, value in values.items()}
+
+        category = {
+            "pos_lep": group(px=[3, 3], py=[0, 0], pz=[0, 0], energy=[5, 5],
+                             pt=[3, 3], eta=[0, 0], phi=[0, 0]),
+            "neg_lep": group(px=[-2, -2], py=[0, 0], pz=[0, 0], energy=[5, 5],
+                             pt=[3, 3], eta=[0, 0], phi=[1, 1]),
+            "met": group(px=[0, 0], py=[0, 0], phi=[0, 0]),
+            "jets": {
+                "px": np.array([[0, 0], [1, 0]], dtype=np.float64),
+                "py": np.zeros((count, 2)),
+                "pz": np.zeros((count, 2)),
+                "energy": np.array([[0, 0], [-1, 0]], dtype=np.float64),
+            },
+        }
+        truth = dict(px=[0, 0], py=[0, 0], pz=[0, 0], energy=[12, 12], m=[12, 12])
+        category["truth_pos_w"] = group(**truth)
+        category["truth_neg_w"] = group(**truth)
+        return category
+
+    def test_filters_invalid_input_energy_rows_before_fitting_statistics(self):
+        captured = {}
+
+        def capture_stats(train_obj, target_obj):
+            captured["train_obj"] = train_obj.copy()
+            return ((np.zeros(22), np.ones(22)), (np.zeros(10), np.ones(10)))
+
+        with (
+            patch("data.load_data.load_particles_from_h5", return_value={"sample": self._category()}),
+            patch("data.load_data.compute_standardization_stats", side_effect=capture_stats),
+        ):
+            train_obj, target_obj, _, _ = load_data("unused.h5")
+
+        self.assertEqual(train_obj.shape, (2, 22))
+        self.assertEqual(target_obj.shape, (2, 10))
+        np.testing.assert_array_equal(train_obj[:, 8:12], np.zeros((2, 4)))
+        np.testing.assert_array_equal(captured["train_obj"], train_obj)
 
 
 if __name__ == "__main__":

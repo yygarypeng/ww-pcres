@@ -26,6 +26,188 @@ def _rmse(pred, truth):
 	return np.sqrt(np.mean((pred - truth) ** 2))
 
 
+def _prepare_angular_data(observable):
+    pred = np.asarray(observable["pred"]) / np.pi
+    truth = np.asarray(observable["truth"]) / np.pi
+    if pred.shape != truth.shape:
+        raise ValueError(
+            f"{observable['label']}: prediction shape {pred.shape} "
+            f"does not match truth shape {truth.shape}"
+        )
+
+    finite = np.isfinite(pred) & np.isfinite(truth)
+    if not finite.any():
+        raise ValueError(f"{observable['label']}: no finite prediction/truth pairs")
+    return pred[finite], truth[finite]
+
+
+def _prepare_angular_observables(observables):
+    if len(observables) != 4:
+        raise ValueError("angular grid plotting requires exactly four observables")
+    return [_prepare_angular_data(observable) for observable in observables]
+
+
+def plot_angular_1d_grid(observables, title, share_axes=False):
+    prepared_data = _prepare_angular_observables(observables)
+    fig = plt.figure(figsize=(10, 10))
+    outer_grid = fig.add_gridspec(
+        2,
+        2,
+        left=0.1,
+        right=0.96,
+        bottom=0.08,
+        top=0.9,
+        wspace=0.22,
+        hspace=0.32,
+    )
+    hist_axes = np.empty((2, 2), dtype=object)
+    ratio_axes = np.empty((2, 2), dtype=object)
+
+    first_hist_ax = None
+    for index, (observable, (pred, truth)) in enumerate(
+        zip(observables, prepared_data)
+    ):
+        row, column = divmod(index, 2)
+        panel_grid = outer_grid[row, column].subgridspec(
+            2, 1, height_ratios=(3.5, 1), hspace=0.02
+        )
+        shared_hist_ax = first_hist_ax if share_axes else None
+        ax = fig.add_subplot(
+            panel_grid[0], sharex=shared_hist_ax, sharey=shared_hist_ax
+        )
+        if first_hist_ax is None:
+            first_hist_ax = ax
+        rax = fig.add_subplot(panel_grid[1], sharex=ax)
+        hist_axes[row, column] = ax
+        ratio_axes[row, column] = rax
+
+        bins = observable["bins"]
+        pred_counts, _ = np.histogram(pred, bins=bins)
+        truth_counts, _ = np.histogram(truth, bins=bins)
+        valid = truth_counts != 0
+        bin_centers = 0.5 * (bins[1:] + bins[:-1])
+
+        ax.hist(
+            pred,
+            bins=bins,
+            linewidth=2,
+            color="red",
+            histtype="step",
+            label="Pred",
+        )
+        ax.hist(
+            truth,
+            bins=bins,
+            linewidth=2,
+            color="blue",
+            histtype="step",
+            label="True",
+        )
+        ax.set_xlim(bins[0], bins[-1])
+        ax.set_title(observable["label"], fontsize=14, pad=7)
+        ax.tick_params(axis="x", which="both", bottom=False, labelbottom=False)
+        ax.tick_params(axis="y", labelsize=10)
+        ax.grid(axis="y", linestyle="--", alpha=0.25)
+        if share_axes:
+            ax.label_outer()
+
+        rax.axhline(1.0, color="gray", linestyle="--", linewidth=1.3)
+        rax.plot(
+            bin_centers[valid],
+            pred_counts[valid] / truth_counts[valid],
+            color="black",
+            marker="o",
+            linestyle="none",
+            markersize=3,
+            label="Pred/True",
+        )
+        rax.set_ylim(0.5, 1.5)
+        rax.tick_params(axis="both", labelsize=10)
+        rax.grid(axis="y", linestyle="--", alpha=0.25)
+
+    handles, labels = hist_axes[0, 0].get_legend_handles_labels()
+    fig.legend(
+        handles,
+        labels,
+        loc="upper right",
+        bbox_to_anchor=(0.96, 0.97),
+        frameon=False,
+        fontsize=12,
+    )
+    fig.supxlabel(r"Observable [rad/$\pi$]", fontsize=12)
+    fig.supylabel("Events", fontsize=12)
+    fig.suptitle(title, fontsize=17, fontweight="semibold")
+    plt.show()
+    return fig, (hist_axes, ratio_axes)
+
+
+def plot_angular_2d_grid(
+    observables,
+    title,
+    shared_colorbar=False,
+    share_axes=False,
+):
+    prepared_data = _prepare_angular_observables(observables)
+    fig, axes = plt.subplots(
+        2,
+        2,
+        figsize=(9, 7.6),
+        sharex=share_axes,
+        sharey=share_axes,
+        constrained_layout=True,
+    )
+    shared_mappable = None
+    for ax, observable, (pred, truth) in zip(axes.flat, observables, prepared_data):
+        bins = observable["bins"]
+        rmse = np.sqrt(np.mean((pred - truth) ** 2))
+        hist2d_kwargs = {"bins": [bins, bins], "cmap": "viridis"}
+        if observable["log"]:
+            hist2d_kwargs["norm"] = LogNorm(vmin=1, vmax=observable["vmax"])
+        else:
+            hist2d_kwargs.update(vmin=1, vmax=observable["vmax"])
+
+        image = ax.hist2d(pred, truth, **hist2d_kwargs)[3]
+        ax.plot(
+            [bins[0], bins[-1]],
+            [bins[0], bins[-1]],
+            color="gainsboro",
+            linestyle="--",
+            linewidth=1.3,
+        )
+        ax.set_xlim(bins[0], bins[-1])
+        ax.set_ylim(bins[0], bins[-1])
+        ax.set_title(
+            f"{observable['label']}  RMSE = {rmse:.2f}", fontsize=13, pad=7
+        )
+        ax.tick_params(axis="both", labelsize=10)
+        ax.set_aspect("equal", adjustable="box")
+        if share_axes:
+            ax.label_outer()
+
+        if shared_colorbar:
+            shared_mappable = image
+        else:
+            colorbar = fig.colorbar(image, ax=ax, label="Events", pad=0.02)
+            colorbar.ax.tick_params(labelsize=10)
+            colorbar.set_label("Events", fontsize=11)
+
+    fig.supxlabel(r"Pred [rad/$\pi$]", fontsize=12)
+    fig.supylabel(r"True [rad/$\pi$]", fontsize=12)
+    fig.suptitle(title, fontsize=17, fontweight="semibold")
+    if shared_colorbar:
+        colorbar = fig.colorbar(
+            shared_mappable,
+            ax=axes.ravel().tolist(),
+            label="Events",
+            shrink=0.88,
+            pad=0.02,
+        )
+        colorbar.ax.tick_params(labelsize=10)
+        colorbar.set_label("Events", fontsize=11)
+    plt.show()
+    return fig, axes
+
+
 def plot_1d_hist(
     pred,
     truth,

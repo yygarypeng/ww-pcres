@@ -19,7 +19,35 @@ Opset11MultiheadAttention = converter.Opset11MultiheadAttention
 replace_multihead_attention_for_opset11 = converter.replace_multihead_attention_for_opset11
 
 
+def valid_raw_inputs():
+    inputs = torch.tensor(
+        [
+            [1.0, 2.0, 3.0, 5.0, -1.0, 1.0, 2.0, 4.0, 1.0, 1.0, 1.0, 3.0, -1.0, 2.0, 1.0, 4.0, 2.0, -3.0, 0.5, 1.5, 0.2, -0.4],
+            [2.0, 1.0, -1.0, 4.0, 1.0, -2.0, 1.0, 4.0, 0.0, 0.0, 0.0, 0.0, 1.0, -1.0, 2.0, 4.0, -1.0, 2.0, 1.0, 0.5, -0.7, 1.1],
+            [-1.0, 2.0, 1.0, 4.0, 2.0, 1.0, -2.0, 4.0, 1.0, 2.0, -1.0, 4.0, 0.0, 0.0, 0.0, 0.0, 3.0, 1.0, 0.2, 2.0, 2.4, -2.2],
+            [1.0, -1.0, 2.0, 4.0, -2.0, 2.0, 1.0, 4.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -2.0, -1.0, 1.2, 0.8, -1.5, 0.9],
+            [1.0, 2.0, 1.0, 4.0, -1.0, 1.0, 2.0, 4.0, 3.0, -2.0, 1.0, -0.5, 1.0, 1.0, -1.0, 3.0, 2.0, -1.0, 0.6, 1.2, 0.4, -0.8],
+            [1.0, 2.0, 1.0, 4.0, -1.0, 1.0, 2.0, 4.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, -1.0, 3.0, 2.0, -1.0, 0.6, 1.2, 0.4, -0.8],
+        ],
+        dtype=torch.float32,
+    )
+    return inputs
+
+
 class Opset11MultiheadAttentionTest(unittest.TestCase):
+    def test_export_dummy_inputs_follow_raw_physics_contract(self):
+        inputs = converter.make_valid_raw_inputs(4, seed=7)
+
+        self.assertEqual(inputs.shape, (4, 22))
+        self.assertTrue(torch.all(inputs[:, [3, 7]] > 0.0))
+        for row, missing_slots in enumerate(((), (0,), (1,), (0, 1))):
+            for slot, start in enumerate((8, 12)):
+                jet = inputs[row, start:start + 4]
+                if slot in missing_slots:
+                    torch.testing.assert_close(jet, torch.zeros(4))
+                else:
+                    self.assertGreater(jet[3], torch.linalg.vector_norm(jet[:3]))
+
     def test_cross_attention_block_is_removed(self):
         self.assertFalse(hasattr(layers, "CrossAttentionBlock"))
 
@@ -59,21 +87,18 @@ class Opset11MultiheadAttentionTest(unittest.TestCase):
         import onnxruntime
 
         torch.manual_seed(5)
-        input_dim = 18
+        input_dim = 22
         native_model = WBosonRegressor(
             input_dim=input_dim,
             d_model=8,
             num_heads=2,
-            std_mean_train=np.zeros(input_dim, dtype=np.float32),
-            std_scale_train=np.ones(input_dim, dtype=np.float32),
+            std_mean_train=np.zeros(24, dtype=np.float32),
+            std_scale_train=np.ones(24, dtype=np.float32),
             attention_blocks=1,
             attention_dropout=0.0,
             decoder_dropout=0.0,
         ).eval()
-        inputs = torch.randn(3, input_dim)
-        inputs[0, 8:12] = 0.0
-        with torch.no_grad():
-            expected = native_model(inputs).numpy()
+        inputs = valid_raw_inputs()
 
         export_model = copy.deepcopy(native_model)
         replace_multihead_attention_for_opset11(export_model)
@@ -82,13 +107,13 @@ class Opset11MultiheadAttentionTest(unittest.TestCase):
             for block in export_model.sa_blocks
         ))
         self.assertFalse(hasattr(export_model, "event_pool"))
-        self.assertEqual(export_model.num_tokens, 5)
+        self.assertEqual(export_model.num_tokens, 6)
 
         with tempfile.TemporaryDirectory() as temp_dir:
             output_path = Path(temp_dir) / "small_regressor.onnx"
             torch.onnx.export(
                 export_model,
-                torch.randn(1, input_dim),
+                inputs[:1],
                 output_path,
                 input_names=["inputs"],
                 output_names=["outputs"],
@@ -104,9 +129,46 @@ class Opset11MultiheadAttentionTest(unittest.TestCase):
                 str(output_path),
                 providers=["CPUExecutionProvider"],
             )
-            actual = session.run(["outputs"], {"inputs": inputs.numpy()})[0]
+            onnx_input = session.get_inputs()[0]
+            self.assertEqual(onnx_input.shape[1], 22)
+            sentinel_batches = []
+            for jet_start in (8, 12):
+                batch = inputs[5:6].repeat(2, 1)
+                batch[:, jet_start:jet_start + 4] = 0.0
+                batch[0, jet_start:jet_start + 4] = torch.tensor(
+                    [3.0, -2.0, 1.0, -0.5]
+                )
+                sentinel_batches.append((2, batch, jet_start))
+            parity_batches = (
+                (1, inputs[3:4], None),
+                (3, inputs[:3], None),
+                *sentinel_batches,
+            )
+            for batch_size, batch, jet_start in parity_batches:
+                self.assertEqual(batch.shape[0], batch_size)
+                if batch_size == 1:
+                    torch.testing.assert_close(batch, inputs[3:4])
+                    torch.testing.assert_close(batch[:, 8:16], torch.zeros(1, 8))
+                elif batch_size == 3:
+                    torch.testing.assert_close(batch, inputs[:3])
+                else:
+                    torch.testing.assert_close(
+                        batch[0, jet_start:jet_start + 4],
+                        torch.tensor([3.0, -2.0, 1.0, -0.5]),
+                    )
+                    torch.testing.assert_close(
+                        batch[1, jet_start:jet_start + 4], torch.zeros(4)
+                    )
+                with torch.no_grad():
+                    native_output = native_model(batch).numpy()
+                    replacement_output = export_model(batch).numpy()
+                actual = session.run(["outputs"], {"inputs": batch.numpy()})[0]
 
-        np.testing.assert_allclose(actual, expected, rtol=1e-4, atol=1e-5)
+                np.testing.assert_allclose(replacement_output, native_output, rtol=1e-5, atol=1e-6)
+                np.testing.assert_allclose(actual, native_output, rtol=1e-4, atol=1e-5)
+                if batch_size == 2:
+                    np.testing.assert_allclose(native_output[0], native_output[1], rtol=1e-5, atol=1e-6)
+                    np.testing.assert_allclose(actual[0], actual[1], rtol=1e-4, atol=1e-5)
 
 
 if __name__ == "__main__":

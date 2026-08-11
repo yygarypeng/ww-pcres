@@ -122,7 +122,15 @@ The HDF5 file should contain top-level categories such as `ggF_train`, `ggF_val`
 - `truth_pos_w`: `px`, `py`, `pz`, `energy`, `m`
 - `truth_neg_w`: `px`, `py`, `pz`, `energy`, `m`
 
-The loader builds 22 input features and 10 targets. Target columns contain each W boson's `(px, py, pz, energy)` in GeV followed by the two truth W masses. Each truth W must be finite and timelike, have a nonnegative stored mass, and agree with $E^2-|p|^2$ within `1e-6 + 1e-6` times the sum-of-squares scale; the combined W pair must also be timelike. Input standardization is fitted on the training split only.
+The loader's public input remains 22 raw columns, ordered as positive-lepton `(px, py, pz, E)`, negative-lepton `(px, py, pz, E)`, jet 0 `(px, py, pz, E)`, jet 1 `(px, py, pz, E)`, MET `(px, py)`, then `m_ll`, `deta_ll`, `dphi_ll`, and `dphi_llmet`. Lepton energies must be finite and strictly positive. Finite negative jet energy is an accepted absent-jet sentinel, and the complete jet four-vector is canonicalized to zero padding. Present jets have finite, strictly positive energy; non-finite jet energy and a nonzero jet four-vector with exactly zero energy are invalid.
+
+Only the neural aggregation path converts these raw inputs to 24 features, in this order: positive-lepton `(px, py, pz, log1p(E))`, negative-lepton `(px, py, pz, log1p(E))`, jet 0 `(px, py, pz, log1p(E))`, jet 1 `(px, py, pz, log1p(E))`, MET `(px, py)`, `m_ll`, `deta_ll`, `sin(dphi_ll)`, `cos(dphi_ll)`, `sin(dphi_llmet)`, and `cos(dphi_llmet)`. Non-angular statistics are fitted on the training split only; each jet slot uses only events where that raw jet is present, with mean zero and scale one if no training event contains the slot. The sine/cosine features keep fixed mean zero and scale one. Padded jets remain in event arrays and are excluded by attention masks.
+
+The MMD condition path is separate from neural aggregation and constructs six condition features directly from raw inputs: `m_ll`, `deta_ll`, `sin(dphi_ll)`, `cos(dphi_ll)`, `sin(dphi_llmet)`, and `cos(dphi_llmet)`. Only `m_ll` and `deta_ll` are standardized; both sine/cosine pairs remain unchanged by using mean zero and scale one.
+
+The loader also builds 10 targets. Target columns contain each W boson's `(px, py, pz, energy)` in GeV followed by the two truth W masses. Each truth W must be finite and timelike, have a nonnegative stored mass, and agree with $E^2-|p|^2$ within `1e-6 + 1e-6` times the sum-of-squares scale; the combined W pair must also be timelike.
+
+Checkpoints from the previous preprocessing schema are incompatible and fail with a retraining-required message; partial weight migration is not supported. Preserve existing checkpoints, ONNX files, and run outputs. Because a fresh training run deletes its configured run directory, set `paths.saved_path` to a new directory before retraining.
 
 ## ONNX
 

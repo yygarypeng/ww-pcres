@@ -102,9 +102,9 @@ class TrainingScaleTest(unittest.TestCase):
             ),
             unittest.mock.patch.object(train_module, "WBosonDataModule") as datamodule,
             unittest.mock.patch.object(
-                 train_module.data,
-                 "compute_standardization_stats",
-                 return_value=((np.zeros(22), np.ones(22)), None),
+                 train_module,
+                 "compute_neural_input_stats",
+                 return_value=(np.zeros(24), np.ones(24)),
             ),
             unittest.mock.patch.object(
                 train_module.data,
@@ -123,6 +123,51 @@ class TrainingScaleTest(unittest.TestCase):
         np.testing.assert_array_equal(compute_dmet_scales.call_args.args[0], x_train)
         np.testing.assert_array_equal(compute_dmet_scales.call_args.args[1], y_train)
         np.testing.assert_array_equal(result[-1], expected_scales)
+
+    def test_build_datamodule_keeps_raw_inputs_and_fits_neural_stats_on_train_only(self):
+        x_train = np.full((3, 22), 1.0, dtype=np.float32)
+        y_train = np.zeros((3, 10), dtype=np.float32)
+        x_val = np.full((2, 22), 2.0, dtype=np.float32)
+        y_val = np.zeros((2, 10), dtype=np.float32)
+        x_test = np.full((2, 22), 3.0, dtype=np.float32)
+        y_test = np.zeros((2, 10), dtype=np.float32)
+        neural_stats = (np.zeros(24, dtype=np.float32), np.ones(24, dtype=np.float32))
+        mmd_stats = (np.zeros(6, dtype=np.float32), np.ones(6, dtype=np.float32))
+        cfg = {"parameters": {"batch_size": 2}, "data": {}}
+
+        with (
+            unittest.mock.patch.object(
+                train_module.data,
+                "load_presplit_data",
+                return_value=(x_train, y_train, x_val, y_val, x_test, y_test),
+            ),
+            unittest.mock.patch.object(train_module, "WBosonDataModule") as datamodule,
+            unittest.mock.patch.object(
+                train_module,
+                "compute_neural_input_stats",
+                return_value=neural_stats,
+            ) as compute_neural_input_stats,
+            unittest.mock.patch.object(
+                train_module.data,
+                "compute_mmd_condition_stats",
+                return_value=mmd_stats,
+            ) as compute_mmd_condition_stats,
+        ):
+            result = train_module.build_datamodule(cfg, "unused.h5")
+
+        datamodule.assert_called_once()
+        dm_args = datamodule.call_args.args
+        dm_kwargs = datamodule.call_args.kwargs
+        np.testing.assert_array_equal(dm_args[0], x_train)
+        np.testing.assert_array_equal(dm_kwargs["X_val"], x_val)
+        np.testing.assert_array_equal(dm_kwargs["X_test"], x_test)
+        compute_neural_input_stats.assert_called_once()
+        compute_mmd_condition_stats.assert_called_once()
+        np.testing.assert_array_equal(compute_neural_input_stats.call_args.args[0], x_train)
+        np.testing.assert_array_equal(compute_mmd_condition_stats.call_args.args[0], x_train)
+        self.assertEqual(result[1], 22)
+        self.assertEqual(result[2][0].shape, (24,))
+        self.assertEqual(result[2][1].shape, (24,))
 
 
 if __name__ == "__main__":
