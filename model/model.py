@@ -326,9 +326,6 @@ class LightningWBoson(L.LightningModule):
             name for name, weight in self.loss_weights.items()
             # if weight != 0.0 and name not in {"huber"}
         ]
-        self.adaptive_loss_budget = sum(
-            self.loss_weights[name] for name in self.adaptive_loss_names
-        )
         self.log_loss_gradient_cosines = bool(log_loss_gradient_cosines)
         self._gradient_analysis_batch = None
         self.mmd_config = mmd_config
@@ -505,10 +502,13 @@ class LightningWBoson(L.LightningModule):
         return cosines
 
     def _update_adaptive_loss_weights(self, cosines):
-        if not cosines or self.adaptive_loss_budget <= 0.0:
+        if not cosines:
             return
 
         names = list(cosines)
+        adaptive_loss_budget = sum(self.loss_weights.get(name, 0.0) for name in names)
+        if adaptive_loss_budget <= 0.0:
+            return
         raw_weights = [
             torch.clamp(1.0 - cosines[name]["total"], min=0.0)
             for name in names
@@ -519,7 +519,7 @@ class LightningWBoson(L.LightningModule):
             return
 
         for name, raw in zip(names, raw_weights):
-            target = float((raw / raw_sum * self.adaptive_loss_budget).detach().cpu())
+            target = float((raw / raw_sum * adaptive_loss_budget).detach().cpu())
             old = float(self.loss_weights.get(name, target))
 
             # todo: smooth update instead of hard assignment.
