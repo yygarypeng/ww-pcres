@@ -32,8 +32,8 @@ class FakeTensor:
 def load_cell_namespace(test_features, mean=None, scale=None):
     notebook = json.loads(NOTEBOOK_PATH.read_text())
     cell = next(cell for cell in notebook["cells"] if cell.get("id") == "input-gaussianization")
-    mean = np.arange(24, dtype=np.float64) / 10.0 if mean is None else mean
-    scale = np.arange(1, 25, dtype=np.float64) / 10.0 if scale is None else scale
+    mean = np.arange(22, dtype=np.float64) / 10.0 if mean is None else mean
+    scale = np.arange(1, 23, dtype=np.float64) / 10.0 if scale is None else scale
     norm = SimpleNamespace(mean=FakeTensor(mean), std=FakeTensor(scale))
     namespace = {
         "dm": SimpleNamespace(X=test_features),
@@ -55,11 +55,10 @@ def histogram_total(artist):
 
 
 def sample_features():
-    features = (np.arange(4 * 22).reshape(4, 22) + 1).astype(np.float64)
+    features = (np.arange(4 * 21).reshape(4, 21) + 1).astype(np.float64)
     features[0, 8:12] = 0.0
     features[1, 12:16] = 0.0
     features[:, 20] = [-np.pi, -np.pi / 2.0, 0.0, np.pi / 2.0]
-    features[:, 21] = [-np.pi / 2.0, 0.0, np.pi / 2.0, np.pi]
     return features
 
 
@@ -75,8 +74,8 @@ def test_uses_production_transform_checkpoint_stats_and_preserves_raw_inputs():
     assert "def _gaussianized_input_features" not in source
     np.testing.assert_array_equal(raw, raw_before)
     np.testing.assert_allclose(namespace["test_candidate"], expected)
-    np.testing.assert_allclose(namespace["checkpoint_mean"], np.arange(24) / 10.0)
-    np.testing.assert_allclose(namespace["checkpoint_std"], np.arange(1, 25) / 10.0)
+    np.testing.assert_allclose(namespace["checkpoint_mean"], np.arange(22) / 10.0)
+    np.testing.assert_allclose(namespace["checkpoint_std"], np.arange(1, 23) / 10.0)
     np.testing.assert_allclose(
         namespace["features_z"],
         (expected - namespace["checkpoint_mean"]) / namespace["checkpoint_std"],
@@ -86,7 +85,7 @@ def test_uses_production_transform_checkpoint_stats_and_preserves_raw_inputs():
 
 def test_jet_summaries_exclude_padding_and_scalar_summaries_use_all_events():
     raw = sample_features()
-    _, _, namespace = load_cell_namespace(raw, mean=np.zeros(24), scale=np.ones(24))
+    _, _, namespace = load_cell_namespace(raw, mean=np.zeros(22), scale=np.ones(22))
     transformed = neural_input_features_numpy(raw)
     summary = namespace["summary_df"]
     jet0_padding = (raw[:, 8:12] == 0.0).all(axis=1)
@@ -112,9 +111,9 @@ def test_jet_summaries_exclude_padding_and_scalar_summaries_use_all_events():
 
 def test_mixed_jet_histograms_use_dataset_fractions_and_include_padding_location():
     raw = sample_features()
-    mean = np.zeros(24)
+    mean = np.zeros(22)
     mean[8:16] = 700.0
-    scale = np.full(24, 100.0)
+    scale = np.full(22, 100.0)
 
     _, _, namespace = load_cell_namespace(raw, mean=mean, scale=scale)
     gaussian_figure = plt.figure(plt.get_fignums()[-2])
@@ -152,7 +151,7 @@ def test_fully_padded_jet_slot_has_visible_padding_and_no_present_event_summarie
     raw = sample_features()
     raw[:, 12:16] = 0.0
 
-    _, _, namespace = load_cell_namespace(raw, mean=np.zeros(24), scale=np.ones(24))
+    _, _, namespace = load_cell_namespace(raw, mean=np.zeros(22), scale=np.ones(22))
     summary = namespace["summary_df"].loc[
         ["jet1 px", "jet1 py", "jet1 pz", "jet1 log1p(E)"]
     ]
@@ -187,13 +186,13 @@ def test_periodic_features_have_separate_geometric_diagnostics():
     angular = namespace["angular_summary_df"]
     input_figure = plt.figure(plt.get_fignums()[-2])
     angular_figure = plt.figure(plt.get_fignums()[-1])
-    periodic_axes = input_figure.axes[20:24]
+    periodic_axes = input_figure.axes[20:22]
 
-    assert list(angular.index) == ["dphi_ll", "dphi_llmet"]
+    assert list(angular.index) == ["dphi_ll"]
     assert angular["all_finite"].all()
     assert angular["within_bounds"].all()
     assert np.all(angular["max_unit_circle_error"] < 1e-12)
-    assert len(input_figure.axes) == 24
+    assert len(input_figure.axes) == 22
     assert all(axis.patches for axis in periodic_axes)
     assert all(not axis.lines for axis in periodic_axes)
     assert all(np.allclose(axis.get_xlim(), (-1.05, 1.05)) for axis in periodic_axes)

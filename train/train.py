@@ -248,6 +248,7 @@ def run_training(
         loss_weights=params["loss_weights"],
         mmd_config=cfg.get("mmd", {}),
         mmd_start_epoch=params.get("mmd_start_epoch", 0),
+        angular_mmd_schedule=params.get("angular_mmd_schedule"),
         adaptive_loss_weights=params.get("adaptive_loss_weights", False),
         log_loss_gradient_cosines=params.get("log_loss_gradient_cosines", False),
         higgs_mass_delta=params.get("higgs_mass_delta", 2.0),

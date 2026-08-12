@@ -88,7 +88,7 @@ Adaptive loss weights, when enabled, are updated once at the end of each trainin
 The local MMD losses use a product of two independently configured kernel mixtures:
 
 - an output-feature kernel for `alpha_mmd`, joint charge-ordered `mass_mmd`, or `angular_mmd`;
-- a condition kernel over standardized `(m_ll, deta_ll, sin/cos(dphi_ll), sin/cos(dphi_llmet))` features.
+- a condition kernel over standardized `m_ll` and `deta_ll` plus unstandardized `sin/cos(dphi_ll)` features.
 
 Feature and condition bandwidth lists form a normalized Cartesian-product mixture. Adding another bandwidth therefore changes kernel coverage without mechanically rescaling the loss. The mass loss applies `asinh(m_W^2 / 80.4^2)` and fixed robust statistics fitted on the training truth split. Angular theta inputs use `2 * theta / pi - 1`; phi inputs retain their periodic `sin(phi), cos(phi)` representation.
 
@@ -99,7 +99,7 @@ Configure the two sides separately under the top-level `mmd` section; see `confi
 
 Unsupported or retired names fail with an explicit migration message instead of being ignored.
 
-Set `mmd.local: true` (the default) to multiply each output-feature kernel by the condition kernel over the six high-level variables. Set `mmd.local: false` to use global MMD over output features only. Global mode still passes the high-level variables into the neural network; it only removes them from MMD conditioning.
+Set `mmd.local: true` (the default) to multiply each output-feature kernel by the condition kernel over the four high-level features. Set `mmd.local: false` to use global MMD over output features only. Global mode still passes the high-level features into the neural network; it only removes them from MMD conditioning.
 
 Set `parameters.mmd_start_epoch` to the number of completed warm-up epochs before MMD losses enter the training objective. Validation and test losses include configured MMD terms throughout the warm-up so `val_loss` keeps a stable definition.
 
@@ -121,20 +121,20 @@ The HDF5 file should contain top-level categories such as `ggF_train`, `ggF_val`
 
 - `pos_lep`: `px`, `py`, `pz`, `energy`, `pt`, `eta`, `phi`
 - `neg_lep`: `px`, `py`, `pz`, `energy`, `pt`, `eta`, `phi`
-- `met`: `px`, `py`, `pt`, `phi`
+- `met`: `px`, `py`
 - `jets`: `px`, `py`, `pz`, `energy`
 - `truth_pos_w`: `px`, `py`, `pz`, `energy`, `m`
 - `truth_neg_w`: `px`, `py`, `pz`, `energy`, `m`
 
-The loader's public input remains 22 raw columns, ordered as positive-lepton `(px, py, pz, E)`, negative-lepton `(px, py, pz, E)`, jet 0 `(px, py, pz, E)`, jet 1 `(px, py, pz, E)`, MET `(px, py)`, then `m_ll`, `deta_ll`, `dphi_ll`, and `dphi_llmet`. Lepton energies must be finite and strictly positive. Finite negative jet energy is an accepted absent-jet sentinel, and the complete jet four-vector is canonicalized to zero padding. Present jets have finite, strictly positive energy; non-finite jet energy and a nonzero jet four-vector with exactly zero energy are invalid.
+The loader's public input contains 21 raw columns, ordered as positive-lepton `(px, py, pz, E)`, negative-lepton `(px, py, pz, E)`, jet 0 `(px, py, pz, E)`, jet 1 `(px, py, pz, E)`, MET `(px, py)`, then `m_ll`, `deta_ll`, and `dphi_ll`. Lepton energies must be finite and strictly positive. Finite negative jet energy is an accepted absent-jet sentinel, and the complete jet four-vector is canonicalized to zero padding. Present jets have finite, strictly positive energy; non-finite jet energy and a nonzero jet four-vector with exactly zero energy are invalid.
 
-Only the neural aggregation path converts these raw inputs to 24 features, in this order: positive-lepton `(px, py, pz, log1p(E))`, negative-lepton `(px, py, pz, log1p(E))`, jet 0 `(px, py, pz, log1p(E))`, jet 1 `(px, py, pz, log1p(E))`, MET `(px, py)`, `m_ll`, `deta_ll`, `sin(dphi_ll)`, `cos(dphi_ll)`, `sin(dphi_llmet)`, and `cos(dphi_llmet)`. Non-angular statistics are fitted on the training split only; each jet slot uses only events where that raw jet is present, with mean zero and scale one if no training event contains the slot. The sine/cosine features keep fixed mean zero and scale one. Padded jets remain in event arrays and are excluded by attention masks.
+Only the neural aggregation path converts these raw inputs to 22 features, in this order: positive-lepton `(px, py, pz, log1p(E))`, negative-lepton `(px, py, pz, log1p(E))`, jet 0 `(px, py, pz, log1p(E))`, jet 1 `(px, py, pz, log1p(E))`, MET `(px, py)`, `m_ll`, `deta_ll`, `sin(dphi_ll)`, and `cos(dphi_ll)`. Non-angular statistics are fitted on the training split only; each jet slot uses only events where that raw jet is present, with mean zero and scale one if no training event contains the slot. The sine/cosine features keep fixed mean zero and scale one. Padded jets remain in event arrays and are excluded by attention masks.
 
-The MMD condition path is separate from neural aggregation and constructs six condition features directly from raw inputs: `m_ll`, `deta_ll`, `sin(dphi_ll)`, `cos(dphi_ll)`, `sin(dphi_llmet)`, and `cos(dphi_llmet)`. Only `m_ll` and `deta_ll` are standardized; both sine/cosine pairs remain unchanged by using mean zero and scale one.
+The MMD condition path is separate from neural aggregation and constructs four condition features directly from raw inputs: `m_ll`, `deta_ll`, `sin(dphi_ll)`, and `cos(dphi_ll)`. Only `m_ll` and `deta_ll` are standardized; the sine/cosine pair remains unchanged by using mean zero and scale one.
 
 The loader also builds 10 targets. Target columns contain each W boson's `(px, py, pz, energy)` in GeV followed by the two truth W masses. Each truth W must be finite and timelike, have a nonnegative stored mass, and agree with $E^2-|p|^2$ within `1e-6 + 1e-6` times the sum-of-squares scale; the combined W pair must also be timelike.
 
-Checkpoints from the previous preprocessing schema are incompatible and fail with a retraining-required message; partial weight migration is not supported. Preserve existing checkpoints, ONNX files, and run outputs. Because a fresh training run deletes its configured run directory, set `paths.saved_path` to a new directory before retraining.
+The current input-preprocessing schema version is 2. Checkpoints from earlier preprocessing schemas are incompatible and fail with a retraining-required message; partial weight migration is not supported. Preserve existing checkpoints, ONNX files, and run outputs. Because a fresh training run deletes its configured run directory, set `paths.saved_path` to a new directory before retraining.
 
 ## ONNX
 

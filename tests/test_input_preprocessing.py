@@ -23,8 +23,8 @@ def valid_raw_rows(dtype=np.float32):
     rows[:, 7] = [3.0, 4.0]
     rows[0, 8:12] = [5.0, 6.0, 7.0, 8.0]
     rows[1, 12:16] = [9.0, 10.0, 11.0, 12.0]
-    rows[:, 16:22] = [[13.0, 14.0, 15.0, 16.0, 0.5, -0.5],
-                      [17.0, 18.0, 19.0, 20.0, -1.0, 1.0]]
+    rows[:, 16:21] = [[13.0, 14.0, 15.0, 16.0, 0.5],
+                      [17.0, 18.0, 19.0, 20.0, -1.0]]
     return rows
 
 
@@ -36,12 +36,11 @@ def expected_neural_features(raw):
         raw[:, 12:15], np.log1p(raw[:, 15:16]),
         raw[:, 16:20],
         np.sin(raw[:, 20:21]), np.cos(raw[:, 20:21]),
-        np.sin(raw[:, 21:22]), np.cos(raw[:, 21:22]),
     ], axis=1)
 
 
 def test_preprocessing_schema_constants_are_exported():
-    assert (RAW_INPUT_DIM, NEURAL_INPUT_DIM, INPUT_PREPROCESSING_VERSION) == (22, 24, 1)
+    assert (RAW_INPUT_DIM, NEURAL_INPUT_DIM, INPUT_PREPROCESSING_VERSION) == (21, 22, 2)
 
 
 @pytest.mark.parametrize("start", [8, 12])
@@ -97,7 +96,7 @@ def test_integer_numpy_negative_jet_normalization_returns_floating_point():
     np.testing.assert_array_equal(normalized[0, 8:12], np.zeros(4))
 
 
-@pytest.mark.parametrize("shape", [(22,), (2, 21), (2, 22, 1)])
+@pytest.mark.parametrize("shape", [(21,), (2, 20), (2, 21, 1)])
 def test_negative_energy_jet_normalization_rejects_invalid_shapes(shape):
     numpy_features = np.zeros(shape, dtype=np.float32)
     torch_features = torch.from_numpy(numpy_features)
@@ -143,7 +142,7 @@ def test_integer_inputs_are_converted_to_floating_point():
     np.testing.assert_allclose(torch_result.numpy(), numpy_result, rtol=1e-6)
 
 
-@pytest.mark.parametrize("shape", [(22,), (2, 21), (2, 22, 1)])
+@pytest.mark.parametrize("shape", [(21,), (2, 20), (2, 21, 1)])
 def test_numpy_transform_rejects_invalid_shapes(shape):
     with pytest.raises(ValueError, match="shape"):
         neural_input_features_numpy(np.zeros(shape, dtype=np.float32))
@@ -216,7 +215,7 @@ def test_neural_stats_mask_each_jet_slot_and_use_all_rows_for_other_scalars():
     raw[1, 12:16] = [10.0, 20.0, 30.0, 40.0]
     raw[:, 16] = [2.0, 4.0, 9.0]
     raw[:, 17] = 3.0
-    raw[:, 20:22] = [[0.1, 0.2], [0.3, 0.4], [0.5, 0.6]]
+    raw[:, 20] = [0.1, 0.3, 0.5]
     transformed = neural_input_features_numpy(raw)
 
     mean, scale = compute_neural_input_stats(raw)
@@ -229,8 +228,8 @@ def test_neural_stats_mask_each_jet_slot_and_use_all_rows_for_other_scalars():
     np.testing.assert_allclose(scale[16], transformed[:, 16].std())
     np.testing.assert_allclose(mean[17], transformed[:, 17].mean())
     assert scale[17] > 0.0
-    np.testing.assert_array_equal(mean[20:24], np.zeros(4))
-    np.testing.assert_array_equal(scale[20:24], np.ones(4))
+    np.testing.assert_array_equal(mean[20:22], np.zeros(2))
+    np.testing.assert_array_equal(scale[20:22], np.ones(2))
 
 
 def test_neural_stats_use_neutral_fallback_for_completely_absent_jet_slot():

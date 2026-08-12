@@ -10,6 +10,56 @@ from train.train import apply_cli_overrides, parse_args, prime_csv_metric_header
 
 
 class TrainingOverrideTest(unittest.TestCase):
+    def test_run_training_routes_angular_mmd_schedule(self):
+        schedule = {
+            "initial_multiplier": 0.1,
+            "hold_epochs": 10,
+            "full_weight_epoch": 80,
+        }
+        params = {
+            "batch_size": 2,
+            "epochs": 1,
+            "learning_rate": 1.0e-4,
+            "loss_weights": {"huber": 1.0, "angular_mmd": 2.0},
+            "d_model": 8,
+            "n_heads": 2,
+            "angular_mmd_schedule": schedule,
+        }
+        cfg = {"parameters": params}
+        datamodule = SimpleNamespace(train_dataloader=lambda: [object()], test_ds=None)
+        args = SimpleNamespace(resume_from=None)
+        checkpoint_callback = SimpleNamespace()
+
+        with (
+            unittest.mock.patch.object(train_module, "LightningWBoson") as model_class,
+            unittest.mock.patch.object(
+                train_module,
+                "build_training_callbacks",
+                return_value=[checkpoint_callback],
+            ),
+            unittest.mock.patch.object(train_module, "clean_training_output"),
+            unittest.mock.patch.object(train_module, "create_loggers", return_value=([], None)),
+            unittest.mock.patch.object(train_module, "Trainer") as trainer_class,
+        ):
+            train_module.run_training(
+                cfg,
+                datamodule,
+                21,
+                (np.zeros(22), np.ones(22)),
+                (np.zeros(4), np.ones(4)),
+                np.ones(4),
+                (0.0, 1.0),
+                np.ones(2),
+                "unused-output",
+                args,
+            )
+
+        self.assertEqual(
+            model_class.call_args.kwargs["angular_mmd_schedule"],
+            schedule,
+        )
+        trainer_class.return_value.fit.assert_called_once()
+
     def test_applies_training_overrides(self):
         config = {
             "parameters": {"seed": 114},
@@ -85,11 +135,11 @@ class TrainingScaleTest(unittest.TestCase):
         np.testing.assert_allclose(scale, (q75 - q25) / 1.349)
 
     def test_build_datamodule_computes_dmet_scales_from_training_split(self):
-        x_train = np.zeros((3, 22), dtype=np.float32)
+        x_train = np.zeros((3, 21), dtype=np.float32)
         y_train = np.zeros((3, 10), dtype=np.float32)
-        x_val = np.ones((2, 22), dtype=np.float32)
+        x_val = np.ones((2, 21), dtype=np.float32)
         y_val = np.ones((2, 10), dtype=np.float32)
-        x_test = np.full((2, 22), 2.0, dtype=np.float32)
+        x_test = np.full((2, 21), 2.0, dtype=np.float32)
         y_test = np.full((2, 10), 2.0, dtype=np.float32)
         expected_scales = np.array([2.0, 3.0], dtype=np.float32)
         cfg = {"parameters": {"batch_size": 2}, "data": {}}
@@ -104,12 +154,12 @@ class TrainingScaleTest(unittest.TestCase):
             unittest.mock.patch.object(
                  train_module,
                  "compute_neural_input_stats",
-                 return_value=(np.zeros(24), np.ones(24)),
+                 return_value=(np.zeros(22), np.ones(22)),
             ),
             unittest.mock.patch.object(
                 train_module.data,
                 "compute_mmd_condition_stats",
-                return_value=(np.zeros(6), np.ones(6)),
+                 return_value=(np.zeros(4), np.ones(4)),
             ),
             unittest.mock.patch.object(
                 train_module,
@@ -125,14 +175,14 @@ class TrainingScaleTest(unittest.TestCase):
         np.testing.assert_array_equal(result[-1], expected_scales)
 
     def test_build_datamodule_keeps_raw_inputs_and_fits_neural_stats_on_train_only(self):
-        x_train = np.full((3, 22), 1.0, dtype=np.float32)
+        x_train = np.full((3, 21), 1.0, dtype=np.float32)
         y_train = np.zeros((3, 10), dtype=np.float32)
-        x_val = np.full((2, 22), 2.0, dtype=np.float32)
+        x_val = np.full((2, 21), 2.0, dtype=np.float32)
         y_val = np.zeros((2, 10), dtype=np.float32)
-        x_test = np.full((2, 22), 3.0, dtype=np.float32)
+        x_test = np.full((2, 21), 3.0, dtype=np.float32)
         y_test = np.zeros((2, 10), dtype=np.float32)
-        neural_stats = (np.zeros(24, dtype=np.float32), np.ones(24, dtype=np.float32))
-        mmd_stats = (np.zeros(6, dtype=np.float32), np.ones(6, dtype=np.float32))
+        neural_stats = (np.zeros(22, dtype=np.float32), np.ones(22, dtype=np.float32))
+        mmd_stats = (np.zeros(4, dtype=np.float32), np.ones(4, dtype=np.float32))
         cfg = {"parameters": {"batch_size": 2}, "data": {}}
 
         with (
@@ -165,9 +215,9 @@ class TrainingScaleTest(unittest.TestCase):
         compute_mmd_condition_stats.assert_called_once()
         np.testing.assert_array_equal(compute_neural_input_stats.call_args.args[0], x_train)
         np.testing.assert_array_equal(compute_mmd_condition_stats.call_args.args[0], x_train)
-        self.assertEqual(result[1], 22)
-        self.assertEqual(result[2][0].shape, (24,))
-        self.assertEqual(result[2][1].shape, (24,))
+        self.assertEqual(result[1], 21)
+        self.assertEqual(result[2][0].shape, (22,))
+        self.assertEqual(result[2][1].shape, (22,))
 
 
 if __name__ == "__main__":

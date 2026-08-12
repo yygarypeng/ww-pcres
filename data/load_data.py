@@ -4,7 +4,7 @@ import h5py
 from sklearn.preprocessing import StandardScaler
 
 from data.preprocessing import normalize_negative_energy_jets_numpy, valid_input_energy_rows
-from physics import eta, phi, deta, dphi
+from physics import eta, deta, dphi
 
 
 def select_categories(available_categories, categories=None):
@@ -50,22 +50,19 @@ def split_categories(data_cfg, split):
 
 def mmd_condition_features(features):
     features = np.asarray(features)
-    if features.shape[-1] < 22:
+    if features.shape[-1] != 21:
         raise ValueError(
-            f"MMD conditioning requires at least 22 features, got {features.shape[-1]}"
+            f"MMD conditioning requires exactly 21 features, got {features.shape[-1]}"
         )
 
     m_ll = features[..., 18:19]
     deta_ll = features[..., 19:20]
     dphi_ll = features[..., 20:21]
-    dphi_llmet = features[..., 21:22]
     return np.concatenate([
         m_ll,
         deta_ll,
         np.sin(dphi_ll),
         np.cos(dphi_ll),
-        np.sin(dphi_llmet),
-        np.cos(dphi_llmet),
     ], axis=-1)
 
 
@@ -213,16 +210,13 @@ def load_data(
         dilep_pz = lep_pos_pz + lep_neg_pz
         dilep_energy = lep_pos_energy + lep_neg_energy
         dilep_eta = eta(dilep_px, dilep_py, dilep_pz)
-        dilep_phi = phi(dilep_px, dilep_py)
         m_ll2 = dilep_energy**2 - dilep_px**2 - dilep_py**2 - dilep_pz**2
         m_ll = np.where(m_ll2 >= -1.0e-6, np.sqrt(np.clip(m_ll2, 0.0, None)), np.nan)
 
         met_px = category_data["met"]["px"]
         met_py = category_data["met"]["py"]
-        met_phi = category_data["met"]["phi"]
         
         dphi_ll = dphi(lep_pos_phi, lep_neg_phi)
-        dphi_llmet = dphi(dilep_phi, met_phi)
         deta_ll = deta(lep_pos_eta, lep_neg_eta)
 
         jet_px = category_data["jets"]["px"][:, 0:2]
@@ -256,7 +250,6 @@ def load_data(
             col(m_ll), #18
             col(deta_ll), #19
             col(dphi_ll), #20
-            col(dphi_llmet), #21
         ], axis=-1)
         
         # target objects
