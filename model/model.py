@@ -27,19 +27,19 @@ from model.losses import (
 DEFAULT_MMD_CONFIG = {
     "condition": {
         "kernel": "imq",
-        "bandwidth_multipliers": [0.01, 0.05, 0.1, 0.5, 1.0, 5],
+        "bandwidth_multipliers": [0.01, 0.1, 1.0, 10, 100],
     },
     "alpha": {
         "kernel": "imq",
-        "bandwidth_multipliers": [0.01, 0.05, 0.1, 0.5, 1.0, 5],
+        "bandwidth_multipliers": [0.01, 0.1, 1.0, 10, 100],
     },
     "mass": {
         "kernel": "imq",
-        "bandwidth_multipliers": [0.01, 0.05, 0.1, 0.5, 1.0, 5],
+        "bandwidth_multipliers": [0.01, 0.1, 1.0, 10, 100],
     },
     "angular": {
         "kernel": "imq",
-        "bandwidth_multipliers": [0.01, 0.05, 0.1, 0.5, 1.0, 5],
+        "bandwidth_multipliers": [0.01, 0.1, 1.0, 10, 100],
     },
 }
 MMD_LOSS_NAMES = {"alpha_mmd", "mass_mmd", "angular_mmd"}
