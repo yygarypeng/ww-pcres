@@ -99,6 +99,8 @@ Configure the two sides separately under the top-level `mmd` section; see `confi
 
 Unsupported or retired names fail with an explicit migration message instead of being ignored.
 
+Set `mmd.local: true` (the default) to multiply each output-feature kernel by the condition kernel over the six high-level variables. Set `mmd.local: false` to use global MMD over output features only. Global mode still passes the high-level variables into the neural network; it only removes them from MMD conditioning.
+
 Set `parameters.mmd_start_epoch` to the number of completed warm-up epochs before MMD losses enter the training objective. Validation and test losses include configured MMD terms throughout the warm-up so `val_loss` keeps a stable definition.
 
 ### Visualization and inference check

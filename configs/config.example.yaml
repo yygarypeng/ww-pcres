@@ -29,6 +29,7 @@ parameters:
     dmet: 10.0
 
 mmd:
+  local: true
   condition:
     kernel: rbf
     bandwidth_multipliers: [0.5, 1.0, 2.0]

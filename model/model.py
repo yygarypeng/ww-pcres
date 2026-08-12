@@ -42,17 +42,21 @@ DEFAULT_MMD_CONFIG = {
         "bandwidth_multipliers": [0.01, 0.1, 1.0, 10, 100],
     },
 }
+DEFAULT_LOCAL_MMD = True
 MMD_LOSS_NAMES = {"alpha_mmd", "mass_mmd", "angular_mmd"}
 
 
 def resolve_mmd_config(config=None):
     config = {} if config is None else config
-    unknown_sections = set(config) - set(DEFAULT_MMD_CONFIG)
+    unknown_sections = set(config) - (set(DEFAULT_MMD_CONFIG) | {"local"})
     if unknown_sections:
         names = ", ".join(sorted(unknown_sections))
         raise ValueError(f"unsupported MMD config section(s): {names}")
 
-    resolved = {}
+    local = config.get("local", DEFAULT_LOCAL_MMD)
+    if not isinstance(local, bool):
+        raise ValueError("mmd.local must be a boolean")
+    resolved = {"local": local}
     for section, defaults in DEFAULT_MMD_CONFIG.items():
         supplied = config.get(section, {})
         unknown_keys = set(supplied) - set(defaults)
@@ -321,10 +325,9 @@ class LightningWBoson(L.LightningModule):
             for name, weight in {**defaults, **(loss_weights or {})}.items()
         }
         self.adaptive_loss_weights = bool(adaptive_loss_weights)
-        # todo: exclude huber
         self.adaptive_loss_names = [
             name for name, weight in self.loss_weights.items()
-            # if weight != 0.0 and name not in {"huber"}
+            if weight != 0.0 and name != "huber"
         ]
         self.log_loss_gradient_cosines = bool(log_loss_gradient_cosines)
         self._gradient_analysis_batch = None
@@ -388,6 +391,7 @@ class LightningWBoson(L.LightningModule):
         condition = self.mmd_config["condition"]
         feature = self.mmd_config[feature_name]
         return {
+            "local": self.mmd_config["local"],
             "feature_kernel": feature["kernel"],
             "condition_kernel": condition["kernel"],
             "feature_bandwidth_multipliers": feature["bandwidth_multipliers"],
