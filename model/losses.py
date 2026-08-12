@@ -41,20 +41,24 @@ def compute_local_mmd(
     y,
     cond,
     *,
+    local=True,
     feature_kernel="imq",
     condition_kernel="rbf",
     feature_bandwidth_multipliers=(0.25, 0.5, 1.0, 2.0),
     condition_bandwidth_multipliers=(0.5, 1.0, 2.0),
 ):
-    """Biased MMD on output features, localized by a separate condition kernel."""
+    """Biased feature MMD, optionally localized by a condition kernel."""
+    if not isinstance(local, bool):
+        raise ValueError("local must be a boolean")
     feature_bandwidth_multipliers = _validate_bandwidth_multipliers(
         feature_bandwidth_multipliers,
         "feature_bandwidth_multipliers",
     )
-    condition_bandwidth_multipliers = _validate_bandwidth_multipliers(
-        condition_bandwidth_multipliers,
-        "condition_bandwidth_multipliers",
-    )
+    if local:
+        condition_bandwidth_multipliers = _validate_bandwidth_multipliers(
+            condition_bandwidth_multipliers,
+            "condition_bandwidth_multipliers",
+        )
     x = x.reshape(x.shape[0], -1)
     y = y.reshape(y.shape[0], -1)
     cond = cond.reshape(cond.shape[0], -1)
@@ -63,12 +67,14 @@ def compute_local_mmd(
         raise ValueError("x, y, and cond must have the same number of paired rows")
 
     # Filter paired rows before constructing any pairwise kernel matrix.
-    finit_mask = torch.isfinite(x).all(dim=1) & torch.isfinite(y).all(dim=1) & torch.isfinite(cond).all(dim=1)
+    finit_mask = torch.isfinite(x).all(dim=1) & torch.isfinite(y).all(dim=1)
+    if local:
+        finit_mask = finit_mask & torch.isfinite(cond).all(dim=1)
     x = x[finit_mask]
     y = y[finit_mask]
     cond = cond[finit_mask]
 
-    if x.shape[0] == 0 or y.shape[0] == 0 or cond.shape[0] == 0:
+    if x.shape[0] == 0 or y.shape[0] == 0:
         return (
             torch.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0).sum()
             + torch.nan_to_num(y, nan=0.0, posinf=0.0, neginf=0.0).sum()
@@ -77,9 +83,10 @@ def compute_local_mmd(
 
     with torch.no_grad():
         feature_scale = _positive_median_pairwise_distance(y)
-        condition_scale = _positive_median_pairwise_distance(cond)
         feature_bandwidths = [value * feature_scale for value in feature_bandwidth_multipliers]
-        condition_bandwidths = [value * condition_scale for value in condition_bandwidth_multipliers]
+        if local:
+            condition_scale = _positive_median_pairwise_distance(cond)
+            condition_bandwidths = [value * condition_scale for value in condition_bandwidth_multipliers]
 
     def _matrix(x, y):
         xx, yy, xy = torch.mm(x, x.t()), torch.mm(y, y.t()), torch.mm(x, y.t())
@@ -95,7 +102,6 @@ def compute_local_mmd(
         return dxx, dyy, dxy
 
     dxx, dyy, dxy = _matrix(x, y)
-    cond_dxx, _, _ = _matrix(cond, cond)
 
     def rbf_kernel(a, d):
         return torch.exp(-0.5 * d / (a**2 + TOR))
@@ -105,7 +111,7 @@ def compute_local_mmd(
     kernels = {"rbf": rbf_kernel, "imq": imq_kernel}
     if feature_kernel not in kernels:
         raise ValueError(f"Unsupported feature kernel: {feature_kernel}")
-    if condition_kernel not in kernels:
+    if local and condition_kernel not in kernels:
         raise ValueError(f"Unsupported condition kernel: {condition_kernel}")
 
     def mixed_kernel(kind, bandwidths, distances):
@@ -115,12 +121,17 @@ def compute_local_mmd(
             dim=0,
         ).mean(dim=0)
 
-    # The product of these two normalized mixtures equals the mean over the
-    # Cartesian product of all feature and condition bandwidths.
-    cond_matrix = mixed_kernel(condition_kernel, condition_bandwidths, cond_dxx)
-    XX = mixed_kernel(feature_kernel, feature_bandwidths, dxx) * cond_matrix
-    YY = mixed_kernel(feature_kernel, feature_bandwidths, dyy) * cond_matrix
-    XY = mixed_kernel(feature_kernel, feature_bandwidths, dxy) * cond_matrix
+    XX = mixed_kernel(feature_kernel, feature_bandwidths, dxx)
+    YY = mixed_kernel(feature_kernel, feature_bandwidths, dyy)
+    XY = mixed_kernel(feature_kernel, feature_bandwidths, dxy)
+    if local:
+        # The product of these normalized mixtures equals the mean over the
+        # Cartesian product of all feature and condition bandwidths.
+        cond_dxx, _, _ = _matrix(cond, cond)
+        cond_matrix = mixed_kernel(condition_kernel, condition_bandwidths, cond_dxx)
+        XX = XX * cond_matrix
+        YY = YY * cond_matrix
+        XY = XY * cond_matrix
     return torch.mean(XX + YY - XY - XY.T)
 
 def invariant_mass2(fourvec):
@@ -185,13 +196,13 @@ def _require_mmd_condition(cond, name):
         raise ValueError(f"{name} requires the four high-level conditioning features")
 
 
-def _valid_kinematic_rows(x_batch, y_true, y_pred, cond):
-    return (
+def _valid_kinematic_rows(x_batch, y_true, y_pred, cond, local=True):
+    valid = (
         torch.isfinite(x_batch[..., :8]).all(dim=-1)
         & torch.isfinite(y_true[..., :8]).all(dim=-1)
         & torch.isfinite(y_pred).all(dim=-1)
-        & torch.isfinite(cond).all(dim=-1)
     )
+    return valid & torch.isfinite(cond).all(dim=-1) if local else valid
 
 
 def _differentiable_zero(y_true, y_pred, cond):
@@ -202,16 +213,32 @@ def _differentiable_zero(y_true, y_pred, cond):
     ) * 0.0
 
 
-def _alpha_features(x_batch, w_fourvecs):
-    w_pos, w_neg = w_fourvecs[..., :4], w_fourvecs[..., 4:8]
-    nu_pos = w_pos - x_batch[..., :4]
-    nu_neg = w_neg - x_batch[..., 4:8]
-    p_pos = torch.linalg.vector_norm(nu_pos[..., :3], dim=-1)
-    p_neg = torch.linalg.vector_norm(nu_neg[..., :3], dim=-1)
-    total = p_pos + p_neg
-    safe_total = torch.where(total == 0.0, torch.ones_like(total), total)
-    alpha_pos = torch.where(total == 0.0, torch.full_like(total, 0.5), p_pos / safe_total)
-    return (2.0 * alpha_pos - 1.0).unsqueeze(-1)
+def _alpha_features(x_batch, w_fourvecs, slot0_on):
+    lep0, lep1 = x_batch[..., :4], x_batch[..., 4:8]
+    nu0 = w_fourvecs[..., :4] - lep0
+    nu1 = w_fourvecs[..., 4:8] - lep1
+    nu_on = torch.where(slot0_on.unsqueeze(-1), nu0, nu1)
+    nu_off = torch.where(slot0_on.unsqueeze(-1), nu1, nu0)
+    lep_on = torch.where(slot0_on.unsqueeze(-1), lep0, lep1)
+    lep_off = torch.where(slot0_on.unsqueeze(-1), lep1, lep0)
+
+    dinu = nu_on + nu_off
+    on_mass2 = invariant_mass2(lep_on + dinu)
+    off_mass2 = invariant_mass2(lep_off + dinu)
+    p_on = torch.linalg.vector_norm(nu_on[..., :3], dim=-1)
+    p_off = torch.linalg.vector_norm(nu_off[..., :3], dim=-1)
+    total = p_on + p_off
+    valid = (
+        torch.isfinite(on_mass2)
+        & torch.isfinite(off_mass2)
+        & (on_mass2 >= 0.0)
+        & (off_mass2 >= 0.0)
+        & torch.isfinite(total)
+        & (total > TOR)
+    )
+    selected_momentum = torch.where(on_mass2 > off_mass2, p_on, p_off)
+    safe_total = torch.where(valid, total, torch.ones_like(total))
+    return (2.0 * selected_momentum / safe_total - 1.0).unsqueeze(-1), valid
 
 
 def _mass_features(w_fourvecs, center, scale):
@@ -224,7 +251,15 @@ def _mass_features(w_fourvecs, center, scale):
 def alpha_mmd(x_batch, y_true, y_pred, cond, **mmd_kwargs):
     _require_mmd_condition(cond, "alpha MMD")
 
-    valid = _valid_kinematic_rows(x_batch, y_true, y_pred, cond)
+    valid = _valid_kinematic_rows(
+        x_batch,
+        y_true,
+        y_pred,
+        cond,
+        local=mmd_kwargs.get("local", True),
+    ) & torch.isfinite(
+        y_true[..., 8:10]
+    ).all(dim=-1)
     if not valid.any():
         return _differentiable_zero(y_true, y_pred, cond)
     x_batch = x_batch[valid]
@@ -232,15 +267,37 @@ def alpha_mmd(x_batch, y_true, y_pred, cond, **mmd_kwargs):
     y_pred = y_pred[valid]
     cond = cond[valid]
 
-    true_features = _alpha_features(x_batch, y_true[..., :8])
-    pred_features = _alpha_features(x_batch, y_pred)
-    return compute_local_mmd(pred_features, true_features, cond, **mmd_kwargs)
+    w_mass2 = 80.379**2
+    slot0_on = torch.abs(y_true[..., 8] ** 2 - w_mass2) < torch.abs(
+        y_true[..., 9] ** 2 - w_mass2
+    )
+    true_features, true_alpha_valid = _alpha_features(
+        x_batch,
+        y_true[..., :8],
+        slot0_on,
+    )
+    pred_features, pred_alpha_valid = _alpha_features(x_batch, y_pred, slot0_on)
+    alpha_valid = true_alpha_valid & pred_alpha_valid
+    if not alpha_valid.any():
+        return _differentiable_zero(y_true, y_pred, cond)
+    return compute_local_mmd(
+        pred_features[alpha_valid],
+        true_features[alpha_valid],
+        cond[alpha_valid],
+        **mmd_kwargs,
+    )
 
 
 def mass_mmd(x_batch, y_true, y_pred, cond, center, scale, **mmd_kwargs):
     _require_mmd_condition(cond, "mass MMD")
 
-    valid = _valid_kinematic_rows(x_batch, y_true, y_pred, cond)
+    valid = _valid_kinematic_rows(
+        x_batch,
+        y_true,
+        y_pred,
+        cond,
+        local=mmd_kwargs.get("local", True),
+    )
     if not valid.any():
         return _differentiable_zero(y_true, y_pred, cond)
     y_true = y_true[valid]
