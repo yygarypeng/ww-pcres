@@ -13,11 +13,11 @@ class InferenceCheckpointLoadingTest(unittest.TestCase):
     @staticmethod
     def make_model():
         return LightningWBoson(
-            input_dim=22,
+            input_dim=21,
             d_model=8,
             num_heads=2,
-            std_mean_train=np.zeros(24, dtype=np.float32),
-            std_scale_train=np.ones(24, dtype=np.float32),
+            std_mean_train=np.zeros(22, dtype=np.float32),
+            std_scale_train=np.ones(22, dtype=np.float32),
             attention_blocks=1,
             attention_dropout=0.0,
             decoder_dropout=0.0,
@@ -25,7 +25,7 @@ class InferenceCheckpointLoadingTest(unittest.TestCase):
 
     @staticmethod
     def make_inputs():
-        inputs = torch.randn(2, 22)
+        inputs = torch.randn(2, 21)
         for start in (0, 4, 8, 12):
             inputs[:, start + 3] = torch.linalg.vector_norm(
                 inputs[:, start:start + 3], dim=1
@@ -83,6 +83,39 @@ class InferenceCheckpointLoadingTest(unittest.TestCase):
 
         torch.testing.assert_close(loaded(inputs), expected)
 
+    def test_angular_mmd_schedule_checkpoint_round_trips(self):
+        schedule = {
+            "initial_multiplier": 0.1,
+            "hold_epochs": 10,
+            "full_weight_epoch": 80,
+        }
+        model = LightningWBoson(
+            input_dim=21,
+            d_model=8,
+            num_heads=2,
+            std_mean_train=np.zeros(22, dtype=np.float32),
+            std_scale_train=np.ones(22, dtype=np.float32),
+            angular_mmd_schedule=schedule,
+            attention_blocks=1,
+            attention_dropout=0.0,
+            decoder_dropout=0.0,
+        )
+        checkpoint = {
+            "state_dict": model.state_dict(),
+            "hyper_parameters": dict(model.hparams),
+            "pytorch-lightning_version": L.__version__,
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            checkpoint_path = Path(tmpdir) / "scheduled.ckpt"
+            torch.save(checkpoint, checkpoint_path)
+            loaded = LightningWBoson.load_from_checkpoint(
+                checkpoint_path,
+                weights_only=False,
+            )
+
+        self.assertEqual(loaded.angular_mmd_schedule, schedule)
+
     def test_rejects_checkpoint_missing_preprocessing_version(self):
         model = self.make_model()
         checkpoint = {
@@ -120,7 +153,7 @@ class InferenceCheckpointLoadingTest(unittest.TestCase):
             "hyper_parameters": dict(model.hparams),
             "pytorch-lightning_version": L.__version__,
         }
-        checkpoint["hyper_parameters"]["input_dim"] = 18
+        checkpoint["hyper_parameters"]["input_dim"] = 22
 
         with tempfile.TemporaryDirectory() as tmpdir:
             checkpoint_path = Path(tmpdir) / "legacy-input-width.ckpt"
@@ -128,21 +161,53 @@ class InferenceCheckpointLoadingTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "retraining required"):
                 LightningWBoson.load_from_checkpoint(checkpoint_path, weights_only=False)
 
-    def test_rejects_legacy_normalization_and_embedding_shapes(self):
+    def test_rejects_legacy_normalization_shapes(self):
         model = self.make_model()
         checkpoint = {
             "state_dict": model.state_dict(),
             "hyper_parameters": dict(model.hparams),
             "pytorch-lightning_version": L.__version__,
         }
-        checkpoint["state_dict"]["model.norm.mean"] = torch.zeros(22)
-        checkpoint["state_dict"]["model.norm.std"] = torch.ones(22)
-        checkpoint["state_dict"]["model.hl_embed.weight"] = torch.zeros(8, 4)
+        checkpoint["state_dict"]["model.norm.mean"] = torch.zeros(24)
+        checkpoint["state_dict"]["model.norm.std"] = torch.ones(24)
 
         with tempfile.TemporaryDirectory() as tmpdir:
             checkpoint_path = Path(tmpdir) / "legacy-shapes.ckpt"
             torch.save(checkpoint, checkpoint_path)
             with self.assertRaisesRegex(RuntimeError, "retraining required"):
+                LightningWBoson.load_from_checkpoint(checkpoint_path, weights_only=False)
+
+    def test_rejects_legacy_six_input_hl_embedding(self):
+        model = self.make_model()
+        checkpoint = {
+            "state_dict": model.state_dict(),
+            "hyper_parameters": dict(model.hparams),
+            "pytorch-lightning_version": L.__version__,
+        }
+        checkpoint["state_dict"]["model.hl_embed.weight"] = torch.zeros(8, 6)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            checkpoint_path = Path(tmpdir) / "legacy-hl-embedding.ckpt"
+            torch.save(checkpoint, checkpoint_path)
+            with self.assertRaisesRegex(RuntimeError, "retraining required"):
+                LightningWBoson.load_from_checkpoint(checkpoint_path, weights_only=False)
+
+    def test_rejects_legacy_six_value_condition_buffers(self):
+        model = self.make_model()
+        checkpoint = {
+            "state_dict": model.state_dict(),
+            "hyper_parameters": dict(model.hparams),
+            "pytorch-lightning_version": L.__version__,
+        }
+        checkpoint["state_dict"]["model.cond_norm.mean"] = torch.zeros(6)
+        checkpoint["state_dict"]["model.cond_norm.std"] = torch.ones(6)
+        checkpoint["hyper_parameters"]["mmd_cond_mean_train"] = np.zeros(6)
+        checkpoint["hyper_parameters"]["mmd_cond_scale_train"] = np.ones(6)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            checkpoint_path = Path(tmpdir) / "legacy-condition.ckpt"
+            torch.save(checkpoint, checkpoint_path)
+            with self.assertRaisesRegex(ValueError, "retraining required"):
                 LightningWBoson.load_from_checkpoint(checkpoint_path, weights_only=False)
 
     def test_rejects_checkpoint_with_legacy_normalization_hyperparameters(self):
@@ -152,8 +217,8 @@ class InferenceCheckpointLoadingTest(unittest.TestCase):
             "hyper_parameters": dict(model.hparams),
             "pytorch-lightning_version": L.__version__,
         }
-        checkpoint["hyper_parameters"]["std_mean_train"] = np.zeros(22, dtype=np.float32)
-        checkpoint["hyper_parameters"]["std_scale_train"] = np.ones(22, dtype=np.float32)
+        checkpoint["hyper_parameters"]["std_mean_train"] = np.zeros(24, dtype=np.float32)
+        checkpoint["hyper_parameters"]["std_scale_train"] = np.ones(24, dtype=np.float32)
 
         with tempfile.TemporaryDirectory() as tmpdir:
             checkpoint_path = Path(tmpdir) / "legacy-statistics.ckpt"

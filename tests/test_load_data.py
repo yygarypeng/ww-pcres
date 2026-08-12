@@ -13,26 +13,26 @@ from data.load_data import (
 
 class MMDConditionFeaturesTest(unittest.TestCase):
     def test_builds_periodic_condition_features_in_documented_order(self):
-        features = np.zeros((2, 22), dtype=np.float32)
-        features[:, 18:22] = [
-            [10.0, -0.5, 0.0, np.pi / 2.0],
-            [20.0, 0.5, np.pi, -np.pi / 2.0],
+        features = np.zeros((2, 21), dtype=np.float32)
+        features[:, 18:21] = [
+            [10.0, -0.5, 0.0],
+            [20.0, 0.5, np.pi],
         ]
 
         condition = mmd_condition_features(features)
 
         expected = np.array([
-            [10.0, -0.5, 0.0, 1.0, 1.0, 0.0],
-            [20.0, 0.5, 0.0, -1.0, -1.0, 0.0],
+            [10.0, -0.5, 0.0, 1.0],
+            [20.0, 0.5, 0.0, -1.0],
         ])
         np.testing.assert_allclose(condition, expected, atol=1.0e-6)
 
     def test_only_nonperiodic_statistics_are_fitted(self):
-        features = np.zeros((3, 22), dtype=np.float32)
-        features[:, 18:22] = [
-            [10.0, -1.0, -0.5, -1.0],
-            [20.0, 0.0, 0.0, 0.0],
-            [30.0, 1.0, 0.5, 1.0],
+        features = np.zeros((3, 21), dtype=np.float32)
+        features[:, 18:21] = [
+            [10.0, -1.0, -0.5],
+            [20.0, 0.0, 0.0],
+            [30.0, 1.0, 0.5],
         ]
 
         mean, scale = compute_mmd_condition_stats(features)
@@ -40,12 +40,16 @@ class MMDConditionFeaturesTest(unittest.TestCase):
 
         np.testing.assert_allclose(mean[:2], transformed.mean(axis=0))
         np.testing.assert_allclose(scale[:2], transformed.std(axis=0))
-        np.testing.assert_array_equal(mean[2:], np.zeros(4))
-        np.testing.assert_array_equal(scale[2:], np.ones(4))
+        np.testing.assert_array_equal(mean[2:], np.zeros(2))
+        np.testing.assert_array_equal(scale[2:], np.ones(2))
 
-    def test_condition_features_require_all_four_observables(self):
-        with self.assertRaisesRegex(ValueError, "at least 22 features"):
-            mmd_condition_features(np.zeros((2, 21), dtype=np.float32))
+    def test_condition_features_require_all_three_observables(self):
+        with self.assertRaisesRegex(ValueError, "exactly 21 features"):
+            mmd_condition_features(np.zeros((2, 20), dtype=np.float32))
+
+    def test_condition_features_reject_legacy_extra_column(self):
+        with self.assertRaisesRegex(ValueError, "exactly 21 features"):
+            mmd_condition_features(np.zeros((2, 22), dtype=np.float32))
 
 
 class ValidTruthWRowsTest(unittest.TestCase):
@@ -77,7 +81,7 @@ class TestInputEnergyValidation(unittest.TestCase):
                              pt=[3, 3], eta=[0, 0], phi=[0, 0]),
             "neg_lep": group(px=[-2, -2], py=[0, 0], pz=[0, 0], energy=[5, 5],
                              pt=[3, 3], eta=[0, 0], phi=[1, 1]),
-            "met": group(px=[0, 0], py=[0, 0], phi=[0, 0]),
+            "met": group(px=[0, 0], py=[0, 0]),
             "jets": {
                 "px": np.array([[0, 0], [1, 0]], dtype=np.float64),
                 "py": np.zeros((count, 2)),
@@ -95,7 +99,7 @@ class TestInputEnergyValidation(unittest.TestCase):
 
         def capture_stats(train_obj, target_obj):
             captured["train_obj"] = train_obj.copy()
-            return ((np.zeros(22), np.ones(22)), (np.zeros(10), np.ones(10)))
+            return ((np.zeros(21), np.ones(21)), (np.zeros(10), np.ones(10)))
 
         with (
             patch("data.load_data.load_particles_from_h5", return_value={"sample": self._category()}),
@@ -103,7 +107,7 @@ class TestInputEnergyValidation(unittest.TestCase):
         ):
             train_obj, target_obj, _, _ = load_data("unused.h5")
 
-        self.assertEqual(train_obj.shape, (2, 22))
+        self.assertEqual(train_obj.shape, (2, 21))
         self.assertEqual(target_obj.shape, (2, 10))
         np.testing.assert_array_equal(train_obj[:, 8:12], np.zeros((2, 4)))
         np.testing.assert_array_equal(captured["train_obj"], train_obj)

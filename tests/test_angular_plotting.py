@@ -187,3 +187,93 @@ def test_visualize_notebook_compiles_and_uses_exported_angular_helpers():
         and node.func.id in {"plot_angular_1d_grid", "plot_angular_2d_grid"}
     ]
     assert len(angular_calls) == 6
+
+
+def test_truth_angle_feature_diagnostic_executes_with_periodic_inputs(capsys):
+    notebook = json.loads(NOTEBOOK_PATH.read_text())
+    matching_cells = [
+        cell
+        for cell in notebook["cells"]
+        if "# Truth-angle conditioning feature diagnostic" in "".join(cell["source"])
+    ]
+    assert len(matching_cells) == 1
+
+    event_count = 32
+    phase = np.linspace(-0.25, 0.25, event_count)
+    wrapped_phi = np.where(
+        np.arange(event_count) % 2 == 0,
+        -np.pi + phase,
+        np.pi + phase,
+    )
+    lepton_pt = np.linspace(25.0, 80.0, event_count)
+    train_features = np.zeros((event_count, 21), dtype=float)
+    train_features[:, 0] = lepton_pt * np.cos(wrapped_phi)
+    train_features[:, 1] = lepton_pt * np.sin(wrapped_phi)
+    train_features[:, 2] = np.linspace(-30.0, 30.0, event_count)
+    train_features[:, 3] = np.sqrt(
+        train_features[:, 0] ** 2
+        + train_features[:, 1] ** 2
+        + train_features[:, 2] ** 2
+    )
+    train_features[:, 4] = -0.7 * train_features[:, 0]
+    train_features[:, 5] = -0.7 * train_features[:, 1]
+    train_features[:, 6] = np.linspace(20.0, -20.0, event_count)
+    train_features[:, 7] = np.sqrt(
+        train_features[:, 4] ** 2
+        + train_features[:, 5] ** 2
+        + train_features[:, 6] ** 2
+    )
+    train_features[:, 16] = 30.0 * np.cos(wrapped_phi + 0.4)
+    train_features[:, 17] = 30.0 * np.sin(wrapped_phi + 0.4)
+    train_features[0, 3] = 0.0
+    train_features[0, 7] = 0.0
+
+    true_ang = np.column_stack(
+        (
+            np.linspace(0.2, 2.8, event_count),
+            wrapped_phi,
+            np.linspace(2.8, 0.2, event_count),
+            wrapped_phi + 0.2,
+            np.linspace(0.4, 2.4, event_count),
+            np.linspace(-1.0, 1.0, event_count),
+            wrapped_phi - 0.3,
+            wrapped_phi + 0.5,
+        )
+    )
+    namespace = {
+        "np": np,
+        "plt": plt,
+        "train_features": train_features,
+        "angular_valid": np.ones(event_count, dtype=bool),
+        "true_ang": true_ang,
+    }
+
+    exec("".join(matching_cells[0]["source"]), namespace)
+
+    matrix = namespace["feature_target_association"]
+    features = namespace["hl_angle_features"]
+    assert matrix.shape == (len(features), 8)
+    assert np.nanmax(np.abs(matrix)) <= 1.0
+    assert len(namespace["feature_target_association_fig"].axes) == 1
+    np.testing.assert_allclose(
+        namespace["feature_target_association_fig"].get_size_inches(), [12.0, 12.0]
+    )
+    assert namespace["feature_target_association_fig"].axes[0].get_aspect() == pytest.approx(1.0)
+    assert {"m_ll", "deta_ll", "dphi_ll", "dphi_ll_MET"} <= features.keys()
+    assert np.isnan(features["m_ll"][0][0])
+    lplus_phi_index = list(features).index("phi_lplus")
+    assert matrix[lplus_phi_index, 1] > 0.95
+
+    association = namespace["_association_strength"]
+    two_direction_phi = np.tile([0.0, np.pi], 4)
+    assert association(two_direction_phi, np.cos(two_direction_phi), True, False) > 0.95
+    assert np.isnan(
+        association(
+            np.array([-3.1, -1.0, 1.0, 3.1]),
+            np.array([-3.0, -0.8, 0.9, 3.0]),
+            True,
+            True,
+        )
+    )
+    assert "Strongest reconstructed features by truth target" in capsys.readouterr().out
+    plt.close(namespace["feature_target_association_fig"])

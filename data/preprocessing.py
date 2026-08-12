@@ -4,9 +4,9 @@ import torch
 from sklearn.preprocessing import StandardScaler
 
 
-RAW_INPUT_DIM = 22
-NEURAL_INPUT_DIM = 24
-INPUT_PREPROCESSING_VERSION = 1
+RAW_INPUT_DIM = 21
+NEURAL_INPUT_DIM = 22
+INPUT_PREPROCESSING_VERSION = 2
 
 
 def _require_raw_input_shape(features):
@@ -78,7 +78,6 @@ def neural_input_features_numpy(features: np.ndarray) -> np.ndarray:
         features[:, 12:15], np.log1p(features[:, 15:16]),
         features[:, 16:20],
         np.sin(features[:, 20:21]), np.cos(features[:, 20:21]),
-        np.sin(features[:, 21:22]), np.cos(features[:, 21:22]),
     ], axis=1)
 
 
@@ -92,7 +91,6 @@ def neural_input_features_torch(features: torch.Tensor) -> torch.Tensor:
         features[:, 12:15], torch.log1p(features[:, 15:16]),
         features[:, 16:20],
         torch.sin(features[:, 20:21]), torch.cos(features[:, 20:21]),
-        torch.sin(features[:, 21:22]), torch.cos(features[:, 21:22]),
     ], dim=1)
 
 
@@ -112,6 +110,6 @@ def compute_neural_input_stats(features: np.ndarray) -> tuple[np.ndarray, np.nda
             mean[neural_start:neural_start + 4] = 0.0
             scale[neural_start:neural_start + 4] = 1.0
 
-    mean[20:24] = 0.0
-    scale[20:24] = 1.0
+    mean[20:22] = 0.0
+    scale[20:22] = 1.0
     return mean, scale

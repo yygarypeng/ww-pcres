@@ -22,12 +22,12 @@ replace_multihead_attention_for_opset11 = converter.replace_multihead_attention_
 def valid_raw_inputs():
     inputs = torch.tensor(
         [
-            [1.0, 2.0, 3.0, 5.0, -1.0, 1.0, 2.0, 4.0, 1.0, 1.0, 1.0, 3.0, -1.0, 2.0, 1.0, 4.0, 2.0, -3.0, 0.5, 1.5, 0.2, -0.4],
-            [2.0, 1.0, -1.0, 4.0, 1.0, -2.0, 1.0, 4.0, 0.0, 0.0, 0.0, 0.0, 1.0, -1.0, 2.0, 4.0, -1.0, 2.0, 1.0, 0.5, -0.7, 1.1],
-            [-1.0, 2.0, 1.0, 4.0, 2.0, 1.0, -2.0, 4.0, 1.0, 2.0, -1.0, 4.0, 0.0, 0.0, 0.0, 0.0, 3.0, 1.0, 0.2, 2.0, 2.4, -2.2],
-            [1.0, -1.0, 2.0, 4.0, -2.0, 2.0, 1.0, 4.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -2.0, -1.0, 1.2, 0.8, -1.5, 0.9],
-            [1.0, 2.0, 1.0, 4.0, -1.0, 1.0, 2.0, 4.0, 3.0, -2.0, 1.0, -0.5, 1.0, 1.0, -1.0, 3.0, 2.0, -1.0, 0.6, 1.2, 0.4, -0.8],
-            [1.0, 2.0, 1.0, 4.0, -1.0, 1.0, 2.0, 4.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, -1.0, 3.0, 2.0, -1.0, 0.6, 1.2, 0.4, -0.8],
+            [1.0, 2.0, 3.0, 5.0, -1.0, 1.0, 2.0, 4.0, 1.0, 1.0, 1.0, 3.0, -1.0, 2.0, 1.0, 4.0, 2.0, -3.0, 0.5, 1.5, 0.2],
+            [2.0, 1.0, -1.0, 4.0, 1.0, -2.0, 1.0, 4.0, 0.0, 0.0, 0.0, 0.0, 1.0, -1.0, 2.0, 4.0, -1.0, 2.0, 1.0, 0.5, -0.7],
+            [-1.0, 2.0, 1.0, 4.0, 2.0, 1.0, -2.0, 4.0, 1.0, 2.0, -1.0, 4.0, 0.0, 0.0, 0.0, 0.0, 3.0, 1.0, 0.2, 2.0, 2.4],
+            [1.0, -1.0, 2.0, 4.0, -2.0, 2.0, 1.0, 4.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -2.0, -1.0, 1.2, 0.8, -1.5],
+            [1.0, 2.0, 1.0, 4.0, -1.0, 1.0, 2.0, 4.0, 3.0, -2.0, 1.0, -0.5, 1.0, 1.0, -1.0, 3.0, 2.0, -1.0, 0.6, 1.2, 0.4],
+            [1.0, 2.0, 1.0, 4.0, -1.0, 1.0, 2.0, 4.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, -1.0, 3.0, 2.0, -1.0, 0.6, 1.2, 0.4],
         ],
         dtype=torch.float32,
     )
@@ -38,7 +38,7 @@ class Opset11MultiheadAttentionTest(unittest.TestCase):
     def test_export_dummy_inputs_follow_raw_physics_contract(self):
         inputs = converter.make_valid_raw_inputs(4, seed=7)
 
-        self.assertEqual(inputs.shape, (4, 22))
+        self.assertEqual(inputs.shape, (4, 21))
         self.assertTrue(torch.all(inputs[:, [3, 7]] > 0.0))
         for row, missing_slots in enumerate(((), (0,), (1,), (0, 1))):
             for slot, start in enumerate((8, 12)):
@@ -87,13 +87,13 @@ class Opset11MultiheadAttentionTest(unittest.TestCase):
         import onnxruntime
 
         torch.manual_seed(5)
-        input_dim = 22
+        input_dim = 21
         native_model = WBosonRegressor(
             input_dim=input_dim,
             d_model=8,
             num_heads=2,
-            std_mean_train=np.zeros(24, dtype=np.float32),
-            std_scale_train=np.ones(24, dtype=np.float32),
+            std_mean_train=np.zeros(22, dtype=np.float32),
+            std_scale_train=np.ones(22, dtype=np.float32),
             attention_blocks=1,
             attention_dropout=0.0,
             decoder_dropout=0.0,
@@ -130,7 +130,7 @@ class Opset11MultiheadAttentionTest(unittest.TestCase):
                 providers=["CPUExecutionProvider"],
             )
             onnx_input = session.get_inputs()[0]
-            self.assertEqual(onnx_input.shape[1], 22)
+            self.assertEqual(onnx_input.shape[1], 21)
             sentinel_batches = []
             for jet_start in (8, 12):
                 batch = inputs[5:6].repeat(2, 1)

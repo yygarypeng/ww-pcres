@@ -27,19 +27,19 @@ from model.losses import (
 DEFAULT_MMD_CONFIG = {
     "condition": {
         "kernel": "imq",
-        "bandwidth_multipliers": [0.01, 0.1, 1.0, 10, 100],
+        "bandwidth_multipliers": [0.01, 0.1, 1.0],
     },
     "alpha": {
         "kernel": "imq",
-        "bandwidth_multipliers": [0.01, 0.1, 1.0, 10, 100],
+        "bandwidth_multipliers": [0.01, 0.1, 1.0],
     },
     "mass": {
         "kernel": "imq",
-        "bandwidth_multipliers": [0.01, 0.1, 1.0, 10, 100],
+        "bandwidth_multipliers": [0.01, 0.1, 1.0],
     },
     "angular": {
         "kernel": "imq",
-        "bandwidth_multipliers": [0.01, 0.1, 1.0, 10, 100],
+        "bandwidth_multipliers": [0.01, 0.1, 1.0],
     },
 }
 DEFAULT_LOCAL_MMD = True
@@ -108,13 +108,16 @@ class WBosonRegressor(nn.Module):
         if (mmd_cond_mean_train is None) != (mmd_cond_scale_train is None):
             raise ValueError("MMD condition mean and scale must be provided together")
         if mmd_cond_mean_train is None:
-            mmd_cond_mean_train = torch.zeros(6, dtype=torch.float32)
-            mmd_cond_scale_train = torch.ones(6, dtype=torch.float32)
-        if len(mmd_cond_mean_train) != 6 or len(mmd_cond_scale_train) != 6:
-            raise ValueError("MMD condition mean and scale must each contain 6 values")
+            mmd_cond_mean_train = torch.zeros(4, dtype=torch.float32)
+            mmd_cond_scale_train = torch.ones(4, dtype=torch.float32)
+        if len(mmd_cond_mean_train) != 4 or len(mmd_cond_scale_train) != 4:
+            raise ValueError(
+                "MMD condition mean and scale must each contain 4 values; "
+                "retraining required for incompatible checkpoints"
+            )
         self.cond_norm = Standardization(mmd_cond_mean_train, mmd_cond_scale_train)
         self.base_input_dim = 18 # w/o high-level features
-        self.hl_input_dim = NEURAL_INPUT_DIM - self.base_input_dim
+        self.hl_input_dim = 4
         
         # Object-specific embeddings avoid forcing charge/order symmetry too early.
         self.lep0_embed = nn.Linear(4, d_model)
@@ -175,7 +178,14 @@ class WBosonRegressor(nn.Module):
         met = self.met_embed(x_std[:, 16:18])
         tokens = [l0, l1, j0, j1, met]
         if self.hl_embed is not None:
-            tokens.append(self.hl_embed(x_std[:, self.base_input_dim:]))
+            tokens.append(
+                self.hl_embed(
+                    x_std[
+                        :,
+                        self.base_input_dim:self.base_input_dim + self.hl_input_dim,
+                    ]
+                )
+            )
         context = torch.stack(tokens, dim=1)
 
         # Key mask for empty jets
@@ -202,8 +212,6 @@ class WBosonRegressor(nn.Module):
             x[..., 19],
             torch.sin(x[..., 20]),
             torch.cos(x[..., 20]),
-            torch.sin(x[..., 21]),
-            torch.cos(x[..., 21]),
         ], dim=-1)
         standardized = self.cond_norm(condition)
         return torch.cat([standardized[..., :2], condition[..., 2:]], dim=-1)
@@ -244,6 +252,7 @@ class LightningWBoson(L.LightningModule):
             lr=1e-4, weight_decay=1e-4, loss_weights=None,
             mmd_config=None,
             mmd_start_epoch=0,
+            angular_mmd_schedule=None,
             adaptive_loss_weights=False,
             log_loss_gradient_cosines=False,
             higgs_mass_delta=2.0,
@@ -260,6 +269,35 @@ class LightningWBoson(L.LightningModule):
             )
         if mmd_start_epoch < 0:
             raise ValueError("mmd_start_epoch must be non-negative")
+        if angular_mmd_schedule is not None:
+            allowed_schedule_keys = {
+                "initial_multiplier",
+                "hold_epochs",
+                "full_weight_epoch",
+            }
+            unknown_schedule_keys = set(angular_mmd_schedule) - allowed_schedule_keys
+            if unknown_schedule_keys:
+                names = ", ".join(sorted(unknown_schedule_keys))
+                raise ValueError(f"unsupported angular_mmd_schedule key(s): {names}")
+            try:
+                initial_multiplier = float(angular_mmd_schedule["initial_multiplier"])
+                hold_epochs = int(angular_mmd_schedule["hold_epochs"])
+                full_weight_epoch = int(angular_mmd_schedule["full_weight_epoch"])
+            except (KeyError, TypeError, ValueError) as error:
+                raise ValueError("invalid angular_mmd_schedule") from error
+            if not math.isfinite(initial_multiplier) or not 0.0 <= initial_multiplier <= 1.0:
+                raise ValueError("angular_mmd_schedule initial_multiplier must be in [0, 1]")
+            if hold_epochs < 0:
+                raise ValueError("angular_mmd_schedule hold_epochs must be non-negative")
+            if full_weight_epoch <= hold_epochs:
+                raise ValueError(
+                    "angular_mmd_schedule full_weight_epoch must exceed hold_epochs"
+                )
+            angular_mmd_schedule = {
+                "initial_multiplier": initial_multiplier,
+                "hold_epochs": hold_epochs,
+                "full_weight_epoch": full_weight_epoch,
+            }
         mmd_config = resolve_mmd_config(mmd_config)
         self.save_hyperparameters()
         if w_fourvec_scales is None:
@@ -333,6 +371,7 @@ class LightningWBoson(L.LightningModule):
         self._gradient_analysis_batch = None
         self.mmd_config = mmd_config
         self.mmd_start_epoch = mmd_start_epoch
+        self.angular_mmd_schedule = angular_mmd_schedule
         self.higgs_mass_delta = float(higgs_mass_delta)
         self.lr = lr
 
@@ -348,6 +387,8 @@ class LightningWBoson(L.LightningModule):
         expected_shapes = {
             "model.norm.mean": (NEURAL_INPUT_DIM,),
             "model.norm.std": (NEURAL_INPUT_DIM,),
+            "model.cond_norm.mean": (4,),
+            "model.cond_norm.std": (4,),
             "model.hl_embed.weight": (self.model.hl_embed.out_features, self.model.hl_input_dim),
         }
         invalid_shape = any(
@@ -363,17 +404,36 @@ class LightningWBoson(L.LightningModule):
         return self.model(x, return_aux=return_aux)
 
     def _mmd_is_warming_up(self):
-        return (
-            self.training
-            and self.current_epoch < self.mmd_start_epoch
-        )
+        return self.current_epoch < self.mmd_start_epoch
 
     def _effective_loss_weights(self):
-        if not self._mmd_is_warming_up():
+        if self._mmd_is_warming_up():
+            return {
+                name: 0.0 if name in MMD_LOSS_NAMES else weight
+                for name, weight in self.loss_weights.items()
+            }
+        if self.angular_mmd_schedule is None:
             return self.loss_weights
+
+        schedule = self.angular_mmd_schedule
+        epoch = self.current_epoch
+        if epoch <= schedule["hold_epochs"]:
+            multiplier = schedule["initial_multiplier"]
+        elif epoch >= schedule["full_weight_epoch"]:
+            multiplier = 1.0
+        else:
+            progress = (
+                (epoch - schedule["hold_epochs"])
+                / (schedule["full_weight_epoch"] - schedule["hold_epochs"])
+            )
+            multiplier = schedule["initial_multiplier"] + (
+                (1.0 - schedule["initial_multiplier"])
+                * (1.0 - math.cos(math.pi * progress))
+                / 2.0
+            )
         return {
-            name: 0.0 if name in MMD_LOSS_NAMES else weight
-            for name, weight in self.loss_weights.items()
+            **self.loss_weights,
+            "angular_mmd": self.loss_weights["angular_mmd"] * multiplier,
         }
 
     def _loss_enabled(self, name, weights=None):
@@ -489,11 +549,12 @@ class LightningWBoson(L.LightningModule):
 
         total_grad = self._loss_grad_vector(total, parameters)
 
+        effective_weights = self._effective_loss_weights()
         cosines = {}
         for name in names:
             grad = self._loss_grad_vector(losses[name], parameters)
             cos_total = torch.nn.functional.cosine_similarity(grad, total_grad, dim=0, eps=1.0e-6)
-            weight = self.loss_weights.get(name, 0.0)
+            weight = effective_weights.get(name, 0.0)
             rest_grad = total_grad - weight * grad
             cos_rest = torch.nn.functional.cosine_similarity(grad, rest_grad, dim=0, eps=1.0e-6)
             if not torch.isfinite(cos_total).item() or not torch.isfinite(cos_rest).item():
