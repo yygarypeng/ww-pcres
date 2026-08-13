@@ -1,9 +1,9 @@
 import math
 
+import pytorch_lightning as L
 import torch
 import torch.nn as nn
 from torch.nn.utils import parameters_to_vector
-import pytorch_lightning as L
 
 from data.preprocessing import (
     INPUT_PREPROCESSING_VERSION,
@@ -12,7 +12,7 @@ from data.preprocessing import (
     neural_input_features_torch,
     normalize_negative_energy_jets_torch,
 )
-from model.layers import Standardization, SelfAttentionBlock, ResidualBlock, WBosonFourVectorLayer
+from model.layers import ResidualBlock, SelfAttentionBlock, Standardization, WBosonFourVectorLayer
 from model.losses import (
     alpha_mmd,
     angular_mmd,
@@ -22,7 +22,6 @@ from model.losses import (
     standardized_fourvec_huber_loss,
     w_mass_huber_loss,
 )
-
 
 DEFAULT_MMD_CONFIG = {
     "condition": {
@@ -68,28 +67,27 @@ def resolve_mmd_config(config=None):
             raise ValueError(f"unsupported MMD kernel in {section}: {resolved_section['kernel']}")
         multipliers = resolved_section["bandwidth_multipliers"]
         if not multipliers or not all(
-            math.isfinite(float(value)) and float(value) > 0.0
-            for value in multipliers
+            math.isfinite(float(value)) and float(value) > 0.0 for value in multipliers
         ):
-            raise ValueError(
-                f"MMD bandwidth_multipliers in {section} must be finite and positive"
-            )
+            raise ValueError(f"MMD bandwidth_multipliers in {section} must be finite and positive")
         resolved[section] = resolved_section
     return resolved
 
 
 class WBosonRegressor(nn.Module):
     def __init__(
-            self, 
-            input_dim,
-            d_model, num_heads,
-            std_mean_train, std_scale_train,
-            mmd_cond_mean_train=None,
-            mmd_cond_scale_train=None,
-            attention_blocks=4,
-            attention_dropout=0.1,
-            decoder_dropout=0.1,
-        ):
+        self,
+        input_dim,
+        d_model,
+        num_heads,
+        std_mean_train,
+        std_scale_train,
+        mmd_cond_mean_train=None,
+        mmd_cond_scale_train=None,
+        attention_blocks=4,
+        attention_dropout=0.1,
+        decoder_dropout=0.1,
+    ):
         super().__init__()
 
         if input_dim != RAW_INPUT_DIM:
@@ -116,9 +114,9 @@ class WBosonRegressor(nn.Module):
                 "retraining required for incompatible checkpoints"
             )
         self.cond_norm = Standardization(mmd_cond_mean_train, mmd_cond_scale_train)
-        self.base_input_dim = 18 # w/o high-level features
+        self.base_input_dim = 18  # w/o high-level features
         self.hl_input_dim = 4
-        
+
         # Object-specific embeddings avoid forcing charge/order symmetry too early.
         self.lep0_embed = nn.Linear(4, d_model)
         self.lep1_embed = nn.Linear(4, d_model)
@@ -129,40 +127,46 @@ class WBosonRegressor(nn.Module):
         self.num_tokens = 5 + int(self.hl_embed is not None)
         if self.hl_embed is not None:
             print(f"Using {self.hl_input_dim} high-level features in the model.")
-        self.sa_blocks = nn.ModuleList([
-            SelfAttentionBlock(d_model, num_heads, dropout=attention_dropout)
-            for _ in range(attention_blocks)
-        ])
+        self.sa_blocks = nn.ModuleList(
+            [
+                SelfAttentionBlock(d_model, num_heads, dropout=attention_dropout)
+                for _ in range(attention_blocks)
+            ]
+        )
         self.context_norm = nn.LayerNorm(d_model)
         print(f"Using {len(self.sa_blocks)} SA blocks.")
-        
+
         # residual decoder blocks
         self.trunk = nn.Sequential(
             nn.Linear(d_model * self.num_tokens, 512),
-            nn.GELU(),
-            nn.Dropout(decoder_dropout),
             ResidualBlock(512, 512, hidden_dim=512, dropout=decoder_dropout),
             ResidualBlock(512, 256, hidden_dim=512, dropout=decoder_dropout),
             ResidualBlock(256, 256, hidden_dim=256, dropout=decoder_dropout),
             ResidualBlock(256, 128, hidden_dim=256, dropout=decoder_dropout),
             ResidualBlock(128, 128, hidden_dim=128, dropout=decoder_dropout),
+            ResidualBlock(128, 64, hidden_dim=128, dropout=decoder_dropout),
+            ResidualBlock(64, 64, hidden_dim=64, dropout=decoder_dropout),
         )
 
         # Latent regression head layout: [delta_dinu_px, delta_dinu_py, nu0_pz, nu1_pz]
         self.nu_mom_head = nn.Sequential(
-            nn.LayerNorm(128),
-            nn.Linear(128, 64),
+            nn.LayerNorm(64),
+            nn.Linear(64, 32),
             nn.GELU(),
-            nn.Linear(64, 4)
+            nn.Linear(32, 16),
+            nn.GELU(),
+            nn.Linear(16, 4),
         )
         # Latent regression head layout: [dmet_x, dmet_y]
         self.nu_dmet_head = nn.Sequential(
-            nn.LayerNorm(128),
-            nn.Linear(128, 32),
+            nn.LayerNorm(64),
+            nn.Linear(64, 16),
             nn.GELU(),
-            nn.Linear(32, 2)
+            nn.Linear(16, 8),
+            nn.GELU(),
+            nn.Linear(8, 2),
         )
-        
+
         # W bosons decoder
         self.w_layer = WBosonFourVectorLayer()
 
@@ -180,10 +184,7 @@ class WBosonRegressor(nn.Module):
         if self.hl_embed is not None:
             tokens.append(
                 self.hl_embed(
-                    x_std[
-                        :,
-                        self.base_input_dim:self.base_input_dim + self.hl_input_dim,
-                    ]
+                    x_std[:, self.base_input_dim : self.base_input_dim + self.hl_input_dim]
                 )
             )
         context = torch.stack(tokens, dim=1)
@@ -191,12 +192,12 @@ class WBosonRegressor(nn.Module):
         # Key mask for empty jets
         batch_size = x.shape[0]
         key_mask = torch.zeros((batch_size, self.num_tokens), dtype=torch.bool, device=x.device)
-        key_mask[:, 2] = (x[:, 8:12].abs().sum(dim=1) == 0)
-        key_mask[:, 3] = (x[:, 12:16].abs().sum(dim=1) == 0)
+        key_mask[:, 2] = x[:, 8:12].abs().sum(dim=1) == 0
+        key_mask[:, 3] = x[:, 12:16].abs().sum(dim=1) == 0
         context = context.masked_fill(key_mask.unsqueeze(-1), 0.0)
-        
+
         for refiner in self.sa_blocks:
-            context = refiner(context, key_padding_mask=key_mask) # [B, num_tokens, d_model]
+            context = refiner(context, key_padding_mask=key_mask)  # [B, num_tokens, d_model]
             context = context.masked_fill(key_mask.unsqueeze(-1), 0.0)
 
         context = self.context_norm(context)
@@ -207,12 +208,15 @@ class WBosonRegressor(nn.Module):
         if x.shape[-1] != RAW_INPUT_DIM:
             raise ValueError(f"raw input contract requires {RAW_INPUT_DIM} features")
 
-        condition = torch.stack([
-            x[..., 18],
-            x[..., 19],
-            torch.sin(x[..., 20]),
-            torch.cos(x[..., 20]),
-        ], dim=-1)
+        condition = torch.stack(
+            [
+                x[..., 18],
+                x[..., 19],
+                torch.sin(x[..., 20]),
+                torch.cos(x[..., 20]),
+            ],
+            dim=-1,
+        )
         standardized = self.cond_norm(condition)
         return torch.cat([standardized[..., :2], condition[..., 2:]], dim=-1)
 
@@ -239,28 +243,32 @@ class WBosonRegressor(nn.Module):
 
 class LightningWBoson(L.LightningModule):
     def __init__(
-            self, 
-            input_dim,
-            d_model, num_heads,
-            std_mean_train, std_scale_train,
-            mmd_cond_mean_train=None,
-            mmd_cond_scale_train=None,
-            w_fourvec_scales=None,
-            dmet_scales=None,
-            mass_mmd_center=0.0,
-            mass_mmd_scale=1.0,
-            lr=1e-4, weight_decay=1e-4, loss_weights=None,
-            mmd_config=None,
-            mmd_start_epoch=0,
-            angular_mmd_schedule=None,
-            adaptive_loss_weights=False,
-            log_loss_gradient_cosines=False,
-            higgs_mass_delta=2.0,
-            input_preprocessing_version=INPUT_PREPROCESSING_VERSION,
-            attention_blocks=4,
-            attention_dropout=0.1,
-            decoder_dropout=0.1,
-        ):
+        self,
+        input_dim,
+        d_model,
+        num_heads,
+        std_mean_train,
+        std_scale_train,
+        mmd_cond_mean_train=None,
+        mmd_cond_scale_train=None,
+        w_fourvec_scales=None,
+        dmet_scales=None,
+        mass_mmd_center=0.0,
+        mass_mmd_scale=1.0,
+        lr=1e-4,
+        weight_decay=1e-4,
+        loss_weights=None,
+        mmd_config=None,
+        mmd_start_epoch=0,
+        angular_mmd_schedule=None,
+        adaptive_loss_weights=False,
+        log_loss_gradient_cosines=False,
+        higgs_mass_delta=2.0,
+        input_preprocessing_version=INPUT_PREPROCESSING_VERSION,
+        attention_blocks=4,
+        attention_dropout=0.1,
+        decoder_dropout=0.1,
+    ):
         super().__init__()
         if input_preprocessing_version != INPUT_PREPROCESSING_VERSION:
             raise ValueError(
@@ -290,9 +298,7 @@ class LightningWBoson(L.LightningModule):
             if hold_epochs < 0:
                 raise ValueError("angular_mmd_schedule hold_epochs must be non-negative")
             if full_weight_epoch <= hold_epochs:
-                raise ValueError(
-                    "angular_mmd_schedule full_weight_epoch must exceed hold_epochs"
-                )
+                raise ValueError("angular_mmd_schedule full_weight_epoch must exceed hold_epochs")
             angular_mmd_schedule = {
                 "initial_multiplier": initial_multiplier,
                 "hold_epochs": hold_epochs,
@@ -304,13 +310,17 @@ class LightningWBoson(L.LightningModule):
             w_fourvec_scales = torch.ones(4, dtype=torch.float32)
         self.register_buffer(
             "w_fourvec_scales",
-            torch.as_tensor(w_fourvec_scales, dtype=torch.float32).clamp_min(torch.finfo(torch.float32).eps),
+            torch.as_tensor(w_fourvec_scales, dtype=torch.float32).clamp_min(
+                torch.finfo(torch.float32).eps
+            ),
         )
         if dmet_scales is None:
             dmet_scales = torch.ones(2, dtype=torch.float32)
         self.register_buffer(
             "dmet_scales",
-            torch.as_tensor(dmet_scales, dtype=torch.float32).clamp_min(torch.finfo(torch.float32).eps),
+            torch.as_tensor(dmet_scales, dtype=torch.float32).clamp_min(
+                torch.finfo(torch.float32).eps
+            ),
         )
         self.register_buffer(
             "mass_mmd_center",
@@ -318,21 +328,25 @@ class LightningWBoson(L.LightningModule):
         )
         self.register_buffer(
             "mass_mmd_scale",
-            torch.as_tensor(mass_mmd_scale, dtype=torch.float32).clamp_min(torch.finfo(torch.float32).eps),
+            torch.as_tensor(mass_mmd_scale, dtype=torch.float32).clamp_min(
+                torch.finfo(torch.float32).eps
+            ),
         )
         self.model = WBosonRegressor(
-            input_dim, 
-            d_model, num_heads,
-            std_mean_train, std_scale_train,
+            input_dim,
+            d_model,
+            num_heads,
+            std_mean_train,
+            std_scale_train,
             mmd_cond_mean_train=mmd_cond_mean_train,
             mmd_cond_scale_train=mmd_cond_scale_train,
             attention_blocks=attention_blocks,
             attention_dropout=attention_dropout,
             decoder_dropout=decoder_dropout,
-        ) # give a base model structure for forward() 
+        )  # give a base model structure for forward()
         defaults = {
             # main loss
-            "huber": 1.0, 
+            "huber": 1.0,
             # mass losses
             "higgs_mass": 0.0,
             "w_mass_huber": 0.0,
@@ -350,8 +364,7 @@ class LightningWBoson(L.LightningModule):
         deprecated = set(loss_weights or {}) & deprecated_loss_names.keys()
         if deprecated:
             details = "; ".join(
-                f"{name}: {deprecated_loss_names[name]}"
-                for name in sorted(deprecated)
+                f"{name}: {deprecated_loss_names[name]}" for name in sorted(deprecated)
             )
             raise ValueError(f"deprecated loss_weights key(s): {details}")
         unsupported_loss_weights = set(loss_weights or {}) - defaults.keys()
@@ -359,13 +372,11 @@ class LightningWBoson(L.LightningModule):
             names = ", ".join(sorted(unsupported_loss_weights))
             raise ValueError(f"unsupported loss_weights key(s): {names}")
         self.loss_weights = {
-            name: float(weight)
-            for name, weight in {**defaults, **(loss_weights or {})}.items()
+            name: float(weight) for name, weight in {**defaults, **(loss_weights or {})}.items()
         }
         self.adaptive_loss_weights = bool(adaptive_loss_weights)
         self.adaptive_loss_names = [
-            name for name, weight in self.loss_weights.items()
-            if weight != 0.0 and name != "huber"
+            name for name, weight in self.loss_weights.items() if weight != 0.0 and name != "huber"
         ]
         self.log_loss_gradient_cosines = bool(log_loss_gradient_cosines)
         self._gradient_analysis_batch = None
@@ -422,14 +433,11 @@ class LightningWBoson(L.LightningModule):
         elif epoch >= schedule["full_weight_epoch"]:
             multiplier = 1.0
         else:
-            progress = (
-                (epoch - schedule["hold_epochs"])
-                / (schedule["full_weight_epoch"] - schedule["hold_epochs"])
+            progress = (epoch - schedule["hold_epochs"]) / (
+                schedule["full_weight_epoch"] - schedule["hold_epochs"]
             )
             multiplier = schedule["initial_multiplier"] + (
-                (1.0 - schedule["initial_multiplier"])
-                * (1.0 - math.cos(math.pi * progress))
-                / 2.0
+                (1.0 - schedule["initial_multiplier"]) * (1.0 - math.cos(math.pi * progress)) / 2.0
             )
         return {
             **self.loss_weights,
@@ -438,13 +446,10 @@ class LightningWBoson(L.LightningModule):
 
     def _loss_enabled(self, name, weights=None):
         weights = self._effective_loss_weights() if weights is None else weights
-        return (
-            weights.get(name, 0.0) != 0.0
-            or (
-                self.adaptive_loss_weights
-                and name in self.adaptive_loss_names
-                and not (name in MMD_LOSS_NAMES and self._mmd_is_warming_up())
-            )
+        return weights.get(name, 0.0) != 0.0 or (
+            self.adaptive_loss_weights
+            and name in self.adaptive_loss_names
+            and not (name in MMD_LOSS_NAMES and self._mmd_is_warming_up())
         )
 
     def _mmd_kwargs(self, feature_name):
@@ -530,7 +535,7 @@ class LightningWBoson(L.LightningModule):
             loss,
             parameters,
             retain_graph=True,
-            allow_unused=True, # allow loss only use parts of output (parameters)
+            allow_unused=True,  # allow loss only use parts of output (parameters)
         )
         return parameters_to_vector(
             torch.zeros_like(param) if grad is None else grad.detach()
@@ -574,10 +579,7 @@ class LightningWBoson(L.LightningModule):
         adaptive_loss_budget = sum(self.loss_weights.get(name, 0.0) for name in names)
         if adaptive_loss_budget <= 0.0:
             return
-        raw_weights = [
-            torch.clamp(1.0 - cosines[name]["total"], min=0.0)
-            for name in names
-        ]
+        raw_weights = [torch.clamp(1.0 - cosines[name]["total"], min=0.0) for name in names]
 
         raw_sum = torch.stack(raw_weights).sum()
         if not torch.isfinite(raw_sum).item() or raw_sum.item() <= 0.0:
@@ -606,8 +608,16 @@ class LightningWBoson(L.LightningModule):
         if not self.log_loss_gradient_cosines:
             return
         for name, cos in cosines.items():
-            self.log(f"grad_cos/{name}__total", cos["total"], prog_bar=False, on_step=False, on_epoch=True)
-            self.log(f"grad_cos/{name}__rest", cos["rest"], prog_bar=False, on_step=False, on_epoch=True)
+            self.log(
+                f"grad_cos/{name}__total",
+                cos["total"],
+                prog_bar=False,
+                on_step=False,
+                on_epoch=True,
+            )
+            self.log(
+                f"grad_cos/{name}__rest", cos["rest"], prog_bar=False, on_step=False, on_epoch=True
+            )
 
     def on_train_epoch_start(self):
         self._gradient_analysis_batch = None
@@ -626,7 +636,7 @@ class LightningWBoson(L.LightningModule):
             self._update_adaptive_loss_weights(cosines)
         self._log_grad_cosines(cosines)
         self._gradient_analysis_batch = None
-    
+
     def training_step(self, batch, batch_idx):
         x, y = batch
         total, losses = self._compute_batch_losses(x, y)
@@ -642,13 +652,13 @@ class LightningWBoson(L.LightningModule):
         total, losses = self._compute_batch_losses(x, y)
         self._log_losses(f"{stage}", losses, total)
         return total
-    
+
     def validation_step(self, batch, batch_idx):
         _ = self._shared_step(batch, batch_idx, stage="val_")
 
     def test_step(self, batch, batch_idx):
         _ = self._shared_step(batch, batch_idx, stage="test_")
-    
+
     def configure_optimizers(self):
         return torch.optim.AdamW(
             self.parameters(),

@@ -8,6 +8,7 @@ from physics import _diff_angle, _sum_angle
 # Auxiliary Functions #
 #######################
 
+
 class _SafeAcos(torch.autograd.Function):
     @staticmethod
     def forward(ctx, x, eps):
@@ -51,6 +52,7 @@ def safe_atan2(y, x, eps=1e-6):
 # Main bossting codes #
 #######################
 
+
 class Booster(nn.Module):
     """
     Torch W-rest-frame booster.
@@ -60,17 +62,22 @@ class Booster(nn.Module):
     :param wboson: Tensor of shape [batch, 8] containing the two W boson 4-vectors (w0, w1) in the lab frame.
     """
 
-    def __init__(self, lep, wboson, eps=1e-12,):
+    def __init__(
+        self,
+        lep,
+        wboson,
+        eps=1e-12,
+    ):
         super().__init__()
         self.eps = eps
-        w0, w1 =wboson[..., :4], wboson[..., 4:8]
+        w0, w1 = wboson[..., :4], wboson[..., 4:8]
         lep0, lep1 = lep[..., :4], lep[..., 4:8]
         self.particles = torch.cat([w0, lep0, w1, lep1], dim=-1)
 
     #############
     # Utilities #
     #############
-    
+
     def _eps(self, x):
         return max(self.eps, torch.finfo(x.dtype).eps)
 
@@ -82,9 +89,7 @@ class Booster(nn.Module):
 
     def _has_rest_frame(self, p4):
         return (
-            torch.isfinite(p4).all(dim=-1) &
-            (p4[..., 3] > 0.0) &
-            (self._mass2(p4) > self._eps(p4))
+            torch.isfinite(p4).all(dim=-1) & (p4[..., 3] > 0.0) & (self._mass2(p4) > self._eps(p4))
         )
 
     def valid_rest_frame_mask(self, particles=None):
@@ -100,26 +105,25 @@ class Booster(nn.Module):
         w1_axis = w1_h[..., 0:3]
         eps = self._eps(w1_h)
         axis_norm = torch.linalg.vector_norm(w1_axis, dim=-1)
-        transverse_fraction = (
-            torch.linalg.vector_norm(w1_axis[..., 0:2], dim=-1) /
-            axis_norm.clamp_min(eps)
-        )
+        transverse_fraction = torch.linalg.vector_norm(
+            w1_axis[..., 0:2], dim=-1
+        ) / axis_norm.clamp_min(eps)
 
         return (
-            torch.isfinite(lep0).all(dim=-1) &
-            torch.isfinite(lep1).all(dim=-1) &
-            self._has_rest_frame(higgs) &
-            self._has_rest_frame(w0) &
-            self._has_rest_frame(w1) &
-            torch.isfinite(w1_axis).all(dim=-1) &
-            (axis_norm > eps) &
-            (transverse_fraction > eps**0.5)
+            torch.isfinite(lep0).all(dim=-1)
+            & torch.isfinite(lep1).all(dim=-1)
+            & self._has_rest_frame(higgs)
+            & self._has_rest_frame(w0)
+            & self._has_rest_frame(w1)
+            & torch.isfinite(w1_axis).all(dim=-1)
+            & (axis_norm > eps)
+            & (transverse_fraction > eps**0.5)
         )
-    
+
     ###################
     # Boost functions #
     ###################
-    
+
     def _boost(self, p4, beta):
         """
         Lorentz boost with the same sign convention as ROOT TLorentzVector.Boost.
@@ -131,7 +135,7 @@ class Booster(nn.Module):
         eps = self._eps(p4)
         beta = torch.nan_to_num(beta, nan=0.0, posinf=0.0, neginf=0.0)
         beta2 = torch.sum(beta * beta, dim=-1, keepdim=True)
-        valid_beta = beta2 < 1.0 # cannot exceed the speed of light
+        valid_beta = beta2 < 1.0  # cannot exceed the speed of light
         beta = torch.where(valid_beta, beta, torch.zeros_like(beta))
         beta2 = torch.where(valid_beta, beta2, torch.zeros_like(beta2))
         gamma = torch.rsqrt((1.0 - beta2).clamp_min(eps))
@@ -146,9 +150,11 @@ class Booster(nn.Module):
     def _boost_to_rest(self, p4, reference):
         valid = self._has_rest_frame(reference).unsqueeze(-1)
         energy = torch.where(valid, reference[..., 3:4], torch.ones_like(reference[..., 3:4]))
-        beta = torch.where(valid, reference[..., 0:3] / energy, torch.zeros_like(reference[..., 0:3]))
+        beta = torch.where(
+            valid, reference[..., 0:3] / energy, torch.zeros_like(reference[..., 0:3])
+        )
         return self._boost(p4, -beta)
-    
+
     ######################
     # Basis construction #
     ######################
@@ -165,7 +171,7 @@ class Booster(nn.Module):
         r = (beam - y * k) / transverse
         n = torch.cross(beam, k, dim=-1) / transverse
         return n, r, k
-    
+
     ###############
     # Projections #
     ###############
@@ -178,10 +184,11 @@ class Booster(nn.Module):
                 torch.sum(p3 * n, dim=-1),
                 torch.sum(p3 * r, dim=-1),
                 torch.sum(p3 * k, dim=-1),
-            ], dim=-1,
+            ],
+            dim=-1,
         )
         return torch.cat([p3_projected, p4[..., 3:4]], dim=-1)
-    
+
     ######################
     # Feature extraction #
     ######################
@@ -194,11 +201,11 @@ class Booster(nn.Module):
     @staticmethod
     def _phi(p4):
         return safe_atan2(p4[..., 1], p4[..., 0])
-    
+
     ##################
     # Main functions #
     ##################
-    
+
     def lep_4_in_w_rest(self, particles=None):
         """
         Return:
@@ -252,7 +259,7 @@ class Booster(nn.Module):
             sum_phi,
             diff_phi,
         )
-    
+
     def forward(self, particles=None):
         return self.lep_4_in_w_rest(particles)
 
@@ -292,22 +299,78 @@ def _plot_theta_phi(
     from matplotlib import pyplot as plt
 
     values = [
-        ("lep0 theta", torch_angles[0], None if root_angles is None else root_angles[0], (0.0, np.pi)),
-        ("lep0 phi", torch_angles[1], None if root_angles is None else root_angles[1], (-np.pi, np.pi)),
-        ("lep1 theta", torch_angles[2], None if root_angles is None else root_angles[2], (0.0, np.pi)),
-        ("lep1 phi", torch_angles[3], None if root_angles is None else root_angles[3], (-np.pi, np.pi)),
-        ("sum theta", torch_angles[4], None if root_angles is None else root_angles[4], (-np.pi, np.pi)),
-        ("diff theta", torch_angles[5], None if root_angles is None else root_angles[5], (-np.pi, np.pi)),
-        ("sum phi", torch_angles[6], None if root_angles is None else root_angles[6], (-np.pi, np.pi)),
-        ("diff phi", torch_angles[7], None if root_angles is None else root_angles[7], (-np.pi, np.pi)),
+        (
+            "lep0 theta",
+            torch_angles[0],
+            None if root_angles is None else root_angles[0],
+            (0.0, np.pi),
+        ),
+        (
+            "lep0 phi",
+            torch_angles[1],
+            None if root_angles is None else root_angles[1],
+            (-np.pi, np.pi),
+        ),
+        (
+            "lep1 theta",
+            torch_angles[2],
+            None if root_angles is None else root_angles[2],
+            (0.0, np.pi),
+        ),
+        (
+            "lep1 phi",
+            torch_angles[3],
+            None if root_angles is None else root_angles[3],
+            (-np.pi, np.pi),
+        ),
+        (
+            "sum theta",
+            torch_angles[4],
+            None if root_angles is None else root_angles[4],
+            (-np.pi, np.pi),
+        ),
+        (
+            "diff theta",
+            torch_angles[5],
+            None if root_angles is None else root_angles[5],
+            (-np.pi, np.pi),
+        ),
+        (
+            "sum phi",
+            torch_angles[6],
+            None if root_angles is None else root_angles[6],
+            (-np.pi, np.pi),
+        ),
+        (
+            "diff phi",
+            torch_angles[7],
+            None if root_angles is None else root_angles[7],
+            (-np.pi, np.pi),
+        ),
     ]
 
     fig, axes = plt.subplots(2, 4, figsize=(16, 7), constrained_layout=True)
     for ax, (title, torch_tensor, root_array, xlim) in zip(axes.flat, values):
         torch_data = torch_tensor.detach().cpu().numpy()
-        ax.hist(torch_data, bins=60, range=xlim, histtype="step", linewidth=1.8, density=True, label="torch")
+        ax.hist(
+            torch_data,
+            bins=60,
+            range=xlim,
+            histtype="step",
+            linewidth=1.8,
+            density=True,
+            label="torch",
+        )
         if root_array is not None:
-            ax.hist(root_array, bins=60, range=xlim, histtype="step", linewidth=1.3, density=True, label="ohbboosting")
+            ax.hist(
+                root_array,
+                bins=60,
+                range=xlim,
+                histtype="step",
+                linewidth=1.3,
+                density=True,
+                label="ohbboosting",
+            )
         ax.set_title(title)
         ax.set_xlim(*xlim)
         ax.set_ylabel("density")
@@ -351,6 +414,7 @@ def _ohbboosting_angles(particles):
         sum_phi,
         diff_phi,
     )
+
 
 if __name__ == "__main__":
     device = "cuda" if torch.cuda.is_available() else "cpu"

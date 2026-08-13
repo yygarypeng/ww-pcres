@@ -1,6 +1,7 @@
 import ast
 import json
 from pathlib import Path
+from unittest.mock import Mock
 
 import matplotlib
 
@@ -11,7 +12,8 @@ from matplotlib.colors import LogNorm
 import numpy as np
 import pytest
 
-from notebooks.plottingtool import plot_angular_1d_grid, plot_angular_2d_grid
+from notebooks import plottingtool
+from notebooks.plottingtool import plot_1d_hist, plot_angular_1d_grid, plot_angular_2d_grid
 
 
 NOTEBOOK_PATH = Path(__file__).parents[1] / "notebooks" / "visualize.ipynb"
@@ -38,6 +40,35 @@ def _atlas_label_count(fig):
     texts = list(fig.texts)
     texts.extend(text for ax in fig.axes for text in ax.texts)
     return sum("Internal Simulation" in text.get_text() for text in texts)
+
+
+def test_plot_1d_histogram_call_computes_each_array_once(monkeypatch):
+    pred = np.array([0.25, 0.75, 1.25])
+    truth = np.array([0.25, 1.25, 1.75])
+    bins = np.array([0.0, 1.0, 2.0])
+
+    class NumpySpy:
+        histogram = Mock(wraps=np.histogram)
+
+        def __getattr__(self, name):
+            return getattr(np, name)
+
+    numpy_spy = NumpySpy()
+    monkeypatch.setattr(plottingtool, "np", numpy_spy)
+    figures_before = set(plt.get_fignums())
+
+    try:
+        plot_1d_hist(pred, truth, "x", bins_edges=bins)
+
+        assert numpy_spy.histogram.call_count == 2
+        pred_call, truth_call = numpy_spy.histogram.call_args_list
+        np.testing.assert_array_equal(pred_call.args[0], pred)
+        np.testing.assert_array_equal(pred_call.kwargs["bins"], bins)
+        np.testing.assert_array_equal(truth_call.args[0], truth)
+        np.testing.assert_array_equal(truth_call.kwargs["bins"], bins)
+    finally:
+        for figure_number in set(plt.get_fignums()) - figures_before:
+            plt.close(figure_number)
 
 
 def test_plot_angular_1d_grid_returns_histogram_and_raw_ratio_axes():

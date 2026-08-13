@@ -1,6 +1,6 @@
 import argparse
-from pathlib import Path
 import sys
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -8,9 +8,8 @@ import torch
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
-from train import train
 from model import LightningWBoson
-
+from train import train
 
 OUTPUT_NAMES = (
     "w0_px",
@@ -44,7 +43,9 @@ def plot_pcres_io(npz_path, max_scatter_points=50_000):
 
     n_features = min(outputs.shape[1], targets.shape[1], len(OUTPUT_NAMES))
     scatter_idx = np.linspace(0, len(outputs) - 1, min(len(outputs), max_scatter_points), dtype=int)
-    print(f"Plotting parity and residuals for {n_features} features using {len(scatter_idx)} scatter points...")
+    print(
+        f"Plotting parity and residuals for {n_features} features using {len(scatter_idx)} scatter points..."
+    )
 
     fig, axes = plt.subplots(2, 4, figsize=(14, 7), constrained_layout=True)
     for idx, ax in enumerate(axes.ravel()):
@@ -89,7 +90,12 @@ def plot_pcres_io(npz_path, max_scatter_points=50_000):
 
 def main():
     parser = argparse.ArgumentParser(description="Save model inputs, outputs, and targets")
-    parser.add_argument("--config", "-c", default=str(REPO_ROOT / "configs/config.yaml"), help="Path to YAML config file")
+    parser.add_argument(
+        "--config",
+        "-c",
+        default=str(REPO_ROOT / "configs/config.yaml"),
+        help="Path to YAML config file",
+    )
     args = parser.parse_args()
 
     config_path = Path(args.config).expanduser()
@@ -103,7 +109,9 @@ def main():
     dm.setup(stage="test")
     test_loader = dm.test_dataloader()
     if test_loader is None:
-        raise RuntimeError("No test dataloader available. Check data.test_categories or data.categories.")
+        raise RuntimeError(
+            "No test dataloader available. Check data.test_categories or data.categories."
+        )
 
     model = LightningWBoson.load_for_inference(
         str(checkpoint_path),

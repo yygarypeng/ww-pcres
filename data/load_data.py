@@ -1,10 +1,9 @@
-import numpy as np
 import h5py
-
+import numpy as np
 from sklearn.preprocessing import StandardScaler
 
 from data.preprocessing import normalize_negative_energy_jets_numpy, valid_input_energy_rows
-from physics import eta, deta, dphi
+from physics import deta, dphi, eta
 
 
 def select_categories(available_categories, categories=None):
@@ -13,7 +12,9 @@ def select_categories(available_categories, categories=None):
     if categories:
         missing = sorted(set(categories) - set(available))
         if missing:
-            raise ValueError(f"Requested HDF5 categories not found: {missing}. Available: {available}")
+            raise ValueError(
+                f"Requested HDF5 categories not found: {missing}. Available: {available}"
+            )
         selected = list(categories)
     else:
         selected = available
@@ -51,19 +52,20 @@ def split_categories(data_cfg, split):
 def mmd_condition_features(features):
     features = np.asarray(features)
     if features.shape[-1] != 21:
-        raise ValueError(
-            f"MMD conditioning requires exactly 21 features, got {features.shape[-1]}"
-        )
+        raise ValueError(f"MMD conditioning requires exactly 21 features, got {features.shape[-1]}")
 
     m_ll = features[..., 18:19]
     deta_ll = features[..., 19:20]
     dphi_ll = features[..., 20:21]
-    return np.concatenate([
-        m_ll,
-        deta_ll,
-        np.sin(dphi_ll),
-        np.cos(dphi_ll),
-    ], axis=-1)
+    return np.concatenate(
+        [
+            m_ll,
+            deta_ll,
+            np.sin(dphi_ll),
+            np.cos(dphi_ll),
+        ],
+        axis=-1,
+    )
 
 
 def compute_mmd_condition_stats(train_obj):
@@ -136,7 +138,7 @@ def load_particles_from_h5(filename, categories=None, max_events=None):
         # For each category (ggF_train, ggF_test, VBF_train, etc.)
         for category_name in selected_categories:
             category_data = {}
-            
+
             # For each particle/object group within the category
             for group_name in f[category_name].keys():
                 group_data = {}
@@ -162,6 +164,7 @@ def load_particles_from_h5(filename, categories=None, max_events=None):
 
     return result
 
+
 def load_data(
     data_path,
     categories=None,
@@ -176,11 +179,11 @@ def load_data(
 
     def col(a):
         return a.reshape(a.shape[0], -1)
-    
+
     # Collect all training and target objects from all categories
     all_train_objs = []
     all_target_objs = []
-    
+
     selected_categories = list(data.keys())
     print("Using HDF5 categories:", ", ".join(selected_categories))
 
@@ -198,24 +201,24 @@ def load_data(
         lep_neg_pz = category_data["neg_lep"]["pz"]
         lep_neg_energy = category_data["neg_lep"]["energy"]
 
-        lep_pos_pt = category_data["pos_lep"]["pt"]
-        lep_neg_pt = category_data["neg_lep"]["pt"]
+        lep_pos_pt = category_data["pos_lep"]["pt"]  # noqa: F841
+        lep_neg_pt = category_data["neg_lep"]["pt"]  # noqa: F841
         lep_pos_eta = category_data["pos_lep"]["eta"]
         lep_neg_eta = category_data["neg_lep"]["eta"]
         lep_pos_phi = category_data["pos_lep"]["phi"]
         lep_neg_phi = category_data["neg_lep"]["phi"]
-        
+
         dilep_px = lep_pos_px + lep_neg_px
         dilep_py = lep_pos_py + lep_neg_py
         dilep_pz = lep_pos_pz + lep_neg_pz
         dilep_energy = lep_pos_energy + lep_neg_energy
-        dilep_eta = eta(dilep_px, dilep_py, dilep_pz)
+        dilep_eta = eta(dilep_px, dilep_py, dilep_pz)  # noqa: F841
         m_ll2 = dilep_energy**2 - dilep_px**2 - dilep_py**2 - dilep_pz**2
         m_ll = np.where(m_ll2 >= -1.0e-6, np.sqrt(np.clip(m_ll2, 0.0, None)), np.nan)
 
         met_px = category_data["met"]["px"]
         met_py = category_data["met"]["py"]
-        
+
         dphi_ll = dphi(lep_pos_phi, lep_neg_phi)
         deta_ll = deta(lep_pos_eta, lep_neg_eta)
 
@@ -226,53 +229,59 @@ def load_data(
 
         # pack them
         # all training mass-like objects are in GeV unit
-        
-        train_obj = np.concatenate([
-            col(lep_pos_px), #0
-            col(lep_pos_py), #1
-            col(lep_pos_pz), #2
-            col(lep_pos_energy), #3
-            col(lep_neg_px), #4
-            col(lep_neg_py), #5
-            col(lep_neg_pz), #6
-            col(lep_neg_energy), #7
-            col(jet_px[:, 0]), #8
-            col(jet_py[:, 0]), #9
-            col(jet_pz[:, 0]), #10
-            col(jet_energy[:, 0]), #11
-            col(jet_px[:, 1]), #12
-            col(jet_py[:, 1]), #13
-            col(jet_pz[:, 1]), #14
-            col(jet_energy[:, 1]), #15
-            col(met_px), #16
-            col(met_py), #17
-            # high level features
-            col(m_ll), #18
-            col(deta_ll), #19
-            col(dphi_ll), #20
-        ], axis=-1)
-        
+
+        train_obj = np.concatenate(
+            [
+                col(lep_pos_px),  # 0
+                col(lep_pos_py),  # 1
+                col(lep_pos_pz),  # 2
+                col(lep_pos_energy),  # 3
+                col(lep_neg_px),  # 4
+                col(lep_neg_py),  # 5
+                col(lep_neg_pz),  # 6
+                col(lep_neg_energy),  # 7
+                col(jet_px[:, 0]),  # 8
+                col(jet_py[:, 0]),  # 9
+                col(jet_pz[:, 0]),  # 10
+                col(jet_energy[:, 0]),  # 11
+                col(jet_px[:, 1]),  # 12
+                col(jet_py[:, 1]),  # 13
+                col(jet_pz[:, 1]),  # 14
+                col(jet_energy[:, 1]),  # 15
+                col(met_px),  # 16
+                col(met_py),  # 17
+                # high level features
+                col(m_ll),  # 18
+                col(deta_ll),  # 19
+                col(dphi_ll),  # 20
+            ],
+            axis=-1,
+        )
+
         # target objects
-        target_obj = np.concatenate([
-			col(category_data["truth_pos_w"]["px"]),
-			col(category_data["truth_pos_w"]["py"]),
-			col(category_data["truth_pos_w"]["pz"]),
-			col(category_data["truth_pos_w"]["energy"]),
-			col(category_data["truth_neg_w"]["px"]),
-			col(category_data["truth_neg_w"]["py"]),
-			col(category_data["truth_neg_w"]["pz"]),
-			col(category_data["truth_neg_w"]["energy"]),
-			col(category_data["truth_pos_w"]["m"]),
-			col(category_data["truth_neg_w"]["m"]),
-        ], axis=-1)
-        
+        target_obj = np.concatenate(
+            [
+                col(category_data["truth_pos_w"]["px"]),
+                col(category_data["truth_pos_w"]["py"]),
+                col(category_data["truth_pos_w"]["pz"]),
+                col(category_data["truth_pos_w"]["energy"]),
+                col(category_data["truth_neg_w"]["px"]),
+                col(category_data["truth_neg_w"]["py"]),
+                col(category_data["truth_neg_w"]["pz"]),
+                col(category_data["truth_neg_w"]["energy"]),
+                col(category_data["truth_pos_w"]["m"]),
+                col(category_data["truth_neg_w"]["m"]),
+            ],
+            axis=-1,
+        )
+
         all_train_objs.append(train_obj)
         all_target_objs.append(target_obj)
-    
+
     # Concatenate all categories
     train_obj = np.concatenate(all_train_objs, axis=0)
     target_obj = np.concatenate(all_target_objs, axis=0)
-    
+
     print("Training objects shape:", train_obj.shape)
     print("Target objects shape:", target_obj.shape)
 
@@ -293,14 +302,20 @@ def load_data(
         (~valid_idx).sum(),
         "rows with non-finite values, invalid input energies, or invalid truth W kinematics",
     )
-    
-    (std_mean_train, std_scale_train), (std_mean_target, std_scale_target) = compute_standardization_stats(
-        train_obj,
-        target_obj,
+
+    (std_mean_train, std_scale_train), (std_mean_target, std_scale_target) = (
+        compute_standardization_stats(
+            train_obj,
+            target_obj,
+        )
     )
 
-
-    return train_obj, target_obj, (std_mean_train, std_scale_train), (std_mean_target, std_scale_target)
+    return (
+        train_obj,
+        target_obj,
+        (std_mean_train, std_scale_train),
+        (std_mean_target, std_scale_target),
+    )
 
 
 def load_presplit_data(data_path, data_cfg=None):
@@ -318,8 +333,14 @@ def load_presplit_data(data_path, data_cfg=None):
     print("Test categories:", ", ".join(test_categories))
 
     max_events = data_cfg.get("max_events_per_category")
-    X_train, Y_train, _, _ = load_data(data_path, categories=train_categories, max_events_per_category=max_events)
-    X_val, Y_val, _, _ = load_data(data_path, categories=val_categories, max_events_per_category=max_events)
-    X_test, Y_test, _, _ = load_data(data_path, categories=test_categories, max_events_per_category=max_events)
+    X_train, Y_train, _, _ = load_data(
+        data_path, categories=train_categories, max_events_per_category=max_events
+    )
+    X_val, Y_val, _, _ = load_data(
+        data_path, categories=val_categories, max_events_per_category=max_events
+    )
+    X_test, Y_test, _, _ = load_data(
+        data_path, categories=test_categories, max_events_per_category=max_events
+    )
 
     return X_train, Y_train, X_val, Y_val, X_test, Y_test

@@ -11,6 +11,7 @@ class Standardization(nn.Module):
     def forward(self, x):
         return (x - self.mean) / (self.std)
 
+
 class _AttnFFN(nn.Module):
     def __init__(self, d_model, ffn_dim, dropout=0.3):
         super().__init__()
@@ -34,28 +35,31 @@ class SelfAttentionBlock(nn.Module):
         self.dropout = nn.Dropout(dropout) if dropout and dropout > 0 else nn.Identity()
         self.mha = nn.MultiheadAttention(d_model, nhead, dropout=dropout, batch_first=True)
         self.ffn = _AttnFFN(d_model, d_model * 4, dropout)
+
     def forward(self, x, key_padding_mask=None):
         res = x
         x = self.attn_norm(x)
         x, _ = self.mha(
-            x, x, x,
+            x,
+            x,
+            x,
             key_padding_mask=key_padding_mask,
             need_weights=False,
         )
         x = res + self.dropout(x)
-        
+
         res = x
         x = self.ffn_norm(x)
         x = self.ffn(x)
         x = res + self.dropout(x)
         return x
 
+
 class ResidualBlock(nn.Module):
     def __init__(self, in_dim, out_dim, hidden_dim, dropout=0.1):
         super().__init__()
         self.shortcut = (
-            nn.Identity() if in_dim == out_dim
-            else nn.Linear(in_dim, out_dim, bias=False)
+            nn.Identity() if in_dim == out_dim else nn.Linear(in_dim, out_dim, bias=False)
         )
         self.residual = nn.Sequential(
             nn.LayerNorm(in_dim),
@@ -69,6 +73,7 @@ class ResidualBlock(nn.Module):
         x_shortcut = self.shortcut(x)
         y = self.residual(x)
         return x_shortcut + y
+
 
 class WBosonFourVectorLayer(nn.Module):
     def forward(self, lep0, lep1, nu_params, met):

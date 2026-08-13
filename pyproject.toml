@@ -1,0 +1,49 @@
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+extend-exclude = '''
+/(
+    archive
+  | tests
+  | configs
+  | \.agents
+  | \.superpowers
+  | \.worktrees
+  | outputs
+  | artifacts
+  | hww_pcres_regressor[^/]*
+  | lightning_logs
+  | wandb
+)/
+| \.ipynb$
+| \.onnx$
+'''
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = [
+    "archive",
+    "tests",
+    "configs",
+    ".agents",
+    ".superpowers",
+    ".worktrees",
+    "outputs",
+    "artifacts",
+    "hww_pcres_regressor*",
+    "lightning_logs",
+    "wandb",
+    "*.ipynb",
+    "*.onnx",
+]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]
+
+[tool.ruff.lint.per-file-ignores]
+"onnx/convert_to_onnx.py" = ["E402"]
+"onnx/onnxruntime_check.py" = ["E402"]
+"scripts/evaluate_mmd_bandwidths.py" = ["E402"]
+"scripts/save_pcres_io.py" = ["E402"]
+"train/train.py" = ["E402"]
