@@ -1,29 +1,29 @@
+import mplhep as hep
 import numpy as np
-
 from matplotlib import pyplot as plt
 from matplotlib.colors import LogNorm
 from matplotlib.ticker import FormatStrFormatter
-import mplhep as hep
 
 hep.style.use(hep.style.ATLAS)
 ATLAS_LABEL_TEXT = "Internal Simulation"
 
 
 def _rel_err_func(a, b):
-    if  np.isnan(a).any() or np.isnan(b).any():
+    if np.isnan(a).any() or np.isnan(b).any():
         print("Warning: NaN values detected in input arrays.")
-    if (np.any(b == 0)):
+    if np.any(b == 0):
         print("Warning: Zero values detected in denominator array.")
     mask = ~np.isnan(a) & ~np.isnan(b) & (b != 0)
     return (a[mask] - b[mask]) / b[mask]
 
+
 def _rmse(pred, truth):
-	mask = np.isfinite(pred) & np.isfinite(truth)
-	if np.sum(mask) != len(pred):
-		print(f"Warning: {len(pred) - np.sum(mask)} invalid entries found")
-	pred = pred[mask]
-	truth = truth[mask]
-	return np.sqrt(np.mean((pred - truth) ** 2))
+    mask = np.isfinite(pred) & np.isfinite(truth)
+    if np.sum(mask) != len(pred):
+        print(f"Warning: {len(pred) - np.sum(mask)} invalid entries found")
+    pred = pred[mask]
+    truth = truth[mask]
+    return np.sqrt(np.mean((pred - truth) ** 2))
 
 
 def _prepare_angular_data(observable):
@@ -64,17 +64,11 @@ def plot_angular_1d_grid(observables, title, share_axes=False):
     ratio_axes = np.empty((2, 2), dtype=object)
 
     first_hist_ax = None
-    for index, (observable, (pred, truth)) in enumerate(
-        zip(observables, prepared_data)
-    ):
+    for index, (observable, (pred, truth)) in enumerate(zip(observables, prepared_data)):
         row, column = divmod(index, 2)
-        panel_grid = outer_grid[row, column].subgridspec(
-            2, 1, height_ratios=(3.5, 1), hspace=0.02
-        )
+        panel_grid = outer_grid[row, column].subgridspec(2, 1, height_ratios=(3.5, 1), hspace=0.02)
         shared_hist_ax = first_hist_ax if share_axes else None
-        ax = fig.add_subplot(
-            panel_grid[0], sharex=shared_hist_ax, sharey=shared_hist_ax
-        )
+        ax = fig.add_subplot(panel_grid[0], sharex=shared_hist_ax, sharey=shared_hist_ax)
         if first_hist_ax is None:
             first_hist_ax = ax
         rax = fig.add_subplot(panel_grid[1], sharex=ax)
@@ -176,9 +170,7 @@ def plot_angular_2d_grid(
         )
         ax.set_xlim(bins[0], bins[-1])
         ax.set_ylim(bins[0], bins[-1])
-        ax.set_title(
-            f"{observable['label']}  RMSE = {rmse:.2f}", fontsize=13, pad=7
-        )
+        ax.set_title(f"{observable['label']}  RMSE = {rmse:.2f}", fontsize=13, pad=7)
         ax.tick_params(axis="both", labelsize=10)
         ax.set_aspect("equal", adjustable="box")
         if share_axes:
@@ -233,7 +225,9 @@ def plot_1d_hist(
 
     legend_text = ratio_text.split("/", 1) if "/" in ratio_text else [ratio_text, "True"]
     ax.hist(pred, bins=bins_edges, linewidth=2, color="red", histtype="step", label=legend_text[0])
-    ax.hist(truth, bins=bins_edges, linewidth=2, color="blue", histtype="step", label=legend_text[1])
+    ax.hist(
+        truth, bins=bins_edges, linewidth=2, color="blue", histtype="step", label=legend_text[1]
+    )
     ax.legend(frameon=False, loc="upper right")
     ax.set_ylabel("Events", loc="top")
 
@@ -245,8 +239,6 @@ def plot_1d_hist(
     ax.tick_params(axis="y", which="major", pad=12)
 
     # Bottom panel: Pred/True ratio
-    pred_counts, _ = np.histogram(pred, bins=bins_edges)
-    truth_counts, _ = np.histogram(truth, bins=bins_edges)
     pred_counts = pred_counts.astype(float)
     truth_counts = truth_counts.astype(float)
     bin_centers = 0.5 * (bins_edges[1:] + bins_edges[:-1])
@@ -266,7 +258,9 @@ def plot_1d_hist(
     truth_rel_err[truth_mask] = 1.0 / np.sqrt(truth_counts[truth_mask])
     band_low = 1.0 - truth_rel_err
     band_high = 1.0 + truth_rel_err
-    rax.fill_between(bin_centers, band_low, band_high, step="mid", color="gray", alpha=0.25, linewidth=0)
+    rax.fill_between(
+        bin_centers, band_low, band_high, step="mid", color="gray", alpha=0.25, linewidth=0
+    )
 
     y_min, y_max = ratio_ylim
     span = y_max - y_min
@@ -288,9 +282,9 @@ def plot_1d_hist(
     )
 
     # Draw arrows at the panel edge for overflow points
-    y_top = y_max 
+    y_top = y_max
     y_top_from = y_max - 0.15 * span
-    y_bot = y_min 
+    y_bot = y_min
     y_bot_from = y_min + 0.15 * span
 
     for x in bin_centers[overflow_high]:
@@ -321,9 +315,23 @@ def plot_1d_hist(
         fig.savefig(savepath, bbox_inches="tight")
     plt.show()
 
-def plot_2d_hist(pred, truth, name, bins_edges=np.linspace(-200, 200, 51), log=False, unit="GeV", color="black", xlabel="Pred", ylabel="True", vmax=1e2, offset=0.5, savepath=None):
+
+def plot_2d_hist(
+    pred,
+    truth,
+    name,
+    bins_edges=np.linspace(-200, 200, 51),
+    log=False,
+    unit="GeV",
+    color="black",
+    xlabel="Pred",
+    ylabel="True",
+    vmax=1e2,
+    offset=0.5,
+    savepath=None,
+):
     err = 0.2
-    cor_mask = np.abs(_rel_err_func(pred, truth)) <= err # set 20% relative error cut
+    cor_mask = np.abs(_rel_err_func(pred, truth)) <= err  # set 20% relative error cut
     fig, ax = plt.subplots()
     if log:
         norm = LogNorm(vmin=1, vmax=vmax)
@@ -360,8 +368,20 @@ def plot_2d_hist(pred, truth, name, bins_edges=np.linspace(-200, 200, 51), log=F
     if savepath is not None:
         fig.savefig(savepath, bbox_inches="tight")
     plt.show()
-    
-def plot_2d_res_hist(pred, truth, name_pos, name_neg, bins_edges=np.linspace(-200, 200, 51), log=False, unit="GeV", color="black", vmax=5e3, savepath=None):
+
+
+def plot_2d_res_hist(
+    pred,
+    truth,
+    name_pos,
+    name_neg,
+    bins_edges=np.linspace(-200, 200, 51),
+    log=False,
+    unit="GeV",
+    color="black",
+    vmax=5e3,
+    savepath=None,
+):
     fig, ax = plt.subplots()
     if log:
         norm = LogNorm(vmin=1, vmax=vmax)
@@ -370,7 +390,7 @@ def plot_2d_res_hist(pred, truth, name_pos, name_neg, bins_edges=np.linspace(-20
         ax.hist2d(pred, truth, bins=[bins_edges, bins_edges], cmap="viridis", vmin=1, vmax=vmax)
     ax.set_xlabel(rf"$\Delta_\text{{res}}${name_pos} [{unit}]")
     ax.set_ylabel(rf"$\Delta_\text{{res}}${name_neg} [{unit}]")
-    txt = hep.atlas.label("   "+ATLAS_LABEL_TEXT, data=True, loc=0, rlabel="", ax=ax)
+    txt = hep.atlas.label("   " + ATLAS_LABEL_TEXT, data=True, loc=0, rlabel="", ax=ax)
     txt[0].set_color(color)
     txt[1].set_color(color)
     ax.tick_params(axis="both", which="major", pad=10)

@@ -10,7 +10,9 @@ def component_calibration(prediction, truth):
         prediction = prediction[:, None]
         truth = truth[:, None]
     if prediction.ndim != 2:
-        raise ValueError(f"expected one- or two-dimensional arrays, got {prediction.ndim} dimensions")
+        raise ValueError(
+            f"expected one- or two-dimensional arrays, got {prediction.ndim} dimensions"
+        )
 
     metrics = {
         name: np.full(prediction.shape[1], np.nan, dtype=np.float64)
@@ -49,11 +51,7 @@ def transverse_sharing_fraction(nu0, nu1, eps=1.0e-12):
     total = nu0 + nu1
     denominator = np.sum(total**2, axis=1)
     alpha = np.full(len(total), np.nan, dtype=np.float64)
-    valid = (
-        np.isfinite(nu0).all(axis=1)
-        & np.isfinite(nu1).all(axis=1)
-        & (denominator > eps)
-    )
+    valid = np.isfinite(nu0).all(axis=1) & np.isfinite(nu1).all(axis=1) & (denominator > eps)
     alpha[valid] = np.sum(nu0[valid] * total[valid], axis=1) / denominator[valid]
     return alpha
 

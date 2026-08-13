@@ -1,7 +1,7 @@
 import argparse
 import math
-from pathlib import Path
 import sys
+from pathlib import Path
 
 import torch
 import torch.nn as nn
@@ -10,8 +10,8 @@ import torch.nn.functional as F
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.append(str(REPO_ROOT))
 
-from model import LightningWBoson
 from data import RAW_INPUT_DIM
+from model import LightningWBoson
 from train import load_config
 
 
@@ -81,7 +81,7 @@ def make_valid_raw_inputs(batch_size, seed=0):
     inputs = torch.randn(batch_size, RAW_INPUT_DIM, generator=generator)
 
     for start in (0, 4, 8, 12):
-        momentum = inputs[:, start:start + 3]
+        momentum = inputs[:, start : start + 3]
         inputs[:, start + 3] = (
             torch.linalg.vector_norm(momentum, dim=1)
             + torch.rand(batch_size, generator=generator)
@@ -92,13 +92,18 @@ def make_valid_raw_inputs(batch_size, seed=0):
     for row in range(batch_size):
         for slot in missing_slots[row % len(missing_slots)]:
             start = 8 + 4 * slot
-            inputs[row, start:start + 4] = 0.0
+            inputs[row, start : start + 4] = 0.0
     return inputs
 
 
 def main():
     parser = argparse.ArgumentParser(description="Export a Lightning checkpoint to ONNX")
-    parser.add_argument("--config", "-c", default=str(REPO_ROOT / "configs/config.yaml"), help="Path to YAML config file")
+    parser.add_argument(
+        "--config",
+        "-c",
+        default=str(REPO_ROOT / "configs/config.yaml"),
+        help="Path to YAML config file",
+    )
     parser.add_argument("--checkpoint", help="Specific .ckpt file to export")
     parser.add_argument("--output", default="hww_pcres_regressor.onnx", help="Output ONNX path")
     parser.add_argument("--batch-size", type=int, default=1, help="Dummy export batch size")

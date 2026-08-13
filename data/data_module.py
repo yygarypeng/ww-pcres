@@ -2,9 +2,27 @@ import os
 import random
 
 import numpy as np
-import torch
-from torch.utils.data import Dataset, DataLoader, random_split, Subset
 import pytorch_lightning as L
+import torch
+from torch.utils.data import DataLoader, Dataset, Subset, random_split
+
+
+def _validate_split(reference_x, reference_y, split_x, split_y, split_name) -> None:
+    if split_x.shape[0] != split_y.shape[0]:
+        raise ValueError(
+            f"X_{split_name} and Y_{split_name} must have the same number of samples, got "
+            f"{split_x.shape[0]} and {split_y.shape[0]}"
+        )
+    if reference_x.shape[1:] != split_x.shape[1:]:
+        raise ValueError(
+            f"X and X_{split_name} must have matching feature dimensions, got "
+            f"{tuple(reference_x.shape[1:])} and {tuple(split_x.shape[1:])}"
+        )
+    if reference_y.shape[1:] != split_y.shape[1:]:
+        raise ValueError(
+            f"Y and Y_{split_name} must have matching target dimensions, got "
+            f"{tuple(reference_y.shape[1:])} and {tuple(split_y.shape[1:])}"
+        )
 
 
 class ArrayDataset(Dataset):
@@ -88,37 +106,9 @@ class WBosonDataModule(L.LightningDataModule):
                 raise ValueError("Pre-split mode requires X_val and Y_val")
             if any(idx is not None for idx in (train_idx, val_idx, test_idx)):
                 raise ValueError("Pre-split arrays cannot be used together with split indices")
-            if self.X_val.shape[0] != self.Y_val.shape[0]:
-                raise ValueError(
-                    f"X_val and Y_val must have the same number of samples, got "
-                    f"{self.X_val.shape[0]} and {self.Y_val.shape[0]}"
-                )
-            if self.X.shape[1:] != self.X_val.shape[1:]:
-                raise ValueError(
-                    f"X and X_val must have matching feature dimensions, got "
-                    f"{tuple(self.X.shape[1:])} and {tuple(self.X_val.shape[1:])}"
-                )
-            if self.Y.shape[1:] != self.Y_val.shape[1:]:
-                raise ValueError(
-                    f"Y and Y_val must have matching target dimensions, got "
-                    f"{tuple(self.Y.shape[1:])} and {tuple(self.Y_val.shape[1:])}"
-                )
+            _validate_split(self.X, self.Y, self.X_val, self.Y_val, "val")
             if self.X_test is not None:
-                if self.X_test.shape[0] != self.Y_test.shape[0]:
-                    raise ValueError(
-                        f"X_test and Y_test must have the same number of samples, got "
-                        f"{self.X_test.shape[0]} and {self.Y_test.shape[0]}"
-                    )
-                if self.X.shape[1:] != self.X_test.shape[1:]:
-                    raise ValueError(
-                        f"X and X_test must have matching feature dimensions, got "
-                        f"{tuple(self.X.shape[1:])} and {tuple(self.X_test.shape[1:])}"
-                    )
-                if self.Y.shape[1:] != self.Y_test.shape[1:]:
-                    raise ValueError(
-                        f"Y and Y_test must have matching target dimensions, got "
-                        f"{tuple(self.Y.shape[1:])} and {tuple(self.Y_test.shape[1:])}"
-                    )
+                _validate_split(self.X, self.Y, self.X_test, self.Y_test, "test")
 
         self.batch_size = int(batch_size)
         if self.batch_size <= 0:

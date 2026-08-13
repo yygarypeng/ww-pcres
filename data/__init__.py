@@ -10,7 +10,6 @@ from .preprocessing import (
     valid_input_energy_rows,
 )
 
-
 __all__ = [
     "INPUT_PREPROCESSING_VERSION",
     "NEURAL_INPUT_DIM",

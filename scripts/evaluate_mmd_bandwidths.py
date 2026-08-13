@@ -11,9 +11,9 @@ import torch
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
+import model.losses as loss_module
 from data.load_data import load_data
 from model import LightningWBoson
-import model.losses as loss_module
 
 
 @dataclass(frozen=True)
@@ -143,25 +143,25 @@ def _batch_feature_inputs(model, features, targets):
 
 
 def evaluate_checkpoint(checkpoint, features, targets, batch_size, device):
-    model = LightningWBoson.load_from_checkpoint(
-        checkpoint.path,
-        map_location="cpu",
-        weights_only=False,
-    ).eval().to(device)
+    model = (
+        LightningWBoson.load_from_checkpoint(
+            checkpoint.path,
+            map_location="cpu",
+            weights_only=False,
+        )
+        .eval()
+        .to(device)
+    )
     feature_names = ("alpha", "mass", "angular")
     multipliers = {
-        name: tuple(model.mmd_config[name]["bandwidth_multipliers"])
-        for name in feature_names
+        name: tuple(model.mmd_config[name]["bandwidth_multipliers"]) for name in feature_names
     }
-    accumulated = {
-        name: [[] for _ in multipliers[name]]
-        for name in feature_names
-    }
+    accumulated = {name: [[] for _ in multipliers[name]] for name in feature_names}
 
     with torch.inference_mode():
         for start in range(0, len(features), batch_size):
-            batch_features = tensor_batch(features[start:start + batch_size], device)
-            batch_targets = tensor_batch(targets[start:start + batch_size], device)
+            batch_features = tensor_batch(features[start : start + batch_size], device)
+            batch_targets = tensor_batch(targets[start : start + batch_size], device)
             for name, captured in _batch_feature_inputs(
                 model,
                 batch_features,

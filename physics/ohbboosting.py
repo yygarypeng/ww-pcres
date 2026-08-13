@@ -1,6 +1,8 @@
-from ROOT import TLorentzVector
 import multiprocessing
+
 import numpy as np
+from ROOT import TLorentzVector
+
 
 class Booster:
     def __init__(self, particles):
@@ -31,17 +33,14 @@ class Booster:
     def _map_to_basis(lepton, n, r, k):
         """Maps lepton momentum to (n, r, k) basis."""
         lepton_vec = lepton.Vect()
-        return TLorentzVector(
-            lepton_vec.Dot(n),
-            lepton_vec.Dot(r),
-            lepton_vec.Dot(k),
-            lepton.E()
-        )
+        return TLorentzVector(lepton_vec.Dot(n), lepton_vec.Dot(r), lepton_vec.Dot(k), lepton.E())
 
     def w_rest_booster(self, part):
         part = np.asarray(part, dtype=float).reshape(-1)
         if part.size != 16:
-            raise ValueError(f"Expected one event with 16 values, got shape {np.asarray(part).shape} and size {part.size}.")
+            raise ValueError(
+                f"Expected one event with 16 values, got shape {np.asarray(part).shape} and size {part.size}."
+            )
 
         WpBoson = TLorentzVector(*part[:4])
         WpLepton = TLorentzVector(*part[4:8])
@@ -49,10 +48,10 @@ class Booster:
         WnLepton = TLorentzVector(*part[12:16])
         # Step 1: Construct Higgs 4-vector and boost all particles to Higgs rest frame
         Higgs = WpBoson + WnBoson
-        Beam_p = TLorentzVector(0, 0, 1, 1) # dummy time and assign beam direction along +z
+        Beam_p = TLorentzVector(0, 0, 1, 1)  # dummy time and assign beam direction along +z
         self._boost_to_rest_frame([WpBoson, WpLepton, WnBoson, WnLepton], Higgs.BoostVector())
 
-        # Step 2: Construct orthogonal basis (k, r, n) 
+        # Step 2: Construct orthogonal basis (k, r, n)
         # k along W+ momentum, r in the plane of W+ and beam, n orthogonal to both
         n, r, k = self._construct_basis(WnBoson, Beam_p)
 
@@ -65,24 +64,28 @@ class Booster:
         WnLp_k = self._map_to_basis(WnLepton, n, r, k)
 
         # Keep a consistent 2D row shape for safe concatenation across all events.
-        w_rest_WpLepton = np.array([WpLp_k.Px(), WpLp_k.Py(), WpLp_k.Pz(), WpLp_k.E()], dtype=float).reshape(1, -1)
-        w_rest_WnLepton = np.array([WnLp_k.Px(), WnLp_k.Py(), WnLp_k.Pz(), WnLp_k.E()], dtype=float).reshape(1, -1)
+        w_rest_WpLepton = np.array(
+            [WpLp_k.Px(), WpLp_k.Py(), WpLp_k.Pz(), WpLp_k.E()], dtype=float
+        ).reshape(1, -1)
+        w_rest_WnLepton = np.array(
+            [WnLp_k.Px(), WnLp_k.Py(), WnLp_k.Pz(), WnLp_k.E()], dtype=float
+        ).reshape(1, -1)
 
         return w_rest_WpLepton, w_rest_WnLepton
 
     def setup(self):
         # results = [self.w_rest_booster(p) for p in self.particles]
         with multiprocessing.Pool(8) as pool:
-			# Retrieve the output from the pool
+            # Retrieve the output from the pool
             results = list(pool.map(self.w_rest_booster, self.particles))
         w_rest_lp, w_rest_ln = zip(*results)
         self.w_rest_lp, self.w_rest_ln = np.concatenate(w_rest_lp), np.concatenate(w_rest_ln)
-        
+
     def lep_4_in_w_rest(self):
         return self.w_rest_lp, self.w_rest_ln
 
     def lep_theta_phi_in_w_rest(self):
-        
+
         @staticmethod
         def theta(p4):
             p3_mag = np.sqrt(np.sum(np.square(p4[:, 0:3]), axis=1))
@@ -103,7 +106,7 @@ class Booster:
         return (pos_theta, pos_phi), (neg_theta, neg_phi)
 
     def lep_xi_in_w_rest(self):
-        
+
         @staticmethod
         def xi(p4):
             xi_n = p4[:, 0] / np.linalg.norm(p4[:, :3], axis=1)
@@ -115,7 +118,7 @@ class Booster:
         xi_neg = xi(self.w_rest_ln)
 
         return xi_pos, xi_neg
-    
+
     @staticmethod
     def _cglmp(z_xp, z_xn, z_yp, z_yn):
         """Calculate Bij (CGLMP values)."""
@@ -123,7 +126,7 @@ class Booster:
         tr_b = 25 * (np.square(z_xp) - np.square(z_yp)) * (np.square(z_xn) - np.square(z_yn))
         tr_c = 100 * (z_xp * z_yp * z_xn * z_yn)
         return tr_a + tr_b + tr_c
-    
+
     def cglmp_bij(self):
         xi_pos, xi_neg = self.lep_xi_in_w_rest()
         b_xy = self._cglmp(xi_pos[0], xi_neg[0], xi_pos[1], xi_neg[1])
@@ -131,22 +134,26 @@ class Booster:
         b_zx = self._cglmp(xi_pos[0], xi_neg[0], xi_pos[2], xi_neg[2])
         return b_xy, b_yz, b_zx
 
+
 if __name__ == "__main__":
     import time
+
     from matplotlib import pyplot as plt
+
     t1 = time.time()
     from data import load_data
+
     data = load_data.load_particles_from_h5("/root/data/archived/mc20_truth.h5")
-    presel = (data) 
+    presel = data
     particles = np.concatenate(
-		[
-			data["lead_w"]["p4"],
-			data["truth_lead_lep"]["p4"],
-			data["sublead_w"]["p4"],
-			data["truth_sublead_lep"]["p4"],
-		],
-		axis=-1,
-	)
+        [
+            data["lead_w"]["p4"],
+            data["truth_lead_lep"]["p4"],
+            data["sublead_w"]["p4"],
+            data["truth_sublead_lep"]["p4"],
+        ],
+        axis=-1,
+    )
     print(particles.shape)
     booster = Booster(particles)
     booster.setup()

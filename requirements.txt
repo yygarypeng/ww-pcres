@@ -11,3 +11,5 @@ mplhep
 onnx
 onnxruntime
 wandb
+black==26.5.1
+ruff==0.16.2

@@ -6,9 +6,8 @@ from pathlib import Path
 from time import time
 
 import numpy as np
-import yaml
-
 import torch
+import yaml
 from pytorch_lightning import Trainer, seed_everything
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 from pytorch_lightning.loggers import CSVLogger, WandbLogger
@@ -18,11 +17,11 @@ sys.path.insert(0, str(REPO_ROOT))
 DEFAULT_CONFIG = REPO_ROOT / "configs/config.yaml"
 
 
-from model import LightningWBoson
-from model.losses import W_MASS_SCALE
 from data import compute_neural_input_stats
 from data import load_data as data
 from data.data_module import WBosonDataModule
+from model import LightningWBoson
+from model.losses import W_MASS_SCALE
 
 
 def resolve_repo_path(raw_path):
@@ -86,18 +85,9 @@ def prime_csv_metric_header(csv_logger, model):
         metric_keys.add(f"{prefix}loss")
         metric_keys.update(f"{prefix}{name}_loss" for name in loss_names)
     if model.log_loss_gradient_cosines:
-        metric_keys.update(
-            f"grad_cos/{name}__total"
-            for name in model.adaptive_loss_names
-        )
-        metric_keys.update(
-            f"grad_cos/{name}__rest"
-            for name in model.adaptive_loss_names
-        )
-    metric_keys.update(
-        f"loss_weight/{name}"
-        for name in loss_names
-    )
+        metric_keys.update(f"grad_cos/{name}__total" for name in model.adaptive_loss_names)
+        metric_keys.update(f"grad_cos/{name}__rest" for name in model.adaptive_loss_names)
+    metric_keys.update(f"loss_weight/{name}" for name in loss_names)
 
     writer = csv_logger.experiment
     existing_keys = set(getattr(writer, "metrics_keys", []))
@@ -140,9 +130,7 @@ def build_datamodule(cfg, data_path):
         data_path,
         data_cfg=cfg.get("data", {}),
     )
-    X_train, Y_train, X_val, Y_val, X_test, Y_test = (
-        split.astype(np.float32) for split in splits
-    )
+    X_train, Y_train, X_val, Y_val, X_test, Y_test = (split.astype(np.float32) for split in splits)
 
     dm = WBosonDataModule(
         X_train,
@@ -307,6 +295,35 @@ def run_training(
         wandb_logger.experiment.finish()
 
 
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--config",
+        "-c",
+        default=str(DEFAULT_CONFIG),
+        help="Path to YAML config file",
+    )
+    parser.add_argument("--wandb", "-w", action="store_true", help="Enable W&B logging")
+    parser.add_argument("--saved-path", help="Override paths.saved_path")
+    parser.add_argument("--seed", type=int, help="Override parameters.seed")
+    parser.add_argument("--epochs", type=int, help="Override parameters.epochs")
+    parser.add_argument(
+        "--max-events-per-category",
+        type=int,
+        help="Override data.max_events_per_category for short ablation runs",
+    )
+    parser.add_argument(
+        "--resume-from",
+        help="Path to a checkpoint to resume training from (weights + optimizer state)",
+    )
+    parser.add_argument("--run-name", help="Optional run name for loggers")
+    parser.add_argument("--wandb-project", default="PCRES-regressor", help="W&B project name")
+    parser.add_argument(
+        "--watch-model", action="store_true", help="Log model gradients and parameters"
+    )
+    return parser.parse_args()
+
+
 def main(train=True, arg=None, config_path=DEFAULT_CONFIG):
     if arg is not None and hasattr(arg, "config"):
         config_path = arg.config
@@ -356,33 +373,6 @@ def main(train=True, arg=None, config_path=DEFAULT_CONFIG):
         saved_path,
         arg,
     )
-
-
-def parse_args():
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--config",
-        "-c",
-        default=str(DEFAULT_CONFIG),
-        help="Path to YAML config file",
-    )
-    parser.add_argument("--wandb", "-w", action="store_true", help="Enable W&B logging")
-    parser.add_argument("--saved-path", help="Override paths.saved_path")
-    parser.add_argument("--seed", type=int, help="Override parameters.seed")
-    parser.add_argument("--epochs", type=int, help="Override parameters.epochs")
-    parser.add_argument(
-        "--max-events-per-category",
-        type=int,
-        help="Override data.max_events_per_category for short ablation runs",
-    )
-    parser.add_argument(
-        "--resume-from",
-        help="Path to a checkpoint to resume training from (weights + optimizer state)",
-    )
-    parser.add_argument("--run-name", help="Optional run name for loggers")
-    parser.add_argument("--wandb-project", default="PCRES-regressor", help="W&B project name")
-    parser.add_argument("--watch-model", action="store_true", help="Log model gradients and parameters")
-    return parser.parse_args()
 
 
 if __name__ == "__main__":
