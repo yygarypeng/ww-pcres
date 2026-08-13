@@ -26,19 +26,19 @@ from model.losses import (
 DEFAULT_MMD_CONFIG = {
     "condition": {
         "kernel": "imq",
-        "bandwidth_multipliers": [0.01, 0.1, 1.0],
+        "bandwidth_multipliers": [0.3, 1.0, 3.0],
     },
     "alpha": {
         "kernel": "imq",
-        "bandwidth_multipliers": [0.01, 0.1, 1.0],
+        "bandwidth_multipliers": [0.1, 0.3, 1.0, 3.0],
     },
     "mass": {
         "kernel": "imq",
-        "bandwidth_multipliers": [0.01, 0.1, 1.0],
+        "bandwidth_multipliers": [0.03, 0.1, 0.3, 1.0],
     },
     "angular": {
         "kernel": "imq",
-        "bandwidth_multipliers": [0.01, 0.1, 1.0],
+        "bandwidth_multipliers": [0.3, 1.0, 3.0],
     },
 }
 DEFAULT_LOCAL_MMD = True
@@ -134,7 +134,7 @@ class WBosonRegressor(nn.Module):
             ]
         )
         self.context_norm = nn.LayerNorm(d_model)
-        print(f"Using {len(self.sa_blocks)} SA blocks.")
+        print(f"Using {len(self.sa_blocks)} SA blocks; connected context dimension: {d_model * self.num_tokens}")
 
         # residual decoder blocks
         self.trunk = nn.Sequential(
@@ -144,8 +144,7 @@ class WBosonRegressor(nn.Module):
             ResidualBlock(256, 256, hidden_dim=256, dropout=decoder_dropout),
             ResidualBlock(256, 128, hidden_dim=256, dropout=decoder_dropout),
             ResidualBlock(128, 128, hidden_dim=128, dropout=decoder_dropout),
-            ResidualBlock(128, 64, hidden_dim=128, dropout=decoder_dropout),
-            ResidualBlock(64, 64, hidden_dim=64, dropout=decoder_dropout),
+            ResidualBlock(128, 64 , hidden_dim=128, dropout=decoder_dropout),
         )
 
         # Latent regression head layout: [delta_dinu_px, delta_dinu_py, nu0_pz, nu1_pz]
@@ -153,18 +152,14 @@ class WBosonRegressor(nn.Module):
             nn.LayerNorm(64),
             nn.Linear(64, 32),
             nn.GELU(),
-            nn.Linear(32, 16),
-            nn.GELU(),
-            nn.Linear(16, 4),
+            nn.Linear(32, 4),
         )
         # Latent regression head layout: [dmet_x, dmet_y]
         self.nu_dmet_head = nn.Sequential(
             nn.LayerNorm(64),
             nn.Linear(64, 16),
             nn.GELU(),
-            nn.Linear(16, 8),
-            nn.GELU(),
-            nn.Linear(8, 2),
+            nn.Linear(16, 2),
         )
 
         # W bosons decoder
@@ -357,26 +352,12 @@ class LightningWBoson(L.LightningModule):
             "mass_mmd": 0.0,
             "angular_mmd": 0.0,
         }
-        deprecated_loss_names = {
-            "kinematic_loss_mmd": "replace it with separate alpha_mmd and mass_mmd weights",
-            "angular_loss_mmd": "rename it to angular_mmd",
-        }
-        deprecated = set(loss_weights or {}) & deprecated_loss_names.keys()
-        if deprecated:
-            details = "; ".join(
-                f"{name}: {deprecated_loss_names[name]}" for name in sorted(deprecated)
-            )
-            raise ValueError(f"deprecated loss_weights key(s): {details}")
-        unsupported_loss_weights = set(loss_weights or {}) - defaults.keys()
-        if unsupported_loss_weights:
-            names = ", ".join(sorted(unsupported_loss_weights))
-            raise ValueError(f"unsupported loss_weights key(s): {names}")
         self.loss_weights = {
             name: float(weight) for name, weight in {**defaults, **(loss_weights or {})}.items()
         }
         self.adaptive_loss_weights = bool(adaptive_loss_weights)
         self.adaptive_loss_names = [
-            name for name, weight in self.loss_weights.items() if weight != 0.0 and name != "huber"
+            name for name, weight in self.loss_weights.items() if weight != 0.0
         ]
         self.log_loss_gradient_cosines = bool(log_loss_gradient_cosines)
         self._gradient_analysis_batch = None
@@ -559,15 +540,15 @@ class LightningWBoson(L.LightningModule):
         for name in names:
             grad = self._loss_grad_vector(losses[name], parameters)
             cos_total = torch.nn.functional.cosine_similarity(grad, total_grad, dim=0, eps=1.0e-6)
-            weight = effective_weights.get(name, 0.0)
-            rest_grad = total_grad - weight * grad
-            cos_rest = torch.nn.functional.cosine_similarity(grad, rest_grad, dim=0, eps=1.0e-6)
-            if not torch.isfinite(cos_total).item() or not torch.isfinite(cos_rest).item():
-                return {}
+            # weight = effective_weights.get(name, 0.0)
+            # rest_grad = total_grad - weight * grad
+            # cos_rest = torch.nn.functional.cosine_similarity(grad, rest_grad, dim=0, eps=1.0e-6)
+            # if not torch.isfinite(cos_total).item() or not torch.isfinite(cos_rest).item():
+            #     return {}
             # todo: test either total or rest (math correctly)
             cosines[name] = {
                 "total": cos_total.detach(),
-                "rest": cos_rest.detach(),
+                # "rest": cos_rest.detach(),
             }
         return cosines
 
@@ -615,9 +596,13 @@ class LightningWBoson(L.LightningModule):
                 on_step=False,
                 on_epoch=True,
             )
-            self.log(
-                f"grad_cos/{name}__rest", cos["rest"], prog_bar=False, on_step=False, on_epoch=True
-            )
+            # self.log(
+            #     f"grad_cos/{name}__rest", 
+            #     cos["rest"], 
+            #     prog_bar=False, 
+            #     on_step=False, 
+            #     on_epoch=True
+            # )
 
     def on_train_epoch_start(self):
         self._gradient_analysis_batch = None
