@@ -1,4 +1,5 @@
 import argparse
+import math
 import os
 import shutil
 import sys
@@ -64,6 +65,13 @@ def apply_cli_overrides(cfg, arg):
         value = getattr(arg, arg_name, None)
         if value is not None:
             cfg.setdefault(section, {})[key] = value
+    higgs_mass_weight = getattr(arg, "higgs_mass_weight", None)
+    if higgs_mass_weight is not None:
+        if not math.isfinite(higgs_mass_weight) or higgs_mass_weight < 0.0:
+            raise ValueError("higgs_mass_weight must be finite and non-negative")
+        cfg.setdefault("parameters", {}).setdefault("loss_weights", {})[
+            "higgs_mass"
+        ] = higgs_mass_weight
     return cfg
 
 
@@ -239,6 +247,8 @@ def run_training(
         angular_mmd_schedule=params.get("angular_mmd_schedule"),
         adaptive_loss_weights=params.get("adaptive_loss_weights", False),
         log_loss_gradient_cosines=params.get("log_loss_gradient_cosines", False),
+        higgs_mass_target=params.get("higgs_mass_target", 125.0),
+        higgs_mass_scale=params.get("higgs_mass_scale", 10.0),
         higgs_mass_delta=params.get("higgs_mass_delta", 2.0),
         d_model=params["d_model"],
         num_heads=params["n_heads"],
@@ -307,6 +317,11 @@ def parse_args():
     parser.add_argument("--saved-path", help="Override paths.saved_path")
     parser.add_argument("--seed", type=int, help="Override parameters.seed")
     parser.add_argument("--epochs", type=int, help="Override parameters.epochs")
+    parser.add_argument(
+        "--higgs-mass-weight",
+        type=float,
+        help="Override parameters.loss_weights.higgs_mass",
+    )
     parser.add_argument(
         "--max-events-per-category",
         type=int,

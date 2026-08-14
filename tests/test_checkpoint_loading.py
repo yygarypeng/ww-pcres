@@ -83,6 +83,50 @@ class InferenceCheckpointLoadingTest(unittest.TestCase):
 
         torch.testing.assert_close(loaded(inputs), expected)
 
+    def test_mmd_transform_checkpoint_round_trips(self):
+        model = LightningWBoson(
+            input_dim=21,
+            d_model=8,
+            num_heads=2,
+            std_mean_train=np.zeros(22, dtype=np.float32),
+            std_scale_train=np.ones(22, dtype=np.float32),
+            mmd_config={"loss_transform": {"kind": "sqrt", "epsilon": "0.002"}},
+            attention_blocks=1,
+            attention_dropout=0.0,
+            decoder_dropout=0.0,
+        )
+        checkpoint = {
+            "state_dict": model.state_dict(),
+            "hyper_parameters": dict(model.hparams),
+            "pytorch-lightning_version": L.__version__,
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            checkpoint_path = Path(tmpdir) / "mmd-transform.ckpt"
+            torch.save(checkpoint, checkpoint_path)
+            loaded = LightningWBoson.load_from_checkpoint(checkpoint_path, weights_only=False)
+
+        expected = {"kind": "sqrt", "epsilon": 0.002}
+        self.assertEqual(model.mmd_config["loss_transform"], expected)
+        self.assertEqual(dict(model.hparams)["mmd_config"]["loss_transform"], expected)
+        self.assertEqual(loaded.mmd_config["loss_transform"], expected)
+
+    def test_legacy_checkpoint_without_mmd_transform_preserves_compatibility_mode(self):
+        model = self.make_model()
+        checkpoint = {
+            "state_dict": model.state_dict(),
+            "hyper_parameters": dict(model.hparams),
+            "pytorch-lightning_version": L.__version__,
+        }
+        checkpoint["hyper_parameters"]["mmd_config"].pop("loss_transform", None)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            checkpoint_path = Path(tmpdir) / "legacy-mmd.ckpt"
+            torch.save(checkpoint, checkpoint_path)
+            loaded = LightningWBoson.load_from_checkpoint(checkpoint_path, weights_only=False)
+
+        self.assertNotIn("loss_transform", loaded.mmd_config)
+
     def test_angular_mmd_schedule_checkpoint_round_trips(self):
         schedule = {
             "initial_multiplier": 0.1,

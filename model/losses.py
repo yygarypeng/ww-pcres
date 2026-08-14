@@ -38,6 +38,15 @@ def _validate_bandwidth_multipliers(values, name):
     return multipliers
 
 
+def transform_mmd_loss(mmd2, *, kind=None, epsilon=1.0e-3):
+    if kind is None:
+        return mmd2
+    if kind != "sqrt":
+        raise ValueError(f"unsupported MMD loss transform: {kind}")
+    epsilon_tensor = mmd2.new_tensor(epsilon)
+    return torch.sqrt(mmd2.clamp_min(0.0) + epsilon_tensor.square()) - epsilon_tensor
+
+
 def invariant_mass2(fourvec):
     px, py, pz, E = fourvec[..., 0], fourvec[..., 1], fourvec[..., 2], fourvec[..., 3]
     return E**2 - (px**2 + py**2 + pz**2)
@@ -132,15 +141,16 @@ def w_mass_huber_loss(y_true, y_pred):
     return F.huber_loss(w_lst_pred, w_lst_true)
 
 
-def higgs_mass_loss(y_pred, delta=2):
+def higgs_mass_loss(
+    y_pred,
+    target_mass=H_MASS_SCALE,
+    scale=10.0,
+    delta=2.0,
+):
     w0_4, w1_4 = y_pred[..., :4], y_pred[..., 4:8]
-
-    higgs_4 = w0_4 + w1_4
-    h_mass2 = invariant_mass2(higgs_4)
-    h_mass = torch.sqrt(torch.clamp(h_mass2, min=TOR))
-
-    return F.huber_loss(h_mass, torch.full_like(h_mass, H_MASS_SCALE), delta=delta)
-    # return F.l1_loss(h_mass , torch.full_like(h_mass, H_MASS_SCALE))
+    higgs_mass2 = invariant_mass2(w0_4 + w1_4)
+    residual = (higgs_mass2 - target_mass**2) / (2.0 * target_mass * scale)
+    return F.huber_loss(residual, torch.zeros_like(residual), delta=delta)
 
 
 def dmet_loss(x_batch, y_true, dmet, component_scales):
