@@ -331,6 +331,12 @@ def parse_args():
         "--resume-from",
         help="Path to a checkpoint to resume training from (weights + optimizer state)",
     )
+    parser.add_argument(
+        "--gpu",
+        type=int,
+        choices=[0, 1],
+        help="Which physical GPU to use (sets CUDA_VISIBLE_DEVICES)",
+    )
     parser.add_argument("--run-name", help="Optional run name for loggers")
     parser.add_argument("--wandb-project", default="PCRES-regressor", help="W&B project name")
     parser.add_argument(
@@ -346,6 +352,10 @@ def main(train=True, arg=None, config_path=DEFAULT_CONFIG):
     if arg is not None:
         cfg = apply_cli_overrides(cfg, arg)
     params = cfg["parameters"]
+
+    if arg is not None and getattr(arg, "gpu", None) is not None:
+        os.environ["CUDA_VISIBLE_DEVICES"] = str(arg.gpu)
+        print(f"Using GPU {arg.gpu} (CUDA_VISIBLE_DEVICES={os.environ['CUDA_VISIBLE_DEVICES']})")
 
     num_threads = str(params.get("num_workers", 0))
     thread_variables = (
