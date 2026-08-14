@@ -1,5 +1,9 @@
 # Local workspace instructions
 AGENTS.md
+CLAUDE.md
+GEMINI.md
+opencode.json
+opencode.jsonc
 
 # Local configuration
 configs/config.yaml
@@ -68,8 +72,11 @@ Figure/
 
 # Agent/editor local state
 .agents/
+.opencode/
+.superpowers/
 .worktrees/
 .continue/
+docs/superpowers/
 skills-lock.json
 .idea/
 .vscode/
