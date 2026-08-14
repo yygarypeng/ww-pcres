@@ -167,44 +167,101 @@ class HiggsMassLossTest(unittest.TestCase):
         pred[:, 3] = pred[:, 7] = 0.5 * m_h
         return torch.from_numpy(pred)
 
-    def test_loss_matches_direct_huber_on_higgs_mass(self):
-        pred = self._predictions([145.0])
-        h_mass = torch.tensor([145.0])
+    def test_zero_loss_on_target_mass_squared(self):
+        pred = self._predictions([125.0])
 
         loss = loss_module.higgs_mass_loss(pred)
-        expected = F.huber_loss(h_mass, torch.full_like(h_mass, 125.0), delta=2)
 
+        torch.testing.assert_close(loss, torch.tensor(0.0))
+
+    def test_near_shell_mass_squared_residual_uses_configured_scale(self):
+        target = 125.0
+        scale = 10.0
+        standardized_residual = 0.5
+        mass2 = target**2 + standardized_residual * 2.0 * target * scale
+        pred = self._predictions([np.sqrt(mass2)])
+
+        loss = loss_module.higgs_mass_loss(pred, target_mass=target, scale=scale)
+
+        torch.testing.assert_close(loss, torch.tensor(0.125))
+
+    def test_huber_transition_uses_standardized_residual(self):
+        target = 100.0
+        scale = 5.0
+        delta = 2.0
+        residuals = torch.tensor([1.0, 3.0])
+        mass2 = target**2 + residuals * 2.0 * target * scale
+        pred = self._predictions(torch.sqrt(mass2).numpy())
+
+        loss = loss_module.higgs_mass_loss(
+            pred,
+            target_mass=target,
+            scale=scale,
+            delta=delta,
+        )
+
+        expected = F.huber_loss(residuals, torch.zeros_like(residuals), delta=delta)
         torch.testing.assert_close(loss, expected)
 
-    def test_larger_delta_punishes_off_peak_more(self):
-        pred = self._predictions([155.0])
+    def test_spacelike_sum_has_finite_nonzero_corrective_gradients(self):
+        pred = torch.tensor(
+            [[0.0, 0.0, 100.0, 1.0, 0.0, 0.0, 100.0, 1.0]],
+            requires_grad=True,
+        )
 
-        loss_small_delta = loss_module.higgs_mass_loss(pred, delta=2)
-        loss_large_delta = loss_module.higgs_mass_loss(pred, delta=20)
-
-        self.assertGreater(loss_large_delta.item(), loss_small_delta.item())
-
-    def test_gradient_magnitude_grows_with_delta_off_peak(self):
-        pred = self._predictions([155.0]).requires_grad_(True)
-        grads = {}
-        for delta in (2, 20):
-            pred.grad = None
-            loss = loss_module.higgs_mass_loss(pred, delta=delta)
-            loss.backward()
-            grads[delta] = pred.grad.abs().sum().item()
-
-        self.assertGreater(grads[20], grads[2])
-
-    def test_extreme_spacelike_sum_stays_finite(self):
-        # E^2 - p^2 hugely negative: mass clamps to TOR, loss must stay finite.
-        pred = torch.tensor([[0.0, 0.0, 1e6, 1.0, 0.0, 0.0, 1e6, 1.0]])
-
-        loss = loss_module.higgs_mass_loss(pred, delta=8)
+        loss = loss_module.higgs_mass_loss(pred)
+        loss.backward()
 
         self.assertTrue(torch.isfinite(loss))
+        self.assertTrue(torch.isfinite(pred.grad).all())
+        self.assertGreater(pred.grad.abs().sum().item(), 0.0)
 
 
 class LightningModelLossTest(unittest.TestCase):
+    def _basic_model(self, **kwargs):
+        return LightningWBoson(
+            input_dim=21,
+            d_model=8,
+            num_heads=2,
+            std_mean_train=np.zeros(22, dtype=np.float32),
+            std_scale_train=np.ones(22, dtype=np.float32),
+            **kwargs,
+        )
+
+    def test_rejects_invalid_higgs_mass_parameters(self):
+        invalid_values = (0.0, -1.0, float("nan"), float("inf"), float("-inf"))
+        for name in ("higgs_mass_target", "higgs_mass_scale", "higgs_mass_delta"):
+            for value in invalid_values:
+                with self.subTest(name=name, value=value):
+                    with self.assertRaisesRegex(ValueError, name):
+                        self._basic_model(**{name: value})
+
+    def test_higgs_mass_parameters_are_routed_to_loss(self):
+        model = self._basic_model(
+            loss_weights={"huber": 0.0, "higgs_mass": 1.0},
+            higgs_mass_target=130.0,
+            higgs_mass_scale=7.5,
+            higgs_mass_delta=1.25,
+        )
+        expected = torch.tensor(3.0)
+
+        with patch("model.model.higgs_mass_loss", return_value=expected) as higgs_loss:
+            total, losses = model._compute_losses(
+                torch.zeros((1, 21)),
+                torch.zeros((1, 10)),
+                torch.zeros((1, 8)),
+                torch.zeros((1, 4)),
+            )
+
+        higgs_loss.assert_called_once_with(
+            unittest.mock.ANY,
+            target_mass=130.0,
+            scale=7.5,
+            delta=1.25,
+        )
+        torch.testing.assert_close(losses["higgs_mass"], expected)
+        torch.testing.assert_close(total, expected)
+
     def _warmup_model(
         self,
         mmd_start_epoch=100,
@@ -498,6 +555,77 @@ class LightningModelLossTest(unittest.TestCase):
                 },
             )
 
+    def test_rejects_invalid_mmd_transform_config_at_model_construction(self):
+        invalid_transforms = (
+            {},
+            None,
+            {"kind": "log"},
+            {"kind": "sqrt", "epsilon": 0.0},
+            {"kind": "sqrt", "epsilon": -1.0},
+            {"kind": "sqrt", "epsilon": float("nan")},
+            {"kind": "sqrt", "epsilon": float("inf")},
+            {"kind": "sqrt", "epsilon": "not-a-number"},
+            {"kind": "sqrt", "epsilon": 10**10000},
+            {"kind": "sqrt", "epsilon": 1.0e-3, "extra": True},
+        )
+        for transform in invalid_transforms:
+            with self.subTest(transform=transform):
+                with self.assertRaisesRegex(ValueError, "loss_transform"):
+                    self._basic_model(mmd_config={"loss_transform": transform})
+
+    def test_mmd_transform_is_applied_after_each_public_mmd_result(self):
+        model = self._basic_model(
+            loss_weights={
+                "huber": 0.0,
+                "alpha_mmd": 1.0,
+                "mass_mmd": 1.0,
+                "angular_mmd": 1.0,
+            },
+            mmd_config={"loss_transform": {"kind": "sqrt", "epsilon": 0.25}},
+        )
+        raw_values = {
+            "alpha_mmd": torch.tensor(0.0),
+            "mass_mmd": torch.tensor(0.75),
+            "angular_mmd": torch.tensor(3.75),
+        }
+
+        with (
+            patch("model.model.alpha_mmd", return_value=raw_values["alpha_mmd"]),
+            patch("model.model.mass_mmd", return_value=raw_values["mass_mmd"]),
+            patch("model.model.angular_mmd", return_value=raw_values["angular_mmd"]),
+        ):
+            total, losses = model._compute_losses(
+                torch.zeros((1, 21)),
+                torch.zeros((1, 10)),
+                torch.zeros((1, 8)),
+                torch.zeros((1, 4)),
+            )
+
+        expected = {
+            name: loss_module.transform_mmd_loss(value, kind="sqrt", epsilon=0.25)
+            for name, value in raw_values.items()
+        }
+        for name, value in expected.items():
+            torch.testing.assert_close(losses[name], value)
+        torch.testing.assert_close(total, sum(expected.values()))
+
+    def test_no_mmd_transform_preserves_public_mmd_squared_values(self):
+        model = self._basic_model(
+            loss_weights={"huber": 0.0, "alpha_mmd": 1.0},
+        )
+        mmd2 = torch.tensor(0.75)
+
+        with patch("model.model.alpha_mmd", return_value=mmd2):
+            total, losses = model._compute_losses(
+                torch.zeros((1, 21)),
+                torch.zeros((1, 10)),
+                torch.zeros((1, 8)),
+                torch.zeros((1, 4)),
+            )
+
+        self.assertIs(losses["alpha_mmd"], mmd2)
+        torch.testing.assert_close(total, mmd2)
+
     def test_rejects_unsupported_loss_weight_keys(self):
         for key in ("w_mass_mmd", "kinematic_loss_mmd_typo"):
             with self.subTest(key=key):
@@ -685,6 +813,64 @@ class LocalMMDTest(unittest.TestCase):
                 self.condition,
                 condition_bandwidth_multipliers=[0.0],
             )
+
+    def test_empty_rows_have_finite_differentiable_transformed_loss(self):
+        prediction = torch.full((2, 1), float("nan"), requires_grad=True)
+        mmd2 = loss_module.compute_local_mmd(
+            prediction,
+            torch.zeros((2, 1)),
+            torch.zeros((2, 1)),
+        )
+
+        loss = loss_module.transform_mmd_loss(mmd2, kind="sqrt", epsilon=1.0e-3)
+        loss.backward()
+
+        torch.testing.assert_close(loss, torch.tensor(0.0))
+        self.assertTrue(torch.isfinite(prediction.grad).all())
+
+
+class MMDTransformTest(unittest.TestCase):
+    def test_mmd_transform_compatibility_mode_returns_exact_input(self):
+        mmd2 = torch.tensor(0.5, requires_grad=True)
+
+        transformed = loss_module.transform_mmd_loss(mmd2)
+
+        self.assertIs(transformed, mmd2)
+
+    def test_mmd_transform_sqrt_is_exactly_zero_at_zero(self):
+        transformed = loss_module.transform_mmd_loss(
+            torch.tensor(0.0),
+            kind="sqrt",
+            epsilon=1.0e-3,
+        )
+
+        torch.testing.assert_close(transformed, torch.tensor(0.0))
+
+    def test_mmd_transform_sqrt_matches_smoothed_formula(self):
+        mmd2 = torch.tensor(0.75, dtype=torch.float64)
+        epsilon = 0.125
+
+        transformed = loss_module.transform_mmd_loss(mmd2, kind="sqrt", epsilon=epsilon)
+
+        expected = torch.sqrt(mmd2 + epsilon**2) - epsilon
+        torch.testing.assert_close(transformed, expected)
+
+    def test_mmd_transform_has_finite_gradients_at_and_near_zero(self):
+        mmd2 = torch.tensor([0.0, 1.0e-12], dtype=torch.float64, requires_grad=True)
+
+        loss_module.transform_mmd_loss(mmd2, kind="sqrt").sum().backward()
+
+        self.assertTrue(torch.isfinite(mmd2.grad).all())
+
+    def test_mmd_transform_clamps_tiny_negative_value_to_finite_zero(self):
+        transformed = loss_module.transform_mmd_loss(
+            torch.tensor(-1.0e-8),
+            kind="sqrt",
+            epsilon=1.0e-3,
+        )
+
+        torch.testing.assert_close(transformed, torch.tensor(0.0))
+        self.assertTrue(torch.isfinite(transformed))
 
 
 class AlphaMMDTest(unittest.TestCase):

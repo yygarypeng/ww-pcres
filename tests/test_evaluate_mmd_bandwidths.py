@@ -1,18 +1,24 @@
+import io
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 import torch
 
-from model.losses import compute_local_mmd
+import scripts.evaluate_mmd_bandwidths as mmd_script
+from model.losses import compute_local_mmd, transform_mmd_loss
 from scripts.evaluate_mmd_bandwidths import (
-    _capture_mmd_inputs,
     CheckpointInfo,
+    _capture_mmd_inputs,
     discover_unique_checkpoints,
-    result_label,
-    valid_mmd_rows,
     per_bandwidth_mmd,
+    per_bandwidth_mmd_diagnostics,
+    print_results,
+    result_label,
     tensor_batch,
+    valid_mmd_rows,
     weighted_mean,
 )
 
@@ -65,6 +71,122 @@ class BandwidthEvaluationTest(unittest.TestCase):
         )
 
         torch.testing.assert_close(torch.stack(individual).mean(), mixed)
+
+    def test_bandwidth_diagnostics_match_values_and_include_gradients(self):
+        prediction = torch.tensor([[0.0], [0.5], [1.0], [1.5]])
+        truth = torch.tensor([[0.0], [0.25], [1.0], [2.0]])
+        condition = torch.tensor([[0.0], [1.0], [2.0], [3.0]])
+        kwargs = {
+            "local": True,
+            "feature_kernel": "imq",
+            "condition_kernel": "imq",
+            "feature_bandwidth_multipliers": [0.1, 1.0, 10.0],
+            "condition_bandwidth_multipliers": [0.1, 1.0, 10.0],
+        }
+
+        transform = {"kind": "sqrt", "epsilon": 0.01}
+        diagnostics = per_bandwidth_mmd_diagnostics(
+            prediction,
+            truth,
+            condition,
+            loss_transform=transform,
+            **kwargs,
+        )
+        values = per_bandwidth_mmd(prediction, truth, condition, **kwargs)
+
+        for (mmd2, loss, gradient_squared_sum, gradient_elements), expected_value in zip(
+            diagnostics, values
+        ):
+            self.assertTrue(torch.isfinite(mmd2))
+            self.assertTrue(torch.isfinite(loss))
+            self.assertTrue(torch.isfinite(gradient_squared_sum))
+            self.assertGreaterEqual(float(gradient_squared_sum), 0.0)
+            self.assertEqual(gradient_elements, prediction.numel())
+            torch.testing.assert_close(mmd2, expected_value)
+            torch.testing.assert_close(loss, transform_mmd_loss(expected_value, **transform))
+        self.assertTrue(any(float(item[2]) > 0.0 for item in diagnostics))
+
+    def test_bandwidth_diagnostics_remove_mean_reduction_gradient_scaling(self):
+        prediction = torch.tensor([[0.0], [0.5], [1.0], [1.5]], requires_grad=True)
+        truth = torch.tensor([[0.0], [0.25], [1.0], [2.0]])
+        condition = torch.tensor([[0.0], [1.0], [2.0], [3.0]])
+        kwargs = {
+            "local": True,
+            "feature_kernel": "imq",
+            "condition_kernel": "imq",
+            "feature_bandwidth_multipliers": [1.0],
+            "condition_bandwidth_multipliers": [0.1, 1.0, 10.0],
+        }
+
+        value = per_bandwidth_mmd(prediction, truth, condition, **kwargs)[0]
+        expected_gradient = torch.autograd.grad(value, prediction)[0] * prediction.shape[0]
+        _, _, gradient_squared_sum, gradient_elements = per_bandwidth_mmd_diagnostics(
+            prediction, truth, condition, **kwargs
+        )[0]
+
+        torch.testing.assert_close(gradient_squared_sum, expected_gradient.square().sum())
+        self.assertEqual(gradient_elements, prediction.numel())
+
+    def test_aggregate_bandwidth_diagnostics_uses_global_squared_rms(self):
+        batches = [
+            (2.0, 1.0, 1.0, 1, 1),
+            (8.0, 3.0, 27.0, 3, 3),
+        ]
+
+        mmd2, loss, gradient_rms = mmd_script.aggregate_bandwidth_diagnostics(batches)
+
+        self.assertEqual(mmd2, 6.5)
+        self.assertEqual(loss, 2.5)
+        self.assertAlmostEqual(gradient_rms, 7.0**0.5)
+        self.assertNotAlmostEqual(gradient_rms, 2.5)
+
+    def test_mixed_loss_transforms_mean_mmd2_once(self):
+        transform = {"kind": "sqrt", "epsilon": 0.25}
+        diagnostics = [(0.0, 0.0, 0.0), (3.75, 1.75, 0.0)]
+        multipliers = {name: (1.0, 2.0) for name in ("alpha", "mass", "angular")}
+        results = {name: diagnostics for name in multipliers}
+
+        with patch("builtins.print") as mock_print:
+            print_results({"epoch-1-step-2": (multipliers, results, transform)})
+
+        output = "\n".join(call.args[0] for call in mock_print.call_args_list)
+        expected = transform_mmd_loss(torch.tensor(1.875), **transform)
+        mean_individual_loss = (0.0 + 1.75) / 2.0
+        self.assertIn(f"mixed_mmd2={1.875:.8g}", output)
+        self.assertIn(f"mixed_loss={float(expected):.8g}", output)
+        self.assertNotAlmostEqual(float(expected), mean_individual_loss)
+
+    def test_printed_results_label_values_and_gradients(self):
+        multipliers = {name: (1.0, 2.0) for name in ("alpha", "mass", "angular")}
+        results = {name: [(0.25, 0.25, 0.125), (0.5, 0.5, 0.25)] for name in multipliers}
+
+        with patch("builtins.print") as mock_print:
+            print_results({"epoch-1-step-2": (multipliers, results, None)})
+
+        output = "\n".join(call.args[0] for call in mock_print.call_args_list)
+        self.assertIn("mmd2=", output)
+        self.assertIn("loss=", output)
+        self.assertIn("prediction_gradient_rms=", output)
+        self.assertIn("mixed_mmd2=0.375", output)
+        self.assertIn("mixed_loss=0.375", output)
+        for line in output.splitlines()[1:]:
+            self.assertNotIn(
+                "prediction_gradient_rms",
+                line.split("mixed_mmd2=", maxsplit=1)[1],
+            )
+
+    def test_help_warns_that_checkpoints_must_be_trusted(self):
+        stdout = io.StringIO()
+        with (
+            patch("sys.argv", ["evaluate_mmd_bandwidths.py", "--help"]),
+            redirect_stdout(stdout),
+            self.assertRaises(SystemExit),
+        ):
+            mmd_script.parse_args()
+
+        help_text = " ".join(stdout.getvalue().split())
+        self.assertIn("trusted local", help_text)
+        self.assertIn("weights_only=False", help_text)
 
     def test_discovers_unique_checkpoints_by_epoch_and_global_step(self):
         metadata = {

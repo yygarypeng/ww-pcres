@@ -10,6 +10,83 @@ from train.train import apply_cli_overrides, parse_args, prime_csv_metric_header
 
 
 class TrainingOverrideTest(unittest.TestCase):
+    def test_parser_accepts_higgs_mass_weight(self):
+        with unittest.mock.patch(
+            "sys.argv", ["train.py", "--higgs-mass-weight", "4.5"]
+        ):
+            args = parse_args()
+
+        self.assertEqual(args.higgs_mass_weight, 4.5)
+
+    def test_higgs_mass_weight_override_changes_only_higgs_weight(self):
+        config = {
+            "parameters": {
+                "loss_weights": {"huber": 300.0, "higgs_mass": 3.0},
+            }
+        }
+
+        updated = apply_cli_overrides(config, Namespace(higgs_mass_weight=0.0))
+
+        self.assertEqual(updated["parameters"]["loss_weights"]["higgs_mass"], 0.0)
+        self.assertEqual(updated["parameters"]["loss_weights"]["huber"], 300.0)
+
+    def test_absent_higgs_mass_weight_preserves_yaml_value(self):
+        config = {"parameters": {"loss_weights": {"higgs_mass": 3.0}}}
+
+        updated = apply_cli_overrides(config, Namespace(higgs_mass_weight=None))
+
+        self.assertEqual(updated["parameters"]["loss_weights"]["higgs_mass"], 3.0)
+
+    def test_rejects_invalid_higgs_mass_weight_override(self):
+        for value in (-1.0, float("nan"), float("inf"), float("-inf")):
+            with self.subTest(value=value):
+                config = {"parameters": {"loss_weights": {"higgs_mass": 3.0}}}
+                with self.assertRaisesRegex(ValueError, "higgs_mass_weight"):
+                    apply_cli_overrides(config, Namespace(higgs_mass_weight=value))
+
+    def test_run_training_routes_higgs_mass_parameters(self):
+        params = {
+            "batch_size": 2,
+            "epochs": 1,
+            "learning_rate": 1.0e-4,
+            "loss_weights": {"higgs_mass": 3.0},
+            "higgs_mass_target": 126.0,
+            "higgs_mass_scale": 9.0,
+            "higgs_mass_delta": 1.5,
+            "d_model": 8,
+            "n_heads": 2,
+        }
+        cfg = {"parameters": params}
+        datamodule = SimpleNamespace(train_dataloader=lambda: [object()], test_ds=None)
+
+        with (
+            unittest.mock.patch.object(train_module, "LightningWBoson") as model_class,
+            unittest.mock.patch.object(
+                train_module,
+                "build_training_callbacks",
+                return_value=[SimpleNamespace()],
+            ),
+            unittest.mock.patch.object(train_module, "clean_training_output"),
+            unittest.mock.patch.object(train_module, "create_loggers", return_value=([], None)),
+            unittest.mock.patch.object(train_module, "Trainer"),
+        ):
+            train_module.run_training(
+                cfg,
+                datamodule,
+                21,
+                (np.zeros(22), np.ones(22)),
+                (np.zeros(4), np.ones(4)),
+                np.ones(4),
+                (0.0, 1.0),
+                np.ones(2),
+                "unused-output",
+                SimpleNamespace(resume_from=None),
+            )
+
+        self.assertEqual(model_class.call_args.kwargs["higgs_mass_target"], 126.0)
+        self.assertEqual(model_class.call_args.kwargs["higgs_mass_scale"], 9.0)
+        self.assertEqual(model_class.call_args.kwargs["higgs_mass_delta"], 1.5)
+
     def test_run_training_routes_angular_mmd_schedule(self):
         schedule = {
             "initial_multiplier": 0.1,

@@ -30,6 +30,9 @@ parameters:
 
 mmd:
   local: true
+  loss_transform:
+    kind: sqrt
+    epsilon: 1.0e-3
   condition:
     kernel: rbf
     bandwidth_multipliers: [0.5, 1.0, 2.0]
