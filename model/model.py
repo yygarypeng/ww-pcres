@@ -162,20 +162,19 @@ class WBosonRegressor(nn.Module):
             ResidualBlock(256, 256, hidden_dim=256, dropout=decoder_dropout),
             ResidualBlock(256, 128, hidden_dim=256, dropout=decoder_dropout),
             ResidualBlock(128, 128, hidden_dim=128, dropout=decoder_dropout),
-            ResidualBlock(128, 64 , hidden_dim=128, dropout=decoder_dropout),
         )
 
         # Latent regression head layout: [delta_dinu_px, delta_dinu_py, nu0_pz, nu1_pz]
         self.nu_mom_head = nn.Sequential(
-            nn.LayerNorm(64),
-            nn.Linear(64, 32),
+            nn.LayerNorm(128),
+            nn.Linear(128, 32),
             nn.GELU(),
             nn.Linear(32, 4),
         )
         # Latent regression head layout: [dmet_x, dmet_y]
         self.nu_dmet_head = nn.Sequential(
-            nn.LayerNorm(64),
-            nn.Linear(64, 16),
+            nn.LayerNorm(128),
+            nn.Linear(128, 16),
             nn.GELU(),
             nn.Linear(16, 2),
         )
