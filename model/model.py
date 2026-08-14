@@ -43,7 +43,14 @@ DEFAULT_MMD_CONFIG = {
     },
 }
 DEFAULT_LOCAL_MMD = True
-MMD_LOSS_NAMES = {"alpha_mmd", "mass_mmd", "angular_mmd"}
+PHYSICS_LOSS_NAMES = {
+    "higgs_mass",
+    "alpha_mmd",
+    "mass_mmd",
+    "w_mass_huber",
+    "angular_mmd",
+    "dmet",
+}
 
 
 def resolve_mmd_config(config=None):
@@ -271,7 +278,8 @@ class LightningWBoson(L.LightningModule):
         weight_decay=1e-4,
         loss_weights=None,
         mmd_config=None,
-        mmd_start_epoch=0,
+        physics_start_epoch=None,
+        mmd_start_epoch=None,
         angular_mmd_schedule=None,
         adaptive_loss_weights=False,
         log_loss_gradient_cosines=False,
@@ -289,8 +297,12 @@ class LightningWBoson(L.LightningModule):
                 f"input preprocessing version must be {INPUT_PREPROCESSING_VERSION}; "
                 "retraining required for incompatible checkpoints"
             )
-        if mmd_start_epoch < 0:
-            raise ValueError("mmd_start_epoch must be non-negative")
+        if physics_start_epoch is not None and mmd_start_epoch is not None:
+            raise ValueError("physics_start_epoch and legacy mmd_start_epoch cannot both be set")
+        if physics_start_epoch is None:
+            physics_start_epoch = 0 if mmd_start_epoch is None else mmd_start_epoch
+        if physics_start_epoch < 0:
+            raise ValueError("physics_start_epoch must be non-negative")
         higgs_mass_parameters = {
             "higgs_mass_target": float(higgs_mass_target),
             "higgs_mass_scale": float(higgs_mass_scale),
@@ -330,7 +342,7 @@ class LightningWBoson(L.LightningModule):
                 "full_weight_epoch": full_weight_epoch,
             }
         mmd_config = resolve_mmd_config(mmd_config)
-        self.save_hyperparameters()
+        self.save_hyperparameters(ignore=["mmd_start_epoch"])
         if w_fourvec_scales is None:
             w_fourvec_scales = torch.ones(4, dtype=torch.float32)
         self.register_buffer(
@@ -392,7 +404,7 @@ class LightningWBoson(L.LightningModule):
         self.log_loss_gradient_cosines = bool(log_loss_gradient_cosines)
         self._gradient_analysis_batch = None
         self.mmd_config = mmd_config
-        self.mmd_start_epoch = mmd_start_epoch
+        self.physics_start_epoch = physics_start_epoch
         self.angular_mmd_schedule = angular_mmd_schedule
         self.higgs_mass_target = higgs_mass_target
         self.higgs_mass_scale = higgs_mass_scale
@@ -427,13 +439,13 @@ class LightningWBoson(L.LightningModule):
     def forward(self, x, return_aux=False):
         return self.model(x, return_aux=return_aux)
 
-    def _mmd_is_warming_up(self):
-        return self.current_epoch < self.mmd_start_epoch
+    def _physics_is_warming_up(self):
+        return self.training and self.current_epoch < self.physics_start_epoch
 
     def _effective_loss_weights(self):
-        if self._mmd_is_warming_up():
+        if self._physics_is_warming_up():
             return {
-                name: 0.0 if name in MMD_LOSS_NAMES else weight
+                name: 0.0 if name in PHYSICS_LOSS_NAMES else weight
                 for name, weight in self.loss_weights.items()
             }
         if self.angular_mmd_schedule is None:
@@ -462,7 +474,7 @@ class LightningWBoson(L.LightningModule):
         return weights.get(name, 0.0) != 0.0 or (
             self.adaptive_loss_weights
             and name in self.adaptive_loss_names
-            and not (name in MMD_LOSS_NAMES and self._mmd_is_warming_up())
+            and not (name in PHYSICS_LOSS_NAMES and self._physics_is_warming_up())
         )
 
     def _mmd_kwargs(self, feature_name):

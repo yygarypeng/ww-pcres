@@ -83,6 +83,69 @@ class InferenceCheckpointLoadingTest(unittest.TestCase):
 
         torch.testing.assert_close(loaded(inputs), expected)
 
+    def test_physics_start_epoch_checkpoint_round_trips_without_legacy_key(self):
+        model = LightningWBoson(
+            input_dim=21,
+            d_model=8,
+            num_heads=2,
+            std_mean_train=np.zeros(22, dtype=np.float32),
+            std_scale_train=np.ones(22, dtype=np.float32),
+            physics_start_epoch=20,
+            attention_blocks=1,
+            attention_dropout=0.0,
+            decoder_dropout=0.0,
+        )
+        checkpoint = {
+            "state_dict": model.state_dict(),
+            "hyper_parameters": dict(model.hparams),
+            "pytorch-lightning_version": L.__version__,
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            checkpoint_path = Path(tmpdir) / "physics-warmup.ckpt"
+            torch.save(checkpoint, checkpoint_path)
+            loaded = LightningWBoson.load_from_checkpoint(checkpoint_path, weights_only=False)
+
+        self.assertEqual(model.physics_start_epoch, 20)
+        self.assertEqual(loaded.physics_start_epoch, 20)
+        self.assertEqual(dict(model.hparams)["physics_start_epoch"], 20)
+        self.assertNotIn("mmd_start_epoch", dict(model.hparams))
+
+    def test_legacy_mmd_start_epoch_checkpoint_migrates(self):
+        model = self.make_model()
+        hyper_parameters = dict(model.hparams)
+        hyper_parameters.pop("physics_start_epoch", None)
+        hyper_parameters["mmd_start_epoch"] = 17
+        checkpoint = {
+            "state_dict": model.state_dict(),
+            "hyper_parameters": hyper_parameters,
+            "pytorch-lightning_version": L.__version__,
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            checkpoint_path = Path(tmpdir) / "legacy-mmd-warmup.ckpt"
+            torch.save(checkpoint, checkpoint_path)
+            loaded = LightningWBoson.load_from_checkpoint(checkpoint_path, weights_only=False)
+
+        self.assertEqual(loaded.physics_start_epoch, 17)
+        self.assertNotIn("mmd_start_epoch", dict(loaded.hparams))
+
+    def test_checkpoint_rejects_both_start_epoch_names(self):
+        model = self.make_model()
+        hyper_parameters = dict(model.hparams)
+        hyper_parameters["mmd_start_epoch"] = 17
+        checkpoint = {
+            "state_dict": model.state_dict(),
+            "hyper_parameters": hyper_parameters,
+            "pytorch-lightning_version": L.__version__,
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            checkpoint_path = Path(tmpdir) / "conflicting-warmup.ckpt"
+            torch.save(checkpoint, checkpoint_path)
+            with self.assertRaisesRegex(ValueError, "cannot both be set"):
+                LightningWBoson.load_from_checkpoint(checkpoint_path, weights_only=False)
+
     def test_mmd_transform_checkpoint_round_trips(self):
         model = LightningWBoson(
             input_dim=21,

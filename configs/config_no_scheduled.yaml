@@ -18,7 +18,7 @@ parameters:
   weight_decay: 1.0e-4
   early_stopping_patience: 32
   early_stopping_min_delta: 0.0
-  mmd_start_epoch: 0
+  physics_start_epoch: 0
   # angular_mmd_schedule:
   #   initial_multiplier: 0.1
   #   hold_epochs: 10

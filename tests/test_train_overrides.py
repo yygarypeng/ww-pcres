@@ -87,6 +87,108 @@ class TrainingOverrideTest(unittest.TestCase):
         self.assertEqual(model_class.call_args.kwargs["higgs_mass_scale"], 9.0)
         self.assertEqual(model_class.call_args.kwargs["higgs_mass_delta"], 1.5)
 
+    def test_run_training_routes_physics_start_epoch(self):
+        params = {
+            "batch_size": 2,
+            "epochs": 1,
+            "learning_rate": 1.0e-4,
+            "loss_weights": {"huber": 1.0},
+            "physics_start_epoch": 20,
+            "d_model": 8,
+            "n_heads": 2,
+        }
+        cfg = {"parameters": params}
+        datamodule = SimpleNamespace(train_dataloader=lambda: [object()], test_ds=None)
+
+        with (
+            unittest.mock.patch.object(train_module, "LightningWBoson") as model_class,
+            unittest.mock.patch.object(
+                train_module,
+                "build_training_callbacks",
+                return_value=[SimpleNamespace()],
+            ),
+            unittest.mock.patch.object(train_module, "clean_training_output"),
+            unittest.mock.patch.object(train_module, "create_loggers", return_value=([], None)),
+            unittest.mock.patch.object(train_module, "Trainer"),
+        ):
+            train_module.run_training(
+                cfg,
+                datamodule,
+                21,
+                (np.zeros(22), np.ones(22)),
+                (np.zeros(4), np.ones(4)),
+                np.ones(4),
+                (0.0, 1.0),
+                np.ones(2),
+                "unused-output",
+                SimpleNamespace(resume_from=None),
+            )
+
+        self.assertEqual(model_class.call_args.kwargs["physics_start_epoch"], 20)
+        self.assertNotIn("mmd_start_epoch", model_class.call_args.kwargs)
+
+    def test_run_training_routes_legacy_mmd_start_epoch(self):
+        params = {
+            "batch_size": 2,
+            "epochs": 1,
+            "learning_rate": 1.0e-4,
+            "loss_weights": {"huber": 1.0},
+            "mmd_start_epoch": 17,
+            "d_model": 8,
+            "n_heads": 2,
+        }
+        cfg = {"parameters": params}
+        datamodule = SimpleNamespace(train_dataloader=lambda: [object()], test_ds=None)
+
+        with (
+            unittest.mock.patch.object(train_module, "LightningWBoson") as model_class,
+            unittest.mock.patch.object(
+                train_module,
+                "build_training_callbacks",
+                return_value=[SimpleNamespace()],
+            ),
+            unittest.mock.patch.object(train_module, "clean_training_output"),
+            unittest.mock.patch.object(train_module, "create_loggers", return_value=([], None)),
+            unittest.mock.patch.object(train_module, "Trainer"),
+        ):
+            train_module.run_training(
+                cfg,
+                datamodule,
+                21,
+                (np.zeros(22), np.ones(22)),
+                (np.zeros(4), np.ones(4)),
+                np.ones(4),
+                (0.0, 1.0),
+                np.ones(2),
+                "unused-output",
+                SimpleNamespace(resume_from=None),
+            )
+
+        self.assertEqual(model_class.call_args.kwargs["physics_start_epoch"], 17)
+        self.assertNotIn("mmd_start_epoch", model_class.call_args.kwargs)
+
+    def test_run_training_rejects_both_start_epoch_names(self):
+        cfg = {
+            "parameters": {
+                "physics_start_epoch": 20,
+                "mmd_start_epoch": 10,
+            }
+        }
+
+        with self.assertRaisesRegex(ValueError, "cannot both be set"):
+            train_module.run_training(
+                cfg,
+                None,
+                21,
+                None,
+                None,
+                None,
+                None,
+                None,
+                "unused-output",
+                SimpleNamespace(resume_from=None),
+            )
+
     def test_run_training_routes_angular_mmd_schedule(self):
         schedule = {
             "initial_multiplier": 0.1,

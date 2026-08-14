@@ -101,7 +101,7 @@ Unsupported or retired names fail with an explicit migration message instead of 
 
 Set `mmd.local: true` (the default) to multiply each output-feature kernel by the condition kernel over the four high-level features. Set `mmd.local: false` to use global MMD over output features only. Global mode still passes the high-level features into the neural network; it only removes them from MMD conditioning.
 
-Set `parameters.mmd_start_epoch` to the number of completed warm-up epochs before MMD losses enter the training objective. Validation and test losses include configured MMD terms throughout the warm-up so `val_loss` keeps a stable definition.
+Set `parameters.physics_start_epoch` to the number of completed warm-up epochs before physics losses enter the training objective. During warm-up, training uses only the W-four-vector `huber` loss; Higgs, W-mass, dMET, and all MMD losses receive zero effective weight. Validation and test losses always include the configured physics terms, using any epoch-specific angular schedule, so `val_loss` does not omit terms at the warm-up boundary. The retired `mmd_start_epoch` name is accepted only when loading older configurations and checkpoints.
 
 ### Visualization and inference check
 
