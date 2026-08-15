@@ -83,14 +83,14 @@ class InferenceCheckpointLoadingTest(unittest.TestCase):
 
         torch.testing.assert_close(loaded(inputs), expected)
 
-    def test_physics_start_epoch_checkpoint_round_trips_without_legacy_key(self):
+    def test_angular_mmd_ramp_epochs_checkpoint_round_trips(self):
         model = LightningWBoson(
             input_dim=21,
             d_model=8,
             num_heads=2,
             std_mean_train=np.zeros(22, dtype=np.float32),
             std_scale_train=np.ones(22, dtype=np.float32),
-            physics_start_epoch=20,
+            angular_mmd_ramp_epochs=80,
             attention_blocks=1,
             attention_dropout=0.0,
             decoder_dropout=0.0,
@@ -102,49 +102,14 @@ class InferenceCheckpointLoadingTest(unittest.TestCase):
         }
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            checkpoint_path = Path(tmpdir) / "physics-warmup.ckpt"
+            checkpoint_path = Path(tmpdir) / "angular-mmd-ramp.ckpt"
             torch.save(checkpoint, checkpoint_path)
             loaded = LightningWBoson.load_from_checkpoint(checkpoint_path, weights_only=False)
 
-        self.assertEqual(model.physics_start_epoch, 20)
-        self.assertEqual(loaded.physics_start_epoch, 20)
-        self.assertEqual(dict(model.hparams)["physics_start_epoch"], 20)
-        self.assertNotIn("mmd_start_epoch", dict(model.hparams))
-
-    def test_legacy_mmd_start_epoch_checkpoint_migrates(self):
-        model = self.make_model()
-        hyper_parameters = dict(model.hparams)
-        hyper_parameters.pop("physics_start_epoch", None)
-        hyper_parameters["mmd_start_epoch"] = 17
-        checkpoint = {
-            "state_dict": model.state_dict(),
-            "hyper_parameters": hyper_parameters,
-            "pytorch-lightning_version": L.__version__,
-        }
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            checkpoint_path = Path(tmpdir) / "legacy-mmd-warmup.ckpt"
-            torch.save(checkpoint, checkpoint_path)
-            loaded = LightningWBoson.load_from_checkpoint(checkpoint_path, weights_only=False)
-
-        self.assertEqual(loaded.physics_start_epoch, 17)
-        self.assertNotIn("mmd_start_epoch", dict(loaded.hparams))
-
-    def test_checkpoint_rejects_both_start_epoch_names(self):
-        model = self.make_model()
-        hyper_parameters = dict(model.hparams)
-        hyper_parameters["mmd_start_epoch"] = 17
-        checkpoint = {
-            "state_dict": model.state_dict(),
-            "hyper_parameters": hyper_parameters,
-            "pytorch-lightning_version": L.__version__,
-        }
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            checkpoint_path = Path(tmpdir) / "conflicting-warmup.ckpt"
-            torch.save(checkpoint, checkpoint_path)
-            with self.assertRaisesRegex(ValueError, "cannot both be set"):
-                LightningWBoson.load_from_checkpoint(checkpoint_path, weights_only=False)
+        self.assertEqual(model.angular_mmd_ramp_epochs, 80)
+        self.assertEqual(loaded.angular_mmd_ramp_epochs, 80)
+        self.assertEqual(dict(model.hparams)["angular_mmd_ramp_epochs"], 80)
+        self.assertEqual(dict(loaded.hparams)["angular_mmd_ramp_epochs"], 80)
 
     def test_mmd_transform_checkpoint_round_trips(self):
         model = LightningWBoson(
@@ -189,39 +154,6 @@ class InferenceCheckpointLoadingTest(unittest.TestCase):
             loaded = LightningWBoson.load_from_checkpoint(checkpoint_path, weights_only=False)
 
         self.assertNotIn("loss_transform", loaded.mmd_config)
-
-    def test_angular_mmd_schedule_checkpoint_round_trips(self):
-        schedule = {
-            "initial_multiplier": 0.1,
-            "hold_epochs": 10,
-            "full_weight_epoch": 80,
-        }
-        model = LightningWBoson(
-            input_dim=21,
-            d_model=8,
-            num_heads=2,
-            std_mean_train=np.zeros(22, dtype=np.float32),
-            std_scale_train=np.ones(22, dtype=np.float32),
-            angular_mmd_schedule=schedule,
-            attention_blocks=1,
-            attention_dropout=0.0,
-            decoder_dropout=0.0,
-        )
-        checkpoint = {
-            "state_dict": model.state_dict(),
-            "hyper_parameters": dict(model.hparams),
-            "pytorch-lightning_version": L.__version__,
-        }
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            checkpoint_path = Path(tmpdir) / "scheduled.ckpt"
-            torch.save(checkpoint, checkpoint_path)
-            loaded = LightningWBoson.load_from_checkpoint(
-                checkpoint_path,
-                weights_only=False,
-            )
-
-        self.assertEqual(loaded.angular_mmd_schedule, schedule)
 
     def test_rejects_checkpoint_missing_preprocessing_version(self):
         model = self.make_model()

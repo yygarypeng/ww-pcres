@@ -101,7 +101,7 @@ Unsupported or retired names fail with an explicit migration message instead of 
 
 Set `mmd.local: true` (the default) to multiply each output-feature kernel by the condition kernel over the four high-level features. Set `mmd.local: false` to use global MMD over output features only. Global mode still passes the high-level features into the neural network; it only removes them from MMD conditioning.
 
-Set `parameters.physics_start_epoch` to the number of completed warm-up epochs before physics losses enter the training objective. During warm-up, training uses only the W-four-vector `huber` loss; Higgs, W-mass, dMET, and all MMD losses receive zero effective weight. Validation and test losses always include the configured physics terms, using any epoch-specific angular schedule, so `val_loss` does not omit terms at the warm-up boundary. The retired `mmd_start_epoch` name is accepted only when loading older configurations and checkpoints.
+Set `parameters.angular_mmd_ramp_epochs` to ramp the angular MMD weight over $R$ epochs. At epoch $e$, its effective weight is $w_{\mathrm{angular}}[1 - \cos(\pi \min(e / R, 1))] / 2$, reaching the configured $w_{\mathrm{angular}}$ at epoch $R$; setting $R$ to zero applies the full configured weight immediately. Other loss weights are unaffected.
 
 ### Visualization and inference check
 

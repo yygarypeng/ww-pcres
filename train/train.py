@@ -224,12 +224,6 @@ def run_training(
     arg,
 ):
     params = cfg["parameters"]
-    if "physics_start_epoch" in params and "mmd_start_epoch" in params:
-        raise ValueError("physics_start_epoch and legacy mmd_start_epoch cannot both be set")
-    physics_start_epoch = params.get(
-        "physics_start_epoch",
-        params.get("mmd_start_epoch", 0),
-    )
     std_mean_train, std_scale_train = standardization
     mmd_cond_mean_train, mmd_cond_scale_train = mmd_condition_standardization
     mass_mmd_center, mass_mmd_scale = mass_mmd_standardization
@@ -249,8 +243,7 @@ def run_training(
         weight_decay=params.get("weight_decay", 1e-4),
         loss_weights=params["loss_weights"],
         mmd_config=cfg.get("mmd", {}),
-        physics_start_epoch=physics_start_epoch,
-        angular_mmd_schedule=params.get("angular_mmd_schedule"),
+        angular_mmd_ramp_epochs=params.get("angular_mmd_ramp_epochs", 0),
         adaptive_loss_weights=params.get("adaptive_loss_weights", False),
         log_loss_gradient_cosines=params.get("log_loss_gradient_cosines", False),
         higgs_mass_target=params.get("higgs_mass_target", 125.0),
