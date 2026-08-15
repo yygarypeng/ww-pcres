@@ -1,4 +1,5 @@
 import math
+from numbers import Integral
 
 import pytorch_lightning as L
 import torch
@@ -43,14 +44,6 @@ DEFAULT_MMD_CONFIG = {
     },
 }
 DEFAULT_LOCAL_MMD = True
-PHYSICS_LOSS_NAMES = {
-    "higgs_mass",
-    "alpha_mmd",
-    "mass_mmd",
-    "w_mass_huber",
-    "angular_mmd",
-    "dmet",
-}
 
 
 def resolve_mmd_config(config=None):
@@ -159,7 +152,9 @@ class WBosonRegressor(nn.Module):
             ]
         )
         self.context_norm = nn.LayerNorm(d_model)
-        print(f"Using {len(self.sa_blocks)} SA blocks; connected context dimension: {d_model * self.num_tokens}")
+        print(
+            f"Using {len(self.sa_blocks)} SA blocks; connected context dimension: {d_model * self.num_tokens}"
+        )
 
         # residual decoder blocks
         self.trunk = nn.Sequential(
@@ -278,9 +273,7 @@ class LightningWBoson(L.LightningModule):
         weight_decay=1e-4,
         loss_weights=None,
         mmd_config=None,
-        physics_start_epoch=None,
-        mmd_start_epoch=None,
-        angular_mmd_schedule=None,
+        angular_mmd_ramp_epochs=0,
         adaptive_loss_weights=False,
         log_loss_gradient_cosines=False,
         higgs_mass_target=125.0,
@@ -297,12 +290,6 @@ class LightningWBoson(L.LightningModule):
                 f"input preprocessing version must be {INPUT_PREPROCESSING_VERSION}; "
                 "retraining required for incompatible checkpoints"
             )
-        if physics_start_epoch is not None and mmd_start_epoch is not None:
-            raise ValueError("physics_start_epoch and legacy mmd_start_epoch cannot both be set")
-        if physics_start_epoch is None:
-            physics_start_epoch = 0 if mmd_start_epoch is None else mmd_start_epoch
-        if physics_start_epoch < 0:
-            raise ValueError("physics_start_epoch must be non-negative")
         higgs_mass_parameters = {
             "higgs_mass_target": float(higgs_mass_target),
             "higgs_mass_scale": float(higgs_mass_scale),
@@ -314,35 +301,24 @@ class LightningWBoson(L.LightningModule):
         higgs_mass_target = higgs_mass_parameters["higgs_mass_target"]
         higgs_mass_scale = higgs_mass_parameters["higgs_mass_scale"]
         higgs_mass_delta = higgs_mass_parameters["higgs_mass_delta"]
-        if angular_mmd_schedule is not None:
-            allowed_schedule_keys = {
-                "initial_multiplier",
-                "hold_epochs",
-                "full_weight_epoch",
-            }
-            unknown_schedule_keys = set(angular_mmd_schedule) - allowed_schedule_keys
-            if unknown_schedule_keys:
-                names = ", ".join(sorted(unknown_schedule_keys))
-                raise ValueError(f"unsupported angular_mmd_schedule key(s): {names}")
+        if isinstance(angular_mmd_ramp_epochs, bool):
+            raise ValueError("angular_mmd_ramp_epochs must be a non-negative integer")
+        if isinstance(angular_mmd_ramp_epochs, Integral):
+            angular_mmd_ramp_epochs = int(angular_mmd_ramp_epochs)
+            if angular_mmd_ramp_epochs < 0:
+                raise ValueError("angular_mmd_ramp_epochs must be a non-negative integer")
+        else:
             try:
-                initial_multiplier = float(angular_mmd_schedule["initial_multiplier"])
-                hold_epochs = int(angular_mmd_schedule["hold_epochs"])
-                full_weight_epoch = int(angular_mmd_schedule["full_weight_epoch"])
-            except (KeyError, TypeError, ValueError) as error:
-                raise ValueError("invalid angular_mmd_schedule") from error
-            if not math.isfinite(initial_multiplier) or not 0.0 <= initial_multiplier <= 1.0:
-                raise ValueError("angular_mmd_schedule initial_multiplier must be in [0, 1]")
-            if hold_epochs < 0:
-                raise ValueError("angular_mmd_schedule hold_epochs must be non-negative")
-            if full_weight_epoch <= hold_epochs:
-                raise ValueError("angular_mmd_schedule full_weight_epoch must exceed hold_epochs")
-            angular_mmd_schedule = {
-                "initial_multiplier": initial_multiplier,
-                "hold_epochs": hold_epochs,
-                "full_weight_epoch": full_weight_epoch,
-            }
+                ramp_epochs = float(angular_mmd_ramp_epochs)
+            except (TypeError, ValueError, OverflowError) as error:
+                raise ValueError(
+                    "angular_mmd_ramp_epochs must be a non-negative integer"
+                ) from error
+            if not math.isfinite(ramp_epochs) or ramp_epochs < 0.0 or not ramp_epochs.is_integer():
+                raise ValueError("angular_mmd_ramp_epochs must be a non-negative integer")
+            angular_mmd_ramp_epochs = int(ramp_epochs)
         mmd_config = resolve_mmd_config(mmd_config)
-        self.save_hyperparameters(ignore=["mmd_start_epoch"])
+        self.save_hyperparameters()
         if w_fourvec_scales is None:
             w_fourvec_scales = torch.ones(4, dtype=torch.float32)
         self.register_buffer(
@@ -394,18 +370,31 @@ class LightningWBoson(L.LightningModule):
             "mass_mmd": 0.0,
             "angular_mmd": 0.0,
         }
+        deprecated_loss_names = {
+            "kinematic_loss_mmd": "replace it with separate alpha_mmd and mass_mmd weights",
+            "angular_loss_mmd": "rename it to angular_mmd",
+        }
+        deprecated = set(loss_weights or {}) & deprecated_loss_names.keys()
+        if deprecated:
+            details = "; ".join(
+                f"{name}: {deprecated_loss_names[name]}" for name in sorted(deprecated)
+            )
+            raise ValueError(f"deprecated loss_weights key(s): {details}")
+        unsupported = set(loss_weights or {}) - defaults.keys()
+        if unsupported:
+            names = ", ".join(sorted(unsupported))
+            raise ValueError(f"unsupported loss_weights key(s): {names}")
         self.loss_weights = {
             name: float(weight) for name, weight in {**defaults, **(loss_weights or {})}.items()
         }
         self.adaptive_loss_weights = bool(adaptive_loss_weights)
         self.adaptive_loss_names = [
-            name for name, weight in self.loss_weights.items() if weight != 0.0
+            name for name, weight in self.loss_weights.items() if weight != 0.0 and name != "huber"
         ]
         self.log_loss_gradient_cosines = bool(log_loss_gradient_cosines)
         self._gradient_analysis_batch = None
         self.mmd_config = mmd_config
-        self.physics_start_epoch = physics_start_epoch
-        self.angular_mmd_schedule = angular_mmd_schedule
+        self.angular_mmd_ramp_epochs = angular_mmd_ramp_epochs
         self.higgs_mass_target = higgs_mass_target
         self.higgs_mass_scale = higgs_mass_scale
         self.higgs_mass_delta = higgs_mass_delta
@@ -439,31 +428,11 @@ class LightningWBoson(L.LightningModule):
     def forward(self, x, return_aux=False):
         return self.model(x, return_aux=return_aux)
 
-    def _physics_is_warming_up(self):
-        return self.training and self.current_epoch < self.physics_start_epoch
-
     def _effective_loss_weights(self):
-        if self._physics_is_warming_up():
-            return {
-                name: 0.0 if name in PHYSICS_LOSS_NAMES else weight
-                for name, weight in self.loss_weights.items()
-            }
-        if self.angular_mmd_schedule is None:
+        if self.angular_mmd_ramp_epochs == 0:
             return self.loss_weights
-
-        schedule = self.angular_mmd_schedule
-        epoch = self.current_epoch
-        if epoch <= schedule["hold_epochs"]:
-            multiplier = schedule["initial_multiplier"]
-        elif epoch >= schedule["full_weight_epoch"]:
-            multiplier = 1.0
-        else:
-            progress = (epoch - schedule["hold_epochs"]) / (
-                schedule["full_weight_epoch"] - schedule["hold_epochs"]
-            )
-            multiplier = schedule["initial_multiplier"] + (
-                (1.0 - schedule["initial_multiplier"]) * (1.0 - math.cos(math.pi * progress)) / 2.0
-            )
+        progress = min(max(self.current_epoch / self.angular_mmd_ramp_epochs, 0.0), 1.0)
+        multiplier = (1.0 - math.cos(math.pi * progress)) / 2.0
         return {
             **self.loss_weights,
             "angular_mmd": self.loss_weights["angular_mmd"] * multiplier,
@@ -472,9 +441,7 @@ class LightningWBoson(L.LightningModule):
     def _loss_enabled(self, name, weights=None):
         weights = self._effective_loss_weights() if weights is None else weights
         return weights.get(name, 0.0) != 0.0 or (
-            self.adaptive_loss_weights
-            and name in self.adaptive_loss_names
-            and not (name in PHYSICS_LOSS_NAMES and self._physics_is_warming_up())
+            self.adaptive_loss_weights and name in self.adaptive_loss_names
         )
 
     def _mmd_kwargs(self, feature_name):
@@ -595,15 +562,14 @@ class LightningWBoson(L.LightningModule):
         for name in names:
             grad = self._loss_grad_vector(losses[name], parameters)
             cos_total = torch.nn.functional.cosine_similarity(grad, total_grad, dim=0, eps=1.0e-6)
-            # weight = effective_weights.get(name, 0.0)
-            # rest_grad = total_grad - weight * grad
-            # cos_rest = torch.nn.functional.cosine_similarity(grad, rest_grad, dim=0, eps=1.0e-6)
-            # if not torch.isfinite(cos_total).item() or not torch.isfinite(cos_rest).item():
-            #     return {}
-            # todo: test either total or rest (math correctly)
+            weight = effective_weights.get(name, 0.0)
+            rest_grad = total_grad - weight * grad
+            cos_rest = torch.nn.functional.cosine_similarity(grad, rest_grad, dim=0, eps=1.0e-6)
+            if not torch.isfinite(cos_total).item() or not torch.isfinite(cos_rest).item():
+                return {}
             cosines[name] = {
                 "total": cos_total.detach(),
-                # "rest": cos_rest.detach(),
+                "rest": cos_rest.detach(),
             }
         return cosines
 
@@ -651,13 +617,13 @@ class LightningWBoson(L.LightningModule):
                 on_step=False,
                 on_epoch=True,
             )
-            # self.log(
-            #     f"grad_cos/{name}__rest", 
-            #     cos["rest"], 
-            #     prog_bar=False, 
-            #     on_step=False, 
-            #     on_epoch=True
-            # )
+            self.log(
+                f"grad_cos/{name}__rest",
+                cos["rest"],
+                prog_bar=False,
+                on_step=False,
+                on_epoch=True,
+            )
 
     def on_train_epoch_start(self):
         self._gradient_analysis_batch = None
