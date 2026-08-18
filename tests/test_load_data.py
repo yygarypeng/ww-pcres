@@ -12,7 +12,7 @@ from data.load_data import (
 
 
 class MMDConditionFeaturesTest(unittest.TestCase):
-    def test_builds_periodic_condition_features_in_documented_order(self):
+    def test_builds_condition_features_in_documented_order(self):
         features = np.zeros((2, 21), dtype=np.float32)
         features[:, 18:21] = [
             [10.0, -0.5, 0.0],
@@ -22,8 +22,8 @@ class MMDConditionFeaturesTest(unittest.TestCase):
         condition = mmd_condition_features(features)
 
         expected = np.array([
-            [10.0, -0.5, 0.0, 1.0],
-            [20.0, 0.5, 0.0, -1.0],
+            [10.0, -0.5, 0.0],
+            [20.0, 0.5, np.pi],
         ])
         np.testing.assert_allclose(condition, expected, atol=1.0e-6)
 
@@ -40,16 +40,31 @@ class MMDConditionFeaturesTest(unittest.TestCase):
 
         np.testing.assert_allclose(mean[:2], transformed.mean(axis=0))
         np.testing.assert_allclose(scale[:2], transformed.std(axis=0))
-        np.testing.assert_array_equal(mean[2:], np.zeros(2))
-        np.testing.assert_array_equal(scale[2:], np.ones(2))
+        np.testing.assert_array_equal(mean[2:], np.zeros(1))
+        np.testing.assert_array_equal(scale[2:], np.ones(1))
 
-    def test_condition_features_require_all_three_observables(self):
-        with self.assertRaisesRegex(ValueError, "exactly 21 features"):
+    def test_condition_features_require_supported_width(self):
+        with self.assertRaisesRegex(ValueError, "exactly 18 or 21 features"):
             mmd_condition_features(np.zeros((2, 20), dtype=np.float32))
 
     def test_condition_features_reject_legacy_extra_column(self):
-        with self.assertRaisesRegex(ValueError, "exactly 21 features"):
+        with self.assertRaisesRegex(ValueError, "exactly 18 or 21 features"):
             mmd_condition_features(np.zeros((2, 22), dtype=np.float32))
+
+    def test_condition_features_empty_without_high_level_features(self):
+        features = np.zeros((2, 18), dtype=np.float32)
+
+        condition = mmd_condition_features(features)
+
+        self.assertEqual(condition.shape, (2, 0))
+
+    def test_condition_stats_empty_without_high_level_features(self):
+        features = np.zeros((3, 18), dtype=np.float32)
+
+        mean, scale = compute_mmd_condition_stats(features)
+
+        self.assertEqual(mean.shape, (0,))
+        self.assertEqual(scale.shape, (0,))
 
 
 class ValidTruthWRowsTest(unittest.TestCase):
@@ -99,7 +114,7 @@ class TestInputEnergyValidation(unittest.TestCase):
 
         def capture_stats(train_obj, target_obj):
             captured["train_obj"] = train_obj.copy()
-            return ((np.zeros(21), np.ones(21)), (np.zeros(10), np.ones(10)))
+            return ((np.zeros(18), np.ones(18)), (np.zeros(10), np.ones(10)))
 
         with (
             patch("data.load_data.load_particles_from_h5", return_value={"sample": self._category()}),
@@ -107,9 +122,9 @@ class TestInputEnergyValidation(unittest.TestCase):
         ):
             train_obj, target_obj, _, _ = load_data("unused.h5")
 
-        self.assertEqual(train_obj.shape, (2, 21))
-        self.assertEqual(target_obj.shape, (2, 10))
-        np.testing.assert_array_equal(train_obj[:, 8:12], np.zeros((2, 4)))
+        self.assertEqual(train_obj.shape, (1, 18))
+        self.assertEqual(target_obj.shape, (1, 10))
+        np.testing.assert_array_equal(train_obj[:, 8:12], np.zeros((1, 4)))
         np.testing.assert_array_equal(captured["train_obj"], train_obj)
 
 

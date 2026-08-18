@@ -2,7 +2,7 @@ import h5py
 import numpy as np
 from sklearn.preprocessing import StandardScaler
 
-from data.preprocessing import normalize_negative_energy_jets_numpy, valid_input_energy_rows
+from data.preprocessing import BASE_INPUT_DIM, RAW_INPUT_DIM, valid_input_energy_rows
 from physics import deta, dphi, eta
 
 
@@ -51,8 +51,13 @@ def split_categories(data_cfg, split):
 
 def mmd_condition_features(features):
     features = np.asarray(features)
-    if features.shape[-1] != 21:
-        raise ValueError(f"MMD conditioning requires exactly 21 features, got {features.shape[-1]}")
+    if features.shape[-1] == BASE_INPUT_DIM:
+        return np.empty((features.shape[0], 0), dtype=features.dtype)
+    if features.shape[-1] != RAW_INPUT_DIM:
+        raise ValueError(
+            f"MMD conditioning requires exactly {BASE_INPUT_DIM} or {RAW_INPUT_DIM} features, "
+            f"got {features.shape[-1]}"
+        )
 
     m_ll = features[..., 18:19]
     deta_ll = features[..., 19:20]
@@ -61,8 +66,7 @@ def mmd_condition_features(features):
         [
             m_ll,
             deta_ll,
-            np.sin(dphi_ll),
-            np.cos(dphi_ll),
+            dphi_ll,
         ],
         axis=-1,
     )
@@ -70,6 +74,8 @@ def mmd_condition_features(features):
 
 def compute_mmd_condition_stats(train_obj):
     condition = mmd_condition_features(train_obj)
+    if condition.shape[1] == 0:
+        return np.zeros(0, dtype=np.float32), np.ones(0, dtype=np.float32)
     scaler = StandardScaler().fit(condition[:, :2])
     mean = np.zeros(condition.shape[1], dtype=scaler.mean_.dtype)
     scale = np.ones(condition.shape[1], dtype=scaler.scale_.dtype)
@@ -218,6 +224,9 @@ def load_data(
 
         met_px = category_data["met"]["px"]
         met_py = category_data["met"]["py"]
+        # truth met (ptvv)
+        # truth_ptvv_px = (category_data["truth_pos_w"]["px"] - category_data["pos_lep"]["px"]) + (category_data["truth_neg_w"]["px"] - category_data["neg_lep"]["px"])
+        # truth_ptvv_py = (category_data["truth_pos_w"]["py"] - category_data["pos_lep"]["py"]) + (category_data["truth_neg_w"]["py"] - category_data["neg_lep"]["py"])
 
         dphi_ll = dphi(lep_pos_phi, lep_neg_phi)
         deta_ll = deta(lep_pos_eta, lep_neg_eta)
@@ -251,9 +260,9 @@ def load_data(
                 col(met_px),  # 16
                 col(met_py),  # 17
                 # high level features
-                col(m_ll),  # 18
-                col(deta_ll),  # 19
-                col(dphi_ll),  # 20
+                # col(m_ll),  # 18
+                # col(deta_ll),  # 19
+                # col(dphi_ll),  # 20
             ],
             axis=-1,
         )
@@ -284,8 +293,6 @@ def load_data(
 
     print("Training objects shape:", train_obj.shape)
     print("Target objects shape:", target_obj.shape)
-
-    train_obj = normalize_negative_energy_jets_numpy(train_obj)
 
     # Remove rows with non-finite values or invalid truth W kinematics
     valid_train = np.isfinite(train_obj).all(axis=1)

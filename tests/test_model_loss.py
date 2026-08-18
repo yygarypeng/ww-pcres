@@ -9,6 +9,7 @@ import torch
 import torch.nn.functional as F
 
 from model import LightningWBoson
+from model import LightningWBosonNoDmet
 from model import losses as loss_module
 from model.losses import dmet_loss, standardized_fourvec_huber_loss
 from train import train as train_module
@@ -27,9 +28,7 @@ class StandardizedFourVectorHuberTest(unittest.TestCase):
 
         scales = compute_w_fourvec_scales(targets)
 
-        transformed = targets[:, :8].reshape(-1, 4).copy()
-        transformed[:, 3] = np.log1p(transformed[:, 3])
-        expected = np.std(transformed, axis=0)
+        expected = np.std(targets[:, :8].reshape(-1, 4), axis=0)
         np.testing.assert_allclose(scales, expected)
 
     def test_compute_scales_clamps_constant_components(self):
@@ -39,16 +38,15 @@ class StandardizedFourVectorHuberTest(unittest.TestCase):
 
         self.assertTrue(np.all(scales > 0.0))
 
-    def test_loss_applies_log1p_to_both_energy_slots(self):
+    def test_loss_uses_raw_energy_for_both_slots(self):
         truth = torch.tensor([[0.0, 0.0, 0.0, 3.0, 0.0, 0.0, 0.0, 7.0, 0.0, 0.0]])
         prediction = torch.tensor([[1.0, 2.0, 3.0, 7.0, 1.0, 2.0, 3.0, 15.0]])
         scales = torch.ones(4)
 
         loss = standardized_fourvec_huber_loss(truth, prediction, scales)
 
-        log_two = torch.log(torch.tensor(2.0))
         standardized_residual = torch.tensor(
-            [[[1.0, 2.0, 3.0, log_two], [1.0, 2.0, 3.0, log_two]]]
+            [[[1.0, 2.0, 3.0, 4.0], [1.0, 2.0, 3.0, 8.0]]]
         )
         expected = F.huber_loss(standardized_residual, torch.zeros_like(standardized_residual))
         torch.testing.assert_close(loss, expected)
@@ -67,8 +65,8 @@ class StandardizedFourVectorHuberTest(unittest.TestCase):
             input_dim=21,
             d_model=8,
             num_heads=2,
-            std_mean_train=np.zeros(22, dtype=np.float32),
-            std_scale_train=np.ones(22, dtype=np.float32),
+            std_mean_train=np.zeros(21, dtype=np.float32),
+            std_scale_train=np.ones(21, dtype=np.float32),
             w_fourvec_scales=scales,
         )
 
@@ -123,8 +121,8 @@ class StandardizedDmetHuberTest(unittest.TestCase):
             input_dim=21,
             d_model=8,
             num_heads=2,
-            std_mean_train=np.zeros(22, dtype=np.float32),
-            std_scale_train=np.ones(22, dtype=np.float32),
+            std_mean_train=np.zeros(21, dtype=np.float32),
+            std_scale_train=np.ones(21, dtype=np.float32),
             dmet_scales=np.array([2.0, 3.0], dtype=np.float32),
             loss_weights={"huber": 0.0, "dmet": 1.0},
         )
@@ -152,8 +150,8 @@ class StandardizedDmetHuberTest(unittest.TestCase):
             input_dim=21,
             d_model=8,
             num_heads=2,
-            std_mean_train=np.zeros(22, dtype=np.float32),
-            std_scale_train=np.ones(22, dtype=np.float32),
+            std_mean_train=np.zeros(21, dtype=np.float32),
+            std_scale_train=np.ones(21, dtype=np.float32),
             dmet_scales=scales,
         )
 
@@ -225,8 +223,8 @@ class LightningModelLossTest(unittest.TestCase):
             input_dim=21,
             d_model=8,
             num_heads=2,
-            std_mean_train=np.zeros(22, dtype=np.float32),
-            std_scale_train=np.ones(22, dtype=np.float32),
+            std_mean_train=np.zeros(21, dtype=np.float32),
+            std_scale_train=np.ones(21, dtype=np.float32),
             **kwargs,
         )
 
@@ -269,8 +267,8 @@ class LightningModelLossTest(unittest.TestCase):
             input_dim=21,
             d_model=8,
             num_heads=2,
-            std_mean_train=np.zeros(22, dtype=np.float32),
-            std_scale_train=np.ones(22, dtype=np.float32),
+            std_mean_train=np.zeros(21, dtype=np.float32),
+            std_scale_train=np.ones(21, dtype=np.float32),
             loss_weights={
                 "huber": 2.0,
                 "higgs_mass": 6.0,
@@ -369,8 +367,8 @@ class LightningModelLossTest(unittest.TestCase):
             input_dim=21,
             d_model=8,
             num_heads=2,
-            std_mean_train=np.zeros(22, dtype=np.float32),
-            std_scale_train=np.ones(22, dtype=np.float32),
+            std_mean_train=np.zeros(21, dtype=np.float32),
+            std_scale_train=np.ones(21, dtype=np.float32),
             weight_decay=0.0123,
         )
 
@@ -383,8 +381,8 @@ class LightningModelLossTest(unittest.TestCase):
             input_dim=21,
             d_model=8,
             num_heads=2,
-            std_mean_train=np.zeros(22, dtype=np.float32),
-            std_scale_train=np.ones(22, dtype=np.float32),
+            std_mean_train=np.zeros(21, dtype=np.float32),
+            std_scale_train=np.ones(21, dtype=np.float32),
             mmd_config={
                 "condition": {"kernel": "imq", "bandwidth_multipliers": [3.0]},
                 "alpha": {"kernel": "rbf", "bandwidth_multipliers": [0.2, 0.4]},
@@ -407,8 +405,8 @@ class LightningModelLossTest(unittest.TestCase):
             input_dim=21,
             d_model=8,
             num_heads=2,
-            std_mean_train=np.zeros(22, dtype=np.float32),
-            std_scale_train=np.ones(22, dtype=np.float32),
+            std_mean_train=np.zeros(21, dtype=np.float32),
+            std_scale_train=np.ones(21, dtype=np.float32),
             mmd_config={"local": False},
         )
 
@@ -422,8 +420,8 @@ class LightningModelLossTest(unittest.TestCase):
                         input_dim=21,
                         d_model=8,
                         num_heads=2,
-                        std_mean_train=np.zeros(22, dtype=np.float32),
-                        std_scale_train=np.ones(22, dtype=np.float32),
+                        std_mean_train=np.zeros(21, dtype=np.float32),
+                        std_scale_train=np.ones(21, dtype=np.float32),
                         mmd_config={"local": value},
                     )
 
@@ -433,8 +431,8 @@ class LightningModelLossTest(unittest.TestCase):
                 input_dim=21,
                 d_model=8,
                 num_heads=2,
-                std_mean_train=np.zeros(22, dtype=np.float32),
-                std_scale_train=np.ones(22, dtype=np.float32),
+                std_mean_train=np.zeros(21, dtype=np.float32),
+                std_scale_train=np.ones(21, dtype=np.float32),
                 mmd_config={
                     "condition": {"bandwidth_multipliers": [0.0]},
                 },
@@ -519,8 +517,8 @@ class LightningModelLossTest(unittest.TestCase):
                         input_dim=21,
                         d_model=8,
                         num_heads=2,
-                        std_mean_train=np.zeros(22, dtype=np.float32),
-                        std_scale_train=np.ones(22, dtype=np.float32),
+                        std_mean_train=np.zeros(21, dtype=np.float32),
+                        std_scale_train=np.ones(21, dtype=np.float32),
                         loss_weights={key: 1.0},
                     )
 
@@ -535,20 +533,20 @@ class LightningModelLossTest(unittest.TestCase):
                         input_dim=21,
                         d_model=8,
                         num_heads=2,
-                        std_mean_train=np.zeros(22, dtype=np.float32),
-                        std_scale_train=np.ones(22, dtype=np.float32),
+                        std_mean_train=np.zeros(21, dtype=np.float32),
+                        std_scale_train=np.ones(21, dtype=np.float32),
                         loss_weights={key: 1.0},
                     )
 
     def test_normalized_periodic_condition_reaches_both_local_mmd_losses(self):
-        mean = np.array([3.0, -2.0, 0.0, 0.0], dtype=np.float32)
-        scale = np.array([2.0, 4.0, 1.0, 1.0], dtype=np.float32)
+        mean = np.array([3.0, -2.0, 0.0], dtype=np.float32)
+        scale = np.array([2.0, 4.0, 1.0], dtype=np.float32)
         model = LightningWBoson(
             input_dim=21,
             d_model=8,
             num_heads=2,
-            std_mean_train=np.zeros(22, dtype=np.float32),
-            std_scale_train=np.ones(22, dtype=np.float32),
+            std_mean_train=np.zeros(21, dtype=np.float32),
+            std_scale_train=np.ones(21, dtype=np.float32),
             mmd_cond_mean_train=mean,
             mmd_cond_scale_train=scale,
             loss_weights={
@@ -573,12 +571,7 @@ class LightningModelLossTest(unittest.TestCase):
         prediction = torch.cat([w0, w1]).repeat(4, 1)
         target_w = torch.cat([w0 + torch.tensor([1.0, 0.0, 0.0, 0.0]), w1]).repeat(4, 1)
         target = torch.cat([target_w, torch.zeros(4, 2)], dim=-1)
-        condition = torch.stack([
-            x[:, 18],
-            x[:, 19],
-            torch.sin(x[:, 20]),
-            torch.cos(x[:, 20]),
-        ], dim=-1)
+        condition = torch.stack([x[:, 18], x[:, 19], x[:, 20]], dim=-1)
         expected = (condition - torch.from_numpy(mean)) / torch.from_numpy(scale)
         captured = []
 
@@ -592,10 +585,115 @@ class LightningModelLossTest(unittest.TestCase):
 
         self.assertEqual(w_layer.call_count, 1)
         self.assertEqual(local_mmd.call_count, 3)
-        self.assertEqual([feature_count for feature_count, _ in captured], [1, 2, 6])
+        self.assertEqual([feature_count for feature_count, _ in captured], [1, 2, 4])
         for _, captured_condition in captured:
             torch.testing.assert_close(captured_condition, expected)
-            self.assertEqual(captured_condition.shape, (4, 4))
+            self.assertEqual(captured_condition.shape, (4, 3))
+
+
+class NoHighLevelFeaturesTest(unittest.TestCase):
+    MODEL_CLASSES = (LightningWBoson, LightningWBosonNoDmet)
+
+    def _make_model(self, model_class, **kwargs):
+        return model_class(
+            input_dim=18,
+            d_model=8,
+            num_heads=2,
+            std_mean_train=np.zeros(18, dtype=np.float32),
+            std_scale_train=np.ones(18, dtype=np.float32),
+            mmd_cond_mean_train=np.zeros(0, dtype=np.float32),
+            mmd_cond_scale_train=np.ones(0, dtype=np.float32),
+            attention_blocks=1,
+            attention_dropout=0.0,
+            decoder_dropout=0.0,
+            **kwargs,
+        )
+
+    @staticmethod
+    def _valid_inputs(batch_size=4):
+        inputs = torch.randn(batch_size, 18)
+        for start in (0, 4, 8, 12):
+            inputs[:, start + 3] = (
+                torch.linalg.vector_norm(inputs[:, start : start + 3], dim=1)
+                + torch.rand(batch_size)
+                + 0.1
+            )
+        return inputs
+
+    def test_forward_without_high_level_features(self):
+        for model_class in self.MODEL_CLASSES:
+            with self.subTest(model=model_class.__name__):
+                model = self._make_model(model_class).eval()
+
+                predictions = model(self._valid_inputs())
+
+                self.assertEqual(predictions.shape, (4, 8))
+                self.assertIsNone(model.model.hl_embed)
+                self.assertEqual(model.model.hl_input_dim, 0)
+                self.assertEqual(model.model.num_tokens, 5)
+
+    def test_mmd_condition_is_empty_without_high_level_features(self):
+        for model_class in self.MODEL_CLASSES:
+            with self.subTest(model=model_class.__name__):
+                model = self._make_model(model_class).eval()
+
+                condition = model.model._mmd_condition(self._valid_inputs())
+
+                self.assertEqual(condition.shape, (4, 0))
+
+    def test_mmd_local_is_forced_off_without_condition_features(self):
+        for model_class in self.MODEL_CLASSES:
+            with self.subTest(model=model_class.__name__):
+                model = self._make_model(model_class, mmd_config={"local": True})
+
+                self.assertIs(model._mmd_kwargs("mass")["local"], False)
+                self.assertIs(model._mmd_kwargs("angular")["local"], False)
+
+    def test_mmd_losses_run_unconditioned_without_condition_features(self):
+        for model_class in self.MODEL_CLASSES:
+            with self.subTest(model=model_class.__name__):
+                model = self._make_model(
+                    model_class,
+                    loss_weights={
+                        "huber": 0.0,
+                        "alpha_mmd": 1.0,
+                        "mass_mmd": 1.0,
+                        "angular_mmd": 1.0,
+                    },
+                ).eval()
+                x = torch.zeros(4, 18)
+                w0 = torch.tensor([30.0, 5.0, 40.0, 100.0])
+                w1 = torch.tensor([-20.0, 15.0, -30.0, 90.0])
+                prediction = torch.cat([w0, w1]).repeat(4, 1)
+                target_w = torch.cat([w0 + torch.tensor([1.0, 0.0, 0.0, 0.0]), w1]).repeat(4, 1)
+                target = torch.cat([target_w, torch.zeros(4, 2)], dim=-1)
+                captured = []
+
+                def capture_local_mmd(pred_features, true_features, cond, **kwargs):
+                    captured.append((cond.detach().clone(), kwargs["local"]))
+                    return pred_features.sum() * 0.0
+
+                with patch.object(model.model.w_layer, "forward", return_value=prediction):
+                    with patch("model.losses.compute_local_mmd", side_effect=capture_local_mmd):
+                        total, losses = model._compute_batch_losses(x, target)
+
+                self.assertEqual(len(captured), 3)
+                for condition, local in captured:
+                    self.assertEqual(condition.shape, (4, 0))
+                    self.assertIs(local, False)
+                self.assertTrue(torch.isfinite(total))
+
+    def test_rejects_unsupported_input_width(self):
+        for model_class in self.MODEL_CLASSES:
+            with self.subTest(model=model_class.__name__):
+                with self.assertRaisesRegex(ValueError, "input_dim"):
+                    model_class(
+                        input_dim=20,
+                        d_model=8,
+                        num_heads=2,
+                        std_mean_train=np.zeros(20, dtype=np.float32),
+                        std_scale_train=np.ones(20, dtype=np.float32),
+                    )
 
 
 class LocalMMDTest(unittest.TestCase):
@@ -906,7 +1004,7 @@ class AlphaMMDTest(unittest.TestCase):
         self.assertTrue(torch.isfinite(y_pred.grad).all())
 
     def test_requires_condition_features(self):
-        with self.assertRaisesRegex(ValueError, "requires the four high-level"):
+        with self.assertRaisesRegex(ValueError, "requires the high-level"):
             loss_module.alpha_mmd(
                 torch.zeros((1, 21)),
                 torch.zeros((1, 10)),
@@ -975,8 +1073,8 @@ class MassMMDTest(unittest.TestCase):
             input_dim=21,
             d_model=8,
             num_heads=2,
-            std_mean_train=np.zeros(22, dtype=np.float32),
-            std_scale_train=np.ones(22, dtype=np.float32),
+            std_mean_train=np.zeros(21, dtype=np.float32),
+            std_scale_train=np.ones(21, dtype=np.float32),
             mass_mmd_center=0.25,
             mass_mmd_scale=0.75,
         )
@@ -1034,8 +1132,8 @@ class GradientCosineLoggingTest(unittest.TestCase):
             input_dim=21,
             d_model=8,
             num_heads=2,
-            std_mean_train=np.zeros(22, dtype=np.float32),
-            std_scale_train=np.ones(22, dtype=np.float32),
+            std_mean_train=np.zeros(21, dtype=np.float32),
+            std_scale_train=np.ones(21, dtype=np.float32),
             loss_weights={"huber": 1.0, "higgs_mass": 2.0},
             adaptive_loss_weights=False,
             log_loss_gradient_cosines=True,

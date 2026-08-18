@@ -55,21 +55,16 @@ def invariant_mass2(fourvec):
 def standardized_fourvec_huber_loss(y_true, y_pred, component_scales):
     true_fourvecs = y_true[..., :8].reshape(*y_true.shape[:-1], 2, 4)
     pred_fourvecs = y_pred.reshape(*y_pred.shape[:-1], 2, 4)
-    true_transformed = torch.cat(
-        [true_fourvecs[..., :3], torch.log1p(true_fourvecs[..., 3:4])],
-        dim=-1,
-    )
-    pred_transformed = torch.cat(
-        [pred_fourvecs[..., :3], torch.log1p(pred_fourvecs[..., 3:4])],
-        dim=-1,
-    )
-    residual = (pred_transformed - true_transformed) / component_scales
+    residual = (pred_fourvecs - true_fourvecs) / component_scales
     return F.huber_loss(residual, torch.zeros_like(residual))
 
 
-def _require_mmd_condition(cond, name):
-    if cond.shape[-1] == 0:
-        raise ValueError(f"{name} requires the four high-level conditioning features")
+def _require_mmd_condition(cond, name, local=True):
+    if cond.shape[-1] == 0 and local:
+        raise ValueError(
+            f"{name} requires the high-level conditioning features; "
+            "disable mmd.local or provide the high-level features"
+        )
 
 
 def _valid_kinematic_rows(x_batch, y_true, y_pred, cond, local=True):
@@ -150,7 +145,7 @@ def higgs_mass_loss(
     w0_4, w1_4 = y_pred[..., :4], y_pred[..., 4:8]
     higgs_mass2 = invariant_mass2(w0_4 + w1_4)
     residual = (higgs_mass2 - target_mass**2) / (2.0 * target_mass * scale)
-    return F.huber_loss(residual, torch.zeros_like(residual), delta=delta)
+    return F.l1_loss(residual, torch.zeros_like(residual))
 
 
 def dmet_loss(x_batch, y_true, dmet, component_scales):
@@ -269,7 +264,7 @@ def compute_local_mmd(
 
 
 def alpha_mmd(x_batch, y_true, y_pred, cond, **mmd_kwargs):
-    _require_mmd_condition(cond, "alpha MMD")
+    _require_mmd_condition(cond, "alpha MMD", local=mmd_kwargs.get("local", True))
 
     valid = _valid_kinematic_rows(
         x_batch,
@@ -305,7 +300,7 @@ def alpha_mmd(x_batch, y_true, y_pred, cond, **mmd_kwargs):
 
 
 def mass_mmd(x_batch, y_true, y_pred, cond, center, scale, **mmd_kwargs):
-    _require_mmd_condition(cond, "mass MMD")
+    _require_mmd_condition(cond, "mass MMD", local=mmd_kwargs.get("local", True))
 
     valid = _valid_kinematic_rows(
         x_batch,
@@ -326,7 +321,7 @@ def mass_mmd(x_batch, y_true, y_pred, cond, center, scale, **mmd_kwargs):
 
 
 def angular_mmd(x_batch, y_true, y_pred, cond, **mmd_kwargs):
-    _require_mmd_condition(cond, "angular MMD")
+    _require_mmd_condition(cond, "angular MMD", local=mmd_kwargs.get("local", True))
 
     def _features_for_mmd(angles):
         theta0 = angles[..., 0]
@@ -337,11 +332,9 @@ def angular_mmd(x_batch, y_true, y_pred, cond, **mmd_kwargs):
         return torch.stack(
             [
                 2.0 * theta0 / torch.pi - 1.0,
-                torch.sin(phi0),
-                torch.cos(phi0),
+                phi0 / torch.pi,
                 2.0 * theta1 / torch.pi - 1.0,
-                torch.sin(phi1),
-                torch.cos(phi1),
+                phi1 / torch.pi,
             ],
             dim=-1,
         )

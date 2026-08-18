@@ -5,17 +5,17 @@ REPO_ROOT="$(dirname -- "$SCRIPT_DIR")"
 
 # Pin each run to a disjoint, known-stable CPU range.
 # The 11th cpu is not stable in this BIOS version! (July 29, 2026)
-V61_CPUS="0-9"
-V4_CPUS="12-21"
+ORG_CPUS="0-9"
+NODMET_CPUS="12-21"
 
-echo "$(date +%H:%M:%S) LAUNCH v61 (cpus=$V61_CPUS)"
-taskset -c "$V61_CPUS" python "${SCRIPT_DIR}/train.py" --config "${REPO_ROOT}/configs/config_v61.yaml" \
-    &> "$REPO_ROOT/record_v61.log" &
-V61_PID=$!
+echo "$(date +%H:%M:%S) LAUNCH ORG (cpus=$ORG_CPUS)"
+taskset -c "$ORG_CPUS" python "${SCRIPT_DIR}/train.py" --config "${REPO_ROOT}/configs/config.yaml" \
+    &> "$REPO_ROOT/record.log" &
+ORG_PID=$!
 
-echo "$(date +%H:%M:%S) LAUNCH v4  (cpus=$V4_CPUS)"
-taskset -c "$V4_CPUS" python "${SCRIPT_DIR}/train.py" --config "${REPO_ROOT}/configs/config_v4.yaml" \
-    &> "$REPO_ROOT/record_v4.log" &
-V4_PID=$!
+echo "$(date +%H:%M:%S) LAUNCH NODMET  (cpus=$NODMET_CPUS)"
+taskset -c "$NODMET_CPUS" python "${SCRIPT_DIR}/train_no_dmet.py" --config "${REPO_ROOT}/configs/config_no_dmet.yaml" \
+    &> "$REPO_ROOT/record_no_dmet.log" &
+NODMET_PID=$!
 
-echo "$(date +%H:%M:%S) launched v61 (pid $V61_PID) and v4 (pid $V4_PID)"
+echo "$(date +%H:%M:%S) launched ORG (pid $ORG_PID) and NODMET (pid $NODMET_PID)"
