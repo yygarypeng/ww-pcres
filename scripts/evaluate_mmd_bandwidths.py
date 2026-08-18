@@ -253,9 +253,7 @@ def print_results(all_results):
             pairs = "  ".join(
                 f"{multiplier:g}:mmd2={mmd2:.8g},loss={loss:.8g},"
                 f"prediction_gradient_rms={gradient_rms:.8g}"
-                for multiplier, (mmd2, loss, gradient_rms) in zip(
-                    multipliers[name], diagnostics
-                )
+                for multiplier, (mmd2, loss, gradient_rms) in zip(multipliers[name], diagnostics)
             )
             mixed_mmd2 = sum(mmd2 for mmd2, _, _ in diagnostics) / len(diagnostics)
             mixed_loss = loss_module.transform_mmd_loss(

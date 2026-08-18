@@ -133,7 +133,11 @@ def evaluate_checkpoint(checkpoint, features, batch_size, device):
                     weight=weight,
                 )
             )
-    return {"epoch": checkpoint.epoch, "global_step": checkpoint.global_step, **aggregate_metrics(batches)}
+    return {
+        "epoch": checkpoint.epoch,
+        "global_step": checkpoint.global_step,
+        **aggregate_metrics(batches),
+    }
 
 
 def parse_args():

@@ -26,7 +26,6 @@ def valid_raw_inputs():
             [2.0, 1.0, -1.0, 4.0, 1.0, -2.0, 1.0, 4.0, 0.0, 0.0, 0.0, 0.0, 1.0, -1.0, 2.0, 4.0, -1.0, 2.0, 1.0, 0.5, -0.7],
             [-1.0, 2.0, 1.0, 4.0, 2.0, 1.0, -2.0, 4.0, 1.0, 2.0, -1.0, 4.0, 0.0, 0.0, 0.0, 0.0, 3.0, 1.0, 0.2, 2.0, 2.4],
             [1.0, -1.0, 2.0, 4.0, -2.0, 2.0, 1.0, 4.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -2.0, -1.0, 1.2, 0.8, -1.5],
-            [1.0, 2.0, 1.0, 4.0, -1.0, 1.0, 2.0, 4.0, 3.0, -2.0, 1.0, -0.5, 1.0, 1.0, -1.0, 3.0, 2.0, -1.0, 0.6, 1.2, 0.4],
             [1.0, 2.0, 1.0, 4.0, -1.0, 1.0, 2.0, 4.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, -1.0, 3.0, 2.0, -1.0, 0.6, 1.2, 0.4],
         ],
         dtype=torch.float32,
@@ -36,7 +35,7 @@ def valid_raw_inputs():
 
 class Opset11MultiheadAttentionTest(unittest.TestCase):
     def test_export_dummy_inputs_follow_raw_physics_contract(self):
-        inputs = converter.make_valid_raw_inputs(4, seed=7)
+        inputs = converter.make_valid_raw_inputs(4, input_dim=21, seed=7)
 
         self.assertEqual(inputs.shape, (4, 21))
         self.assertTrue(torch.all(inputs[:, [3, 7]] > 0.0))
@@ -92,8 +91,8 @@ class Opset11MultiheadAttentionTest(unittest.TestCase):
             input_dim=input_dim,
             d_model=8,
             num_heads=2,
-            std_mean_train=np.zeros(22, dtype=np.float32),
-            std_scale_train=np.ones(22, dtype=np.float32),
+            std_mean_train=np.zeros(21, dtype=np.float32),
+            std_scale_train=np.ones(21, dtype=np.float32),
             attention_blocks=1,
             attention_dropout=0.0,
             decoder_dropout=0.0,
@@ -131,34 +130,12 @@ class Opset11MultiheadAttentionTest(unittest.TestCase):
             )
             onnx_input = session.get_inputs()[0]
             self.assertEqual(onnx_input.shape[1], 21)
-            sentinel_batches = []
-            for jet_start in (8, 12):
-                batch = inputs[5:6].repeat(2, 1)
-                batch[:, jet_start:jet_start + 4] = 0.0
-                batch[0, jet_start:jet_start + 4] = torch.tensor(
-                    [3.0, -2.0, 1.0, -0.5]
-                )
-                sentinel_batches.append((2, batch, jet_start))
             parity_batches = (
-                (1, inputs[3:4], None),
-                (3, inputs[:3], None),
-                *sentinel_batches,
+                inputs[3:4],
+                inputs[:3],
+                inputs[3:5],
             )
-            for batch_size, batch, jet_start in parity_batches:
-                self.assertEqual(batch.shape[0], batch_size)
-                if batch_size == 1:
-                    torch.testing.assert_close(batch, inputs[3:4])
-                    torch.testing.assert_close(batch[:, 8:16], torch.zeros(1, 8))
-                elif batch_size == 3:
-                    torch.testing.assert_close(batch, inputs[:3])
-                else:
-                    torch.testing.assert_close(
-                        batch[0, jet_start:jet_start + 4],
-                        torch.tensor([3.0, -2.0, 1.0, -0.5]),
-                    )
-                    torch.testing.assert_close(
-                        batch[1, jet_start:jet_start + 4], torch.zeros(4)
-                    )
+            for batch in parity_batches:
                 with torch.no_grad():
                     native_output = native_model(batch).numpy()
                     replacement_output = export_model(batch).numpy()
@@ -166,9 +143,6 @@ class Opset11MultiheadAttentionTest(unittest.TestCase):
 
                 np.testing.assert_allclose(replacement_output, native_output, rtol=1e-5, atol=1e-6)
                 np.testing.assert_allclose(actual, native_output, rtol=1e-4, atol=1e-5)
-                if batch_size == 2:
-                    np.testing.assert_allclose(native_output[0], native_output[1], rtol=1e-5, atol=1e-6)
-                    np.testing.assert_allclose(actual[0], actual[1], rtol=1e-4, atol=1e-5)
 
 
 if __name__ == "__main__":

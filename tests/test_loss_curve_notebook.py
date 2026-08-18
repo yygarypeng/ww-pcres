@@ -315,6 +315,10 @@ def test_plot_loss_curves_builds_two_slide_subplot_figures(tmp_path, capsys):
             assert figure.bbox.contains(component_title_bounds.x0, component_title_bounds.y0)
             assert figure.bbox.contains(component_title_bounds.x1, component_title_bounds.y1)
     output = capsys.readouterr().out
+    assert (
+        r"  $\Delta \mathrm{MET}$: train=7 val=7.5 "
+        "weighted_train=49 weighted_val=52.5"
+    ) in output
     assert "could not be reconstructed exactly for: validation" in output
     plt.close("all")
 

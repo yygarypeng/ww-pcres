@@ -15,13 +15,13 @@ from pytorch_lightning.loggers import CSVLogger, WandbLogger
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
-DEFAULT_CONFIG = REPO_ROOT / "configs/config.yaml"
+DEFAULT_CONFIG = REPO_ROOT / "configs/config_no_dmet.yaml"
 
 
 from data import compute_neural_input_stats
 from data import load_data as data
 from data.data_module import WBosonDataModule
-from model import LightningWBoson
+from model.model_no_dmet import LightningWBoson
 from model.losses import W_MASS_SCALE
 
 
@@ -108,14 +108,6 @@ def compute_w_fourvec_scales(targets):
     return np.maximum(scales, np.finfo(np.float32).eps).astype(np.float32)
 
 
-def compute_dmet_scales(features, targets):
-    true_nu0_t = targets[:, :2] - features[:, :2]
-    true_nu1_t = targets[:, 4:6] - features[:, 4:6]
-    true_dmet = features[:, 16:18] - true_nu0_t - true_nu1_t
-    scales = np.std(true_dmet, axis=0)
-    return np.maximum(scales, np.finfo(np.float32).eps).astype(np.float32)
-
-
 def compute_mass_mmd_standardization(targets):
     """Fit one robust scale shared by both charge-ordered W-mass slots."""
     masses = np.asarray(targets[:, 8:10], dtype=np.float64)
@@ -158,7 +150,6 @@ def build_datamodule(cfg, data_path):
     mmd_condition_standardization = data.compute_mmd_condition_stats(X_train)
     w_fourvec_scales = compute_w_fourvec_scales(Y_train)
     mass_mmd_standardization = compute_mass_mmd_standardization(Y_train)
-    dmet_scales = compute_dmet_scales(X_train, Y_train)
     return (
         dm,
         X_train.shape[1],
@@ -166,7 +157,6 @@ def build_datamodule(cfg, data_path):
         mmd_condition_standardization,
         w_fourvec_scales,
         mass_mmd_standardization,
-        dmet_scales,
     )
 
 
@@ -232,7 +222,6 @@ def run_training(
     mmd_condition_standardization,
     w_fourvec_scales,
     mass_mmd_standardization,
-    dmet_scales,
     saved_path,
     arg,
 ):
@@ -251,7 +240,6 @@ def run_training(
         w_fourvec_scales=w_fourvec_scales,
         mass_mmd_center=mass_mmd_center,
         mass_mmd_scale=mass_mmd_scale,
-        dmet_scales=dmet_scales,
         lr=params["learning_rate"],
         weight_decay=params.get("weight_decay", 1e-4),
         loss_weights=params["loss_weights"],
@@ -391,7 +379,6 @@ def main(train=True, arg=None, config_path=DEFAULT_CONFIG):
         mmd_condition_standardization,
         w_fourvec_scales,
         mass_mmd_standardization,
-        dmet_scales,
     ) = build_datamodule(cfg, data_path)
     if not train:
         print("Evaluation mode, returning datamodule...")
@@ -406,7 +393,6 @@ def main(train=True, arg=None, config_path=DEFAULT_CONFIG):
         mmd_condition_standardization,
         w_fourvec_scales,
         mass_mmd_standardization,
-        dmet_scales,
         saved_path,
         arg,
     )

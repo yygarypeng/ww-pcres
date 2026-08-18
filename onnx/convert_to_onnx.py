@@ -10,7 +10,6 @@ import torch.nn.functional as F
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.append(str(REPO_ROOT))
 
-from data import RAW_INPUT_DIM
 from model import LightningWBoson
 from train import load_config
 
@@ -76,9 +75,9 @@ def find_checkpoint(saved_path, checkpoint=None):
     return candidates[0]
 
 
-def make_valid_raw_inputs(batch_size, seed=0):
+def make_valid_raw_inputs(batch_size, input_dim, seed=0):
     generator = torch.Generator(device="cpu").manual_seed(seed)
-    inputs = torch.randn(batch_size, RAW_INPUT_DIM, generator=generator)
+    inputs = torch.randn(batch_size, input_dim, generator=generator)
 
     for start in (0, 4, 8, 12):
         momentum = inputs[:, start : start + 3]
@@ -124,7 +123,7 @@ def main():
     if args.opset <= 11:
         replace_multihead_attention_for_opset11(model)
 
-    example_input = make_valid_raw_inputs(args.batch_size)
+    example_input = make_valid_raw_inputs(args.batch_size, input_dim=model.hparams.input_dim)
     output_path = Path(args.output)
 
     torch.onnx.export(

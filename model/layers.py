@@ -97,3 +97,18 @@ class WBosonFourVectorLayer(nn.Module):
         w0_E = lep0[..., 3:4] + nu0_E
         w1_E = lep1[..., 3:4] + nu1_E
         return torch.cat([w0_3, w0_E, w1_3, w1_E], dim=-1)
+    
+class NoDmetWBosonFourVectorLayer(nn.Module):
+    def forward(self, lep0, lep1, nu_mom):
+
+        nu0_3 = nu_mom[..., :3]
+        nu1_3 = nu_mom[..., 3:6]
+
+        # neutrino energies as |p| for (approx) massless
+        nu0_E = torch.linalg.vector_norm(nu0_3, dim=-1, keepdim=True)
+        nu1_E = torch.linalg.vector_norm(nu1_3, dim=-1, keepdim=True)
+        w0_3 = lep0[..., :3] + nu0_3
+        w1_3 = lep1[..., :3] + nu1_3
+        w0_E = lep0[..., 3:4] + nu0_E
+        w1_E = lep1[..., 3:4] + nu1_E
+        return torch.cat([w0_3, w0_E, w1_3, w1_E], dim=-1)

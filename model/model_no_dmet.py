@@ -12,7 +12,7 @@ from data.preprocessing import (
     RAW_INPUT_DIM,
     neural_input_features_torch,
 )
-from model.layers import ResidualBlock, SelfAttentionBlock, Standardization, WBosonFourVectorLayer
+from model.layers import NoDmetWBosonFourVectorLayer, ResidualBlock, SelfAttentionBlock, Standardization
 from model.losses import (
     alpha_mmd,
     angular_mmd,
@@ -35,11 +35,11 @@ DEFAULT_MMD_CONFIG = {
     },
     "mass": {
         "kernel": "imq",
-        "bandwidth_multipliers": [0.03, 0.1, 0.3, 1.0],
+        "bandwidth_multipliers": [0.03, 0.3, 3.0],
     },
     "angular": {
         "kernel": "imq",
-        "bandwidth_multipliers": [0.01, 0.03, 0.1, 0.3],
+        "bandwidth_multipliers": [0.03, 0.3, 3.0],
     },
 }
 DEFAULT_LOCAL_MMD = True
@@ -161,36 +161,22 @@ class WBosonRegressor(nn.Module):
         # residual decoder blocks
         self.trunk = nn.Sequential(
             nn.Linear(d_model * self.num_tokens, 512),
-            ResidualBlock(512, 512, hidden_dim=512, dropout=decoder_dropout),
+            # ResidualBlock(512, 512, hidden_dim=512, dropout=decoder_dropout),
             ResidualBlock(512, 256, hidden_dim=512, dropout=decoder_dropout),
             ResidualBlock(256, 256, hidden_dim=256, dropout=decoder_dropout),
             ResidualBlock(256, 128, hidden_dim=256, dropout=decoder_dropout),
-            ResidualBlock(128, 128, hidden_dim=128, dropout=decoder_dropout),
+            # ResidualBlock(128, 128, hidden_dim=128, dropout=decoder_dropout),
         )
-        # Latent regression head1 layout: [delta_dinu_px, delta_dinu_py, nu0_pz, nu1_pz]
+        # Latent regression head1 layout: [nu0_px, nu0_py, nu0_pz, nu1_px, nu1_py, nu1_pz]
         self.nu_mom_head = nn.Sequential(
             nn.LayerNorm(128),
             nn.Linear(128, 32),
             nn.GELU(),
-            nn.Linear(32, 4),
-        )
-        # Latent regression head2 layout: [nu0_pz, nu1_pz]
-        # self.nu_long_head = nn.Sequential(
-        #     nn.LayerNorm(128),
-        #     nn.Linear(128, 32),
-        #     nn.GELU(),
-        #     nn.Linear(32, 2),
-        # )
-        # Latent regression head3 layout: [dmet_x, dmet_y]
-        self.nu_dmet_head = nn.Sequential(
-            nn.LayerNorm(128),
-            nn.Linear(128, 32),
-            nn.GELU(),
-            nn.Linear(32, 2),
+            nn.Linear(32, 6),
         )
 
         # W bosons decoder
-        self.w_layer = WBosonFourVectorLayer()
+        self.w_layer = NoDmetWBosonFourVectorLayer()
 
     def global_feature_aggregation(self, x):
         x_std = self.norm(neural_input_features_torch(x))
@@ -251,16 +237,12 @@ class WBosonRegressor(nn.Module):
         h = self.global_feature_aggregation(x)
         h = self.trunk(h)
         nu_mom_params = self.nu_mom_head(h)
-        dmet_params = self.nu_dmet_head(h)
-        nu_params = torch.cat([nu_mom_params, dmet_params], dim=-1)
 
-        y_pred = self.w_layer(lep0, lep1, nu_params, met)
+        y_pred = self.w_layer(lep0, lep1, nu_mom_params)
 
         if return_aux:
             return y_pred, {
                 "cond": self._mmd_condition(x),
-                "dmet": dmet_params,
-                "nu_params": nu_params,
             }
         return y_pred
 

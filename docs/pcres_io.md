@@ -6,7 +6,7 @@
 
 Run `python scripts/save_pcres_io.py --config <config-path>` to evaluate the latest compatible checkpoint under `paths.saved_path` on the configured pre-split test categories. The script writes `pcres_io.npz` and diagnostic plots under `paths.saved_path`. The archive contains the test split only; its row count depends on the selected categories, available events, and `max_events_per_category` setting.
 
-The current input-preprocessing schema version is 2. Checkpoints created with earlier schemas are incompatible and fail with a retraining-required message; partial weight migration is not supported. Do not overwrite existing checkpoints, ONNX files, or run outputs. A fresh training run deletes its configured run directory, so retraining must use a new `paths.saved_path`.
+The current input-preprocessing schema version is 3. Checkpoints created with earlier schemas are incompatible and fail with a retraining-required message; partial weight migration is not supported. Do not overwrite existing checkpoints, ONNX files, or run outputs. A fresh training run deletes its configured run directory, so retraining must use a new `paths.saved_path`.
 
 ## Contents
 
@@ -18,7 +18,7 @@ The current input-preprocessing schema version is 2. Checkpoints created with ea
 
 Each row corresponds to one test event, so `inputs[i]`, `outputs[i]`, and `targets[i]` refer to the same sample.
 
-The archive deliberately saves the public raw 21-column inputs, not the model's internal 22-column neural representation. Lepton energies are finite and strictly positive. Finite negative jet energy is accepted as an absent-jet sentinel, with the complete jet four-vector canonicalized to zero before it is saved. Each saved jet slot is therefore either an exactly zero padded four-vector or has finite, strictly positive energy. Non-finite jet energy and nonzero momentum with exactly zero energy are invalid. Zero-padded jets remain in these arrays.
+The archive deliberately saves the public raw 21-column inputs, not the model's internal 21-column neural representation. Lepton energies are finite and strictly positive. Each saved jet slot is either an exact-zero padded four-vector or has finite, strictly positive energy. Negative or non-finite jet energies and nonzero jet four-vectors with exactly zero energy are invalid. Zero-padded jets remain in these arrays.
 
 ## Input Columns
 
@@ -46,7 +46,7 @@ The archive deliberately saves the public raw 21-column inputs, not the model's 
 | 19 | `deta_ll` |
 | 20 | `dphi_ll` |
 
-Inside neural aggregation, energies become `log1p(E)` and raw `dphi_ll` becomes an unstandardized sine/cosine pair, producing 22 features. The internal order is positive-lepton `(px, py, pz, log1p(E))`, negative-lepton `(px, py, pz, log1p(E))`, jet 0 `(px, py, pz, log1p(E))`, jet 1 `(px, py, pz, log1p(E))`, MET `(px, py)`, `m_ll`, `deta_ll`, `sin(dphi_ll)`, and `cos(dphi_ll)`. Training statistics exclude padded events separately for each jet slot, while the angular sine/cosine features retain mean zero and scale one. This transform does not alter the saved `inputs` array.
+Inside neural aggregation, energies become `log1p(E)` and raw `dphi_ll` is passed through unchanged, producing 21 features. The internal order is positive-lepton `(px, py, pz, log1p(E))`, negative-lepton `(px, py, pz, log1p(E))`, jet 0 `(px, py, pz, log1p(E))`, jet 1 `(px, py, pz, log1p(E))`, MET `(px, py)`, `m_ll`, `deta_ll`, and `dphi_ll`. Training statistics exclude padded events separately for each jet slot, while `dphi_ll` retains mean zero and scale one. This transform does not alter the saved `inputs` array.
 
 ## Output Columns
 

@@ -4,9 +4,17 @@ from argparse import Namespace
 from types import SimpleNamespace
 
 import numpy as np
+from pytorch_lightning.callbacks import EarlyStopping
+from pytorch_lightning.trainer.states import TrainerFn
 
 from train import train as train_module
-from train.train import apply_cli_overrides, parse_args, prime_csv_metric_header
+from train.train import (
+    DeferredEarlyStopping,
+    apply_cli_overrides,
+    build_training_callbacks,
+    parse_args,
+    prime_csv_metric_header,
+)
 
 
 class TrainingOverrideTest(unittest.TestCase):
@@ -74,9 +82,9 @@ class TrainingOverrideTest(unittest.TestCase):
                 cfg,
                 datamodule,
                 21,
-                (np.zeros(22), np.ones(22)),
-                (np.zeros(4), np.ones(4)),
-                np.ones(4),
+                (np.zeros(21), np.ones(21)),
+                (np.zeros(3), np.ones(3)),
+                np.ones(3),
                 (0.0, 1.0),
                 np.ones(2),
                 "unused-output",
@@ -115,9 +123,9 @@ class TrainingOverrideTest(unittest.TestCase):
                 cfg,
                 datamodule,
                 21,
-                (np.zeros(22), np.ones(22)),
-                (np.zeros(4), np.ones(4)),
-                np.ones(4),
+                (np.zeros(21), np.ones(21)),
+                (np.zeros(3), np.ones(3)),
+                np.ones(3),
                 (0.0, 1.0),
                 np.ones(2),
                 "unused-output",
@@ -184,6 +192,63 @@ class TrainingOverrideTest(unittest.TestCase):
         self.assertNotIn("grad_cos/huber__rest", writer.metrics_keys)
 
 
+class DeferredEarlyStoppingTest(unittest.TestCase):
+    def _fake_trainer(self, current_epoch):
+        return SimpleNamespace(
+            current_epoch=current_epoch,
+            state=SimpleNamespace(fn=TrainerFn.FITTING),
+            sanity_checking=False,
+        )
+
+    def test_skips_checks_before_start_epoch(self):
+        callback = DeferredEarlyStopping(start_epoch=80, monitor="val_loss")
+
+        with unittest.mock.patch.object(EarlyStopping, "_run_early_stopping_check") as check:
+            callback.on_validation_end(self._fake_trainer(79), None)
+
+        check.assert_not_called()
+
+    def test_checks_at_start_epoch(self):
+        callback = DeferredEarlyStopping(start_epoch=80, monitor="val_loss")
+
+        with unittest.mock.patch.object(EarlyStopping, "_run_early_stopping_check") as check:
+            callback.on_validation_end(self._fake_trainer(80), None)
+
+        check.assert_called_once()
+
+    def test_zero_start_epoch_checks_immediately(self):
+        callback = DeferredEarlyStopping(start_epoch=0, monitor="val_loss")
+
+        with unittest.mock.patch.object(EarlyStopping, "_run_early_stopping_check") as check:
+            callback.on_validation_end(self._fake_trainer(0), None)
+
+        check.assert_called_once()
+
+    def test_rejects_negative_start_epoch(self):
+        with self.assertRaisesRegex(ValueError, "start_epoch"):
+            DeferredEarlyStopping(start_epoch=-1, monitor="val_loss")
+
+    def test_build_training_callbacks_routes_ramp_epochs(self):
+        callbacks = build_training_callbacks(
+            {
+                "angular_mmd_ramp_epochs": 80,
+                "early_stopping_patience": 7,
+                "early_stopping_min_delta": 0.01,
+            }
+        )
+
+        early_stopping = callbacks[1]
+        self.assertIsInstance(early_stopping, DeferredEarlyStopping)
+        self.assertEqual(early_stopping.start_epoch, 80)
+        self.assertEqual(early_stopping.patience, 7)
+        self.assertEqual(early_stopping.min_delta, -0.01)
+
+    def test_build_training_callbacks_defaults_to_zero_start_epoch(self):
+        callbacks = build_training_callbacks({})
+
+        self.assertEqual(callbacks[1].start_epoch, 0)
+
+
 class TrainingScaleTest(unittest.TestCase):
     def test_mass_mmd_standardization_uses_training_truth_only(self):
         targets = np.zeros((3, 10), dtype=np.float32)
@@ -220,12 +285,12 @@ class TrainingScaleTest(unittest.TestCase):
             unittest.mock.patch.object(
                  train_module,
                  "compute_neural_input_stats",
-                 return_value=(np.zeros(22), np.ones(22)),
+                 return_value=(np.zeros(21), np.ones(21)),
             ),
             unittest.mock.patch.object(
                 train_module.data,
                 "compute_mmd_condition_stats",
-                 return_value=(np.zeros(4), np.ones(4)),
+                 return_value=(np.zeros(3), np.ones(3)),
             ),
             unittest.mock.patch.object(
                 train_module,
@@ -247,8 +312,8 @@ class TrainingScaleTest(unittest.TestCase):
         y_val = np.zeros((2, 10), dtype=np.float32)
         x_test = np.full((2, 21), 3.0, dtype=np.float32)
         y_test = np.zeros((2, 10), dtype=np.float32)
-        neural_stats = (np.zeros(22, dtype=np.float32), np.ones(22, dtype=np.float32))
-        mmd_stats = (np.zeros(4, dtype=np.float32), np.ones(4, dtype=np.float32))
+        neural_stats = (np.zeros(21, dtype=np.float32), np.ones(21, dtype=np.float32))
+        mmd_stats = (np.zeros(3, dtype=np.float32), np.ones(3, dtype=np.float32))
         cfg = {"parameters": {"batch_size": 2}, "data": {}}
 
         with (
@@ -282,8 +347,8 @@ class TrainingScaleTest(unittest.TestCase):
         np.testing.assert_array_equal(compute_neural_input_stats.call_args.args[0], x_train)
         np.testing.assert_array_equal(compute_mmd_condition_stats.call_args.args[0], x_train)
         self.assertEqual(result[1], 21)
-        self.assertEqual(result[2][0].shape, (22,))
-        self.assertEqual(result[2][1].shape, (22,))
+        self.assertEqual(result[2][0].shape, (21,))
+        self.assertEqual(result[2][1].shape, (21,))
 
 
 if __name__ == "__main__":

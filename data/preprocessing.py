@@ -2,52 +2,23 @@ import numpy as np
 import torch
 from sklearn.preprocessing import StandardScaler
 
-RAW_INPUT_DIM = 21
-NEURAL_INPUT_DIM = 22
-INPUT_PREPROCESSING_VERSION = 2
+BASE_INPUT_DIM = 18  # w/o high-level features
+RAW_INPUT_DIM = 21  # with high-level features
+NEURAL_INPUT_DIM = 21
+INPUT_PREPROCESSING_VERSION = 3
 
 
 def _require_raw_input_shape(features):
-    if features.ndim != 2 or features.shape[1] != RAW_INPUT_DIM:
+    if features.ndim != 2 or features.shape[1] not in (BASE_INPUT_DIM, RAW_INPUT_DIM):
         raise ValueError(
-            f"Raw input features must have shape (N, {RAW_INPUT_DIM}), got {features.shape}"
+            f"Raw input features must have shape (N, {BASE_INPUT_DIM}) or (N, {RAW_INPUT_DIM}), "
+            f"got {features.shape}"
         )
-
-
-def normalize_negative_energy_jets_numpy(features: np.ndarray) -> np.ndarray:
-    features = np.asarray(features)
-    _require_raw_input_shape(features)
-    if not np.issubdtype(features.dtype, np.floating):
-        features = features.astype(np.float64)
-
-    parts = [features[:, :8]]
-    for start in (8, 12):
-        jet = features[:, start : start + 4]
-        absent = np.isfinite(jet[:, 3:4]) & (jet[:, 3:4] < 0.0)
-        parts.append(np.where(absent, np.zeros_like(jet), jet))
-    parts.append(features[:, 16:])
-    return np.concatenate(parts, axis=1)
-
-
-def normalize_negative_energy_jets_torch(features: torch.Tensor) -> torch.Tensor:
-    if features.ndim != 2 or features.shape[1] != RAW_INPUT_DIM:
-        raise ValueError(
-            f"Raw input features must have shape (N, {RAW_INPUT_DIM}), got {tuple(features.shape)}"
-        )
-    if not features.is_floating_point():
-        features = features.to(torch.get_default_dtype())
-
-    parts = [features[:, :8]]
-    for start in (8, 12):
-        jet = features[:, start : start + 4]
-        absent = torch.isfinite(jet[:, 3:4]) & (jet[:, 3:4] < 0.0)
-        parts.append(torch.where(absent, torch.zeros_like(jet), jet))
-    parts.append(features[:, 16:])
-    return torch.cat(parts, dim=1)
 
 
 def valid_input_energy_rows(features: np.ndarray) -> np.ndarray:
-    features = normalize_negative_energy_jets_numpy(features)
+    features = np.asarray(features)
+    _require_raw_input_shape(features)
 
     valid = (
         np.isfinite(features[:, 3])
@@ -65,7 +36,10 @@ def valid_input_energy_rows(features: np.ndarray) -> np.ndarray:
 
 
 def neural_input_features_numpy(features: np.ndarray) -> np.ndarray:
-    features = normalize_negative_energy_jets_numpy(features)
+    features = np.asarray(features)
+    _require_raw_input_shape(features)
+    if not np.issubdtype(features.dtype, np.floating):
+        features = features.astype(np.float64)
     if not valid_input_energy_rows(features).all():
         raise ValueError("Raw input contains invalid lepton or jet energy values")
 
@@ -79,16 +53,20 @@ def neural_input_features_numpy(features: np.ndarray) -> np.ndarray:
             np.log1p(features[:, 11:12]),
             features[:, 12:15],
             np.log1p(features[:, 15:16]),
-            features[:, 16:20],
-            np.sin(features[:, 20:21]),
-            np.cos(features[:, 20:21]),
+            features[:, 16:],
         ],
         axis=1,
     )
 
 
 def neural_input_features_torch(features: torch.Tensor) -> torch.Tensor:
-    features = normalize_negative_energy_jets_torch(features)
+    if features.ndim != 2 or features.shape[1] not in (BASE_INPUT_DIM, RAW_INPUT_DIM):
+        raise ValueError(
+            f"Raw input features must have shape (N, {BASE_INPUT_DIM}) or (N, {RAW_INPUT_DIM}), "
+            f"got {tuple(features.shape)}"
+        )
+    if not features.is_floating_point():
+        features = features.to(torch.get_default_dtype())
 
     return torch.cat(
         [
@@ -100,9 +78,7 @@ def neural_input_features_torch(features: torch.Tensor) -> torch.Tensor:
             torch.log1p(features[:, 11:12]),
             features[:, 12:15],
             torch.log1p(features[:, 15:16]),
-            features[:, 16:20],
-            torch.sin(features[:, 20:21]),
-            torch.cos(features[:, 20:21]),
+            features[:, 16:],
         ],
         dim=1,
     )
@@ -124,6 +100,7 @@ def compute_neural_input_stats(features: np.ndarray) -> tuple[np.ndarray, np.nda
             mean[neural_start : neural_start + 4] = 0.0
             scale[neural_start : neural_start + 4] = 1.0
 
-    mean[20:22] = 0.0
-    scale[20:22] = 1.0
+    if features.shape[1] == RAW_INPUT_DIM:
+        mean[20] = 0.0
+        scale[20] = 1.0
     return mean, scale
