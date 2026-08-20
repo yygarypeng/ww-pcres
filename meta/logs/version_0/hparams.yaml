@@ -1,9 +1,9 @@
 adaptive_loss_weights: false
-angular_mmd_ramp_epochs: 0
-attention_blocks: 4
-attention_dropout: 0.0
-d_model: 128
-decoder_dropout: 0.0
+angular_mmd_ramp_epochs: 32
+attention_blocks: 5
+attention_dropout: 0.1
+d_model: 96
+decoder_dropout: 0.1
 dmet_scales: !!python/object/apply:numpy._core.multiarray._reconstruct
   args:
   - &id002 !!python/name:numpy.ndarray ''
@@ -40,7 +40,7 @@ input_preprocessing_version: 3
 log_loss_gradient_cosines: true
 loss_weights:
   alpha_mmd: 0.0
-  angular_mmd: 200.0
+  angular_mmd: 500.0
   dmet: 1.0
   higgs_mass: 2.0
   huber: 20.0
@@ -92,10 +92,9 @@ mmd_config:
     kernel: imq
   angular:
     bandwidth_multipliers:
-    - 0.01
-    - 0.03
     - 0.1
-    - 0.3
+    - 1.0
+    - 10.0
     kernel: imq
   condition:
     bandwidth_multipliers:
@@ -104,17 +103,13 @@ mmd_config:
     - 3.0
     kernel: imq
   local: false
-  loss_transform:
-    epsilon: 0.0001
-    kind: sqrt
   mass:
     bandwidth_multipliers:
-    - 0.03
     - 0.1
     - 0.3
     - 1.0
     kernel: imq
-num_heads: 4
+num_heads: 6
 std_mean_train: !!python/object/apply:numpy._core.multiarray._reconstruct
   args:
   - *id002

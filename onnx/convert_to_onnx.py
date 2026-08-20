@@ -104,7 +104,11 @@ def main():
         help="Path to YAML config file",
     )
     parser.add_argument("--checkpoint", help="Specific .ckpt file to export")
-    parser.add_argument("--output", default="hww_pcres_regressor.onnx", help="Output ONNX path")
+    parser.add_argument(
+        "--output",
+        default=str(REPO_ROOT / "onnx/models/hww_pcres_regressor.onnx"),
+        help="Output ONNX path",
+    )
     parser.add_argument("--batch-size", type=int, default=1, help="Dummy export batch size")
     parser.add_argument("--opset", type=int, default=11, help="ONNX opset version")
     args = parser.parse_args()
