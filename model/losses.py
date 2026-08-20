@@ -1,20 +1,19 @@
-import math
-
 import torch
 import torch.nn.functional as F
 
 from physics.torchBoost import Booster
 
 ######################
-## Global constants ##
+# Global constants
 ######################
 
 TOR = 1e-16
 W_MASS_SCALE = 80.4
 H_MASS_SCALE = 125.0
 
+
 ###############
-## Utilities ##
+# Utilities
 ###############
 
 
@@ -27,15 +26,6 @@ def _positive_median_pairwise_distance(values):
     if distances.numel() == 0:
         return values.new_tensor(1.0)
     return torch.median(distances)
-
-
-def _validate_bandwidth_multipliers(values, name):
-    multipliers = tuple(float(value) for value in values)
-    if not multipliers:
-        raise ValueError(f"{name} must contain at least one value")
-    if not all(math.isfinite(value) and value > 0.0 for value in multipliers):
-        raise ValueError(f"{name} values must be finite and positive")
-    return multipliers
 
 
 def transform_mmd_loss(mmd2, *, kind=None, epsilon=1.0e-3):
@@ -57,14 +47,6 @@ def standardized_fourvec_huber_loss(y_true, y_pred, component_scales):
     pred_fourvecs = y_pred.reshape(*y_pred.shape[:-1], 2, 4)
     residual = (pred_fourvecs - true_fourvecs) / component_scales
     return F.huber_loss(residual, torch.zeros_like(residual))
-
-
-def _require_mmd_condition(cond, name, local=True):
-    if cond.shape[-1] == 0 and local:
-        raise ValueError(
-            f"{name} requires the high-level conditioning features; "
-            "disable mmd.local or provide the high-level features"
-        )
 
 
 def _valid_kinematic_rows(x_batch, y_true, y_pred, cond, local=True):
@@ -120,7 +102,7 @@ def _mass_features(w_fourvecs, center, scale):
 
 
 ####################
-## Loss functions ##
+# Loss functions
 ####################
 
 
@@ -172,18 +154,12 @@ def compute_local_mmd(
     feature_bandwidth_multipliers=(0.25, 0.5, 1.0, 2.0),
     condition_bandwidth_multipliers=(0.5, 1.0, 2.0),
 ):
-    """Biased feature MMD, optionally localized by a condition kernel."""
-    if not isinstance(local, bool):
-        raise ValueError("local must be a boolean")
-    feature_bandwidth_multipliers = _validate_bandwidth_multipliers(
-        feature_bandwidth_multipliers,
-        "feature_bandwidth_multipliers",
-    )
-    if local:
-        condition_bandwidth_multipliers = _validate_bandwidth_multipliers(
-            condition_bandwidth_multipliers,
-            "condition_bandwidth_multipliers",
-        )
+    """Paired off-diagonal feature MMD, optionally localized by a condition kernel.
+
+    All i == j terms are excluded from XX, YY, XY, and YX. The remaining
+    pairwise terms are averaged over n * (n - 1), so this finite-batch
+    estimator can be negative.
+    """
     x = x.reshape(x.shape[0], -1)
     y = y.reshape(y.shape[0], -1)
     cond = cond.reshape(cond.shape[0], -1)
@@ -199,7 +175,7 @@ def compute_local_mmd(
     y = y[finit_mask]
     cond = cond[finit_mask]
 
-    if x.shape[0] == 0 or y.shape[0] == 0:
+    if x.shape[0] < 2:
         return (
             torch.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0).sum()
             + torch.nan_to_num(y, nan=0.0, posinf=0.0, neginf=0.0).sum()
@@ -260,12 +236,13 @@ def compute_local_mmd(
         XX = XX * cond_matrix
         YY = YY * cond_matrix
         XY = XY * cond_matrix
-    return torch.mean(XX + YY - XY - XY.T)
+
+    h = XX + YY - XY - XY.T
+    off_diagonal = ~torch.eye(h.shape[0], dtype=torch.bool, device=h.device)
+    return h[off_diagonal].mean()
 
 
 def alpha_mmd(x_batch, y_true, y_pred, cond, **mmd_kwargs):
-    _require_mmd_condition(cond, "alpha MMD", local=mmd_kwargs.get("local", True))
-
     valid = _valid_kinematic_rows(
         x_batch,
         y_true,
@@ -300,8 +277,6 @@ def alpha_mmd(x_batch, y_true, y_pred, cond, **mmd_kwargs):
 
 
 def mass_mmd(x_batch, y_true, y_pred, cond, center, scale, **mmd_kwargs):
-    _require_mmd_condition(cond, "mass MMD", local=mmd_kwargs.get("local", True))
-
     valid = _valid_kinematic_rows(
         x_batch,
         y_true,
@@ -321,8 +296,6 @@ def mass_mmd(x_batch, y_true, y_pred, cond, center, scale, **mmd_kwargs):
 
 
 def angular_mmd(x_batch, y_true, y_pred, cond, **mmd_kwargs):
-    _require_mmd_condition(cond, "angular MMD", local=mmd_kwargs.get("local", True))
-
     def _features_for_mmd(angles):
         theta0 = angles[..., 0]
         phi0 = angles[..., 1]
@@ -332,9 +305,11 @@ def angular_mmd(x_batch, y_true, y_pred, cond, **mmd_kwargs):
         return torch.stack(
             [
                 2.0 * theta0 / torch.pi - 1.0,
-                phi0 / torch.pi,
+                torch.sin(phi0),
+                torch.cos(phi0),
                 2.0 * theta1 / torch.pi - 1.0,
-                phi1 / torch.pi,
+                torch.sin(phi1),
+                torch.cos(phi1),
             ],
             dim=-1,
         )
@@ -361,28 +336,3 @@ def angular_mmd(x_batch, y_true, y_pred, cond, **mmd_kwargs):
 
     cond = cond[valid]
     return compute_local_mmd(pred_ang, true_ang, cond, **mmd_kwargs)
-
-
-#############################
-## Archived loss functions ##
-#############################
-
-
-def neg_r2_loss(y_true, y_pred):
-    y_t = y_true[..., :8]
-    y_p = y_pred[..., :8]
-
-    ss_res = torch.sum((y_t - y_p) ** 2)
-    ss_tot = torch.sum((y_t - torch.mean(y_t)) ** 2).clamp_min(TOR)
-    return ss_res / ss_tot - 1.0
-
-
-def nu_mass_loss(x_batch, y_pred):
-    n0_4 = y_pred[..., :4] - x_batch[..., :4]
-    n1_4 = y_pred[..., 4:8] - x_batch[..., 4:8]
-
-    nu0_mass2 = invariant_mass2(n0_4)
-    nu1_mass2 = invariant_mass2(n1_4)
-    return F.huber_loss(nu0_mass2, torch.zeros_like(nu0_mass2)) + F.huber_loss(
-        nu1_mass2, torch.zeros_like(nu1_mass2)
-    )

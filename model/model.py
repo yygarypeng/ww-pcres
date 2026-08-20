@@ -35,11 +35,11 @@ DEFAULT_MMD_CONFIG = {
     },
     "mass": {
         "kernel": "imq",
-        "bandwidth_multipliers": [0.03, 0.1, 0.3, 1.0],
+        "bandwidth_multipliers": [0.1, 0.3, 1.0],
     },
     "angular": {
         "kernel": "imq",
-        "bandwidth_multipliers": [0.01, 0.03, 0.1, 0.3],
+        "bandwidth_multipliers": [0.1, 1.0, 10.0],
     },
 }
 DEFAULT_LOCAL_MMD = True
@@ -226,10 +226,6 @@ class WBosonRegressor(nn.Module):
         return context.reshape(batch_size, -1)
 
     def _mmd_condition(self, x):
-        if x.shape[-1] not in (BASE_INPUT_DIM, RAW_INPUT_DIM):
-            raise ValueError(
-                f"raw input contract requires {BASE_INPUT_DIM} or {RAW_INPUT_DIM} features"
-            )
         if self.hl_input_dim == 0:
             return torch.empty(x.shape[0], 0, dtype=x.dtype, device=x.device)
 
@@ -382,16 +378,6 @@ class LightningWBoson(L.LightningModule):
             "mass_mmd": 0.0,
             "angular_mmd": 0.0,
         }
-        deprecated_loss_names = {
-            "kinematic_loss_mmd": "replace it with separate alpha_mmd and mass_mmd weights",
-            "angular_loss_mmd": "rename it to angular_mmd",
-        }
-        deprecated = set(loss_weights or {}) & deprecated_loss_names.keys()
-        if deprecated:
-            details = "; ".join(
-                f"{name}: {deprecated_loss_names[name]}" for name in sorted(deprecated)
-            )
-            raise ValueError(f"deprecated loss_weights key(s): {details}")
         unsupported = set(loss_weights or {}) - defaults.keys()
         if unsupported:
             names = ", ".join(sorted(unsupported))
