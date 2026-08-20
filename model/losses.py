@@ -1,3 +1,5 @@
+import math
+
 import torch
 import torch.nn.functional as F
 
@@ -28,13 +30,13 @@ def _positive_median_pairwise_distance(values):
     return torch.median(distances)
 
 
-def transform_mmd_loss(mmd2, *, kind=None, epsilon=1.0e-3):
-    if kind is None:
-        return mmd2
-    if kind != "sqrt":
-        raise ValueError(f"unsupported MMD loss transform: {kind}")
-    epsilon_tensor = mmd2.new_tensor(epsilon)
-    return torch.sqrt(mmd2.clamp_min(0.0) + epsilon_tensor.square()) - epsilon_tensor
+def _validate_bandwidth_multipliers(values, name):
+    multipliers = tuple(float(value) for value in values)
+    if not multipliers:
+        raise ValueError(f"{name} must contain at least one value")
+    if not all(math.isfinite(value) and value > 0.0 for value in multipliers):
+        raise ValueError(f"{name} values must be finite and positive")
+    return multipliers
 
 
 def invariant_mass2(fourvec):
@@ -160,6 +162,18 @@ def compute_local_mmd(
     pairwise terms are averaged over n * (n - 1), so this finite-batch
     estimator can be negative.
     """
+    if not isinstance(local, bool):
+        raise ValueError("local must be a boolean")
+    feature_bandwidth_multipliers = _validate_bandwidth_multipliers(
+        feature_bandwidth_multipliers,
+        "feature_bandwidth_multipliers",
+    )
+    if local:
+        condition_bandwidth_multipliers = _validate_bandwidth_multipliers(
+            condition_bandwidth_multipliers,
+            "condition_bandwidth_multipliers",
+        )
+
     x = x.reshape(x.shape[0], -1)
     y = y.reshape(y.shape[0], -1)
     cond = cond.reshape(cond.shape[0], -1)

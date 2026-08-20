@@ -8,7 +8,7 @@ import numpy as np
 import torch
 
 import scripts.evaluate_mmd_bandwidths as mmd_script
-from model.losses import compute_local_mmd, transform_mmd_loss
+from model.losses import compute_local_mmd
 from scripts.evaluate_mmd_bandwidths import (
     CheckpointInfo,
     _capture_mmd_inputs,
@@ -84,14 +84,7 @@ class BandwidthEvaluationTest(unittest.TestCase):
             "condition_bandwidth_multipliers": [0.1, 1.0, 10.0],
         }
 
-        transform = {"kind": "sqrt", "epsilon": 0.01}
-        diagnostics = per_bandwidth_mmd_diagnostics(
-            prediction,
-            truth,
-            condition,
-            loss_transform=transform,
-            **kwargs,
-        )
+        diagnostics = per_bandwidth_mmd_diagnostics(prediction, truth, condition, **kwargs)
         values = per_bandwidth_mmd(prediction, truth, condition, **kwargs)
 
         for (mmd2, loss, gradient_squared_sum, gradient_elements), expected_value in zip(
@@ -103,7 +96,7 @@ class BandwidthEvaluationTest(unittest.TestCase):
             self.assertGreaterEqual(float(gradient_squared_sum), 0.0)
             self.assertEqual(gradient_elements, prediction.numel())
             torch.testing.assert_close(mmd2, expected_value)
-            torch.testing.assert_close(loss, transform_mmd_loss(expected_value, **transform))
+            torch.testing.assert_close(loss, expected_value)
         self.assertTrue(any(float(item[2]) > 0.0 for item in diagnostics))
 
     def test_bandwidth_diagnostics_remove_mean_reduction_gradient_scaling(self):
@@ -140,28 +133,24 @@ class BandwidthEvaluationTest(unittest.TestCase):
         self.assertAlmostEqual(gradient_rms, 7.0**0.5)
         self.assertNotAlmostEqual(gradient_rms, 2.5)
 
-    def test_mixed_loss_transforms_mean_mmd2_once(self):
-        transform = {"kind": "sqrt", "epsilon": 0.25}
-        diagnostics = [(0.0, 0.0, 0.0), (3.75, 1.75, 0.0)]
+    def test_mixed_loss_equals_mean_mmd2(self):
+        diagnostics = [(0.0, 0.0, 0.0), (3.75, 3.75, 0.0)]
         multipliers = {name: (1.0, 2.0) for name in ("alpha", "mass", "angular")}
         results = {name: diagnostics for name in multipliers}
 
         with patch("builtins.print") as mock_print:
-            print_results({"epoch-1-step-2": (multipliers, results, transform)})
+            print_results({"epoch-1-step-2": (multipliers, results)})
 
         output = "\n".join(call.args[0] for call in mock_print.call_args_list)
-        expected = transform_mmd_loss(torch.tensor(1.875), **transform)
-        mean_individual_loss = (0.0 + 1.75) / 2.0
-        self.assertIn(f"mixed_mmd2={1.875:.8g}", output)
-        self.assertIn(f"mixed_loss={float(expected):.8g}", output)
-        self.assertNotAlmostEqual(float(expected), mean_individual_loss)
+        self.assertIn("mixed_mmd2=1.875", output)
+        self.assertIn("mixed_loss=1.875", output)
 
     def test_printed_results_label_values_and_gradients(self):
         multipliers = {name: (1.0, 2.0) for name in ("alpha", "mass", "angular")}
         results = {name: [(0.25, 0.25, 0.125), (0.5, 0.5, 0.25)] for name in multipliers}
 
         with patch("builtins.print") as mock_print:
-            print_results({"epoch-1-step-2": (multipliers, results, None)})
+            print_results({"epoch-1-step-2": (multipliers, results)})
 
         output = "\n".join(call.args[0] for call in mock_print.call_args_list)
         self.assertIn("mmd2=", output)

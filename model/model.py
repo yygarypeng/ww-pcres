@@ -20,7 +20,6 @@ from model.losses import (
     higgs_mass_loss,
     mass_mmd,
     standardized_fourvec_huber_loss,
-    transform_mmd_loss,
     w_mass_huber_loss,
 )
 
@@ -47,7 +46,7 @@ DEFAULT_LOCAL_MMD = True
 
 def resolve_mmd_config(config=None):
     config = {} if config is None else config
-    unknown_sections = set(config) - (set(DEFAULT_MMD_CONFIG) | {"local", "loss_transform"})
+    unknown_sections = set(config) - (set(DEFAULT_MMD_CONFIG) | {"local"})
     if unknown_sections:
         names = ", ".join(sorted(unknown_sections))
         raise ValueError(f"unsupported MMD config section(s): {names}")
@@ -56,23 +55,6 @@ def resolve_mmd_config(config=None):
     if not isinstance(local, bool):
         raise ValueError("mmd.local must be a boolean")
     resolved = {"local": local}
-    if "loss_transform" in config:
-        supplied_transform = config["loss_transform"]
-        if not isinstance(supplied_transform, dict):
-            raise ValueError("mmd.loss_transform must be a mapping")
-        unknown_keys = set(supplied_transform) - {"kind", "epsilon"}
-        if unknown_keys:
-            names = ", ".join(sorted(unknown_keys))
-            raise ValueError(f"unsupported mmd.loss_transform key(s): {names}")
-        if supplied_transform.get("kind") != "sqrt":
-            raise ValueError("mmd.loss_transform kind must be sqrt")
-        try:
-            epsilon = float(supplied_transform.get("epsilon", 1.0e-3))
-        except (OverflowError, TypeError, ValueError) as error:
-            raise ValueError("mmd.loss_transform epsilon must be finite and positive") from error
-        if not math.isfinite(epsilon) or epsilon <= 0.0:
-            raise ValueError("mmd.loss_transform epsilon must be finite and positive")
-        resolved["loss_transform"] = {"kind": "sqrt", "epsilon": epsilon}
     for section, defaults in DEFAULT_MMD_CONFIG.items():
         supplied = config.get(section, {})
         unknown_keys = set(supplied) - set(defaults)
@@ -458,9 +440,6 @@ class LightningWBoson(L.LightningModule):
             "condition_bandwidth_multipliers": condition["bandwidth_multipliers"],
         }
 
-    def _transform_mmd_loss(self, mmd2):
-        return transform_mmd_loss(mmd2, **self.mmd_config.get("loss_transform", {}))
-
     def _compute_losses(self, x, y, y_pred, cond, aux=None):
         losses = {}
         weights = self._effective_loss_weights()
@@ -480,36 +459,30 @@ class LightningWBoson(L.LightningModule):
         if self._loss_enabled("w_mass_huber", weights):
             losses["w_mass_huber"] = w_mass_huber_loss(y, y_pred)
         if self._loss_enabled("alpha_mmd", weights):
-            losses["alpha_mmd"] = self._transform_mmd_loss(
-                alpha_mmd(
-                    x,
-                    y,
-                    y_pred,
-                    cond,
-                    **self._mmd_kwargs("alpha"),
-                )
+            losses["alpha_mmd"] = alpha_mmd(
+                x,
+                y,
+                y_pred,
+                cond,
+                **self._mmd_kwargs("alpha"),
             )
         if self._loss_enabled("mass_mmd", weights):
-            losses["mass_mmd"] = self._transform_mmd_loss(
-                mass_mmd(
-                    x,
-                    y,
-                    y_pred,
-                    cond,
-                    self.mass_mmd_center,
-                    self.mass_mmd_scale,
-                    **self._mmd_kwargs("mass"),
-                )
+            losses["mass_mmd"] = mass_mmd(
+                x,
+                y,
+                y_pred,
+                cond,
+                self.mass_mmd_center,
+                self.mass_mmd_scale,
+                **self._mmd_kwargs("mass"),
             )
         if self._loss_enabled("angular_mmd", weights):
-            losses["angular_mmd"] = self._transform_mmd_loss(
-                angular_mmd(
-                    x,
-                    y,
-                    y_pred,
-                    cond,
-                    **self._mmd_kwargs("angular"),
-                )
+            losses["angular_mmd"] = angular_mmd(
+                x,
+                y,
+                y_pred,
+                cond,
+                **self._mmd_kwargs("angular"),
             )
         if self._loss_enabled("dmet", weights):
             if aux is None or "dmet" not in aux:
