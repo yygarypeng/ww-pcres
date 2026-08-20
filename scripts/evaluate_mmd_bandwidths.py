@@ -72,7 +72,6 @@ def per_bandwidth_mmd_diagnostics(
     prediction,
     truth,
     condition,
-    loss_transform=None,
     **kwargs,
 ):
     prediction = prediction.detach().requires_grad_(True)
@@ -81,7 +80,7 @@ def per_bandwidth_mmd_diagnostics(
     diagnostics = []
     with torch.enable_grad():
         for mmd2 in per_bandwidth_mmd(prediction, truth, condition, **kwargs):
-            loss = loss_module.transform_mmd_loss(mmd2, **(loss_transform or {}))
+            loss = mmd2
             gradient = torch.autograd.grad(loss, prediction)[0] * prediction.shape[0]
             diagnostics.append(
                 (
@@ -190,7 +189,6 @@ def evaluate_checkpoint(checkpoint, features, targets, batch_size, device):
     multipliers = {
         name: tuple(model.mmd_config[name]["bandwidth_multipliers"]) for name in feature_names
     }
-    loss_transform = model.mmd_config.get("loss_transform")
     accumulated = {name: [[] for _ in multipliers[name]] for name in feature_names}
 
     for start in range(0, len(features), batch_size):
@@ -221,7 +219,6 @@ def evaluate_checkpoint(checkpoint, features, targets, batch_size, device):
                 prediction,
                 truth,
                 condition,
-                loss_transform=loss_transform,
                 **kwargs,
             )
             row_count = prediction.shape[0]
@@ -242,11 +239,11 @@ def evaluate_checkpoint(checkpoint, features, targets, batch_size, device):
         name: [aggregate_bandwidth_diagnostics(batches) for batches in bandwidth_batches]
         for name, bandwidth_batches in accumulated.items()
     }
-    return multipliers, results, loss_transform
+    return multipliers, results
 
 
 def print_results(all_results):
-    for label, (multipliers, results, loss_transform) in all_results.items():
+    for label, (multipliers, results) in all_results.items():
         print(label)
         for name in ("alpha", "mass", "angular"):
             diagnostics = results[name]
@@ -256,13 +253,10 @@ def print_results(all_results):
                 for multiplier, (mmd2, loss, gradient_rms) in zip(multipliers[name], diagnostics)
             )
             mixed_mmd2 = sum(mmd2 for mmd2, _, _ in diagnostics) / len(diagnostics)
-            mixed_loss = loss_module.transform_mmd_loss(
-                torch.as_tensor(mixed_mmd2),
-                **(loss_transform or {}),
-            )
+            mixed_loss = mixed_mmd2
             print(
                 f"  {name:<7} {pairs}  mixed_mmd2={mixed_mmd2:.8g},"
-                f"mixed_loss={float(mixed_loss):.8g}"
+                f"mixed_loss={mixed_loss:.8g}"
             )
 
 

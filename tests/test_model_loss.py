@@ -9,7 +9,6 @@ import torch
 import torch.nn.functional as F
 
 from model import LightningWBoson
-from model import LightningWBosonNoDmet
 from model import losses as loss_module
 from model.losses import dmet_loss, standardized_fourvec_huber_loss
 from train import train as train_module
@@ -183,12 +182,11 @@ class HiggsMassLossTest(unittest.TestCase):
 
         loss = loss_module.higgs_mass_loss(pred, target_mass=target, scale=scale)
 
-        torch.testing.assert_close(loss, torch.tensor(0.125))
+        torch.testing.assert_close(loss, torch.tensor(standardized_residual))
 
-    def test_huber_transition_uses_standardized_residual(self):
+    def test_l1_loss_uses_standardized_residual(self):
         target = 100.0
         scale = 5.0
-        delta = 2.0
         residuals = torch.tensor([1.0, 3.0])
         mass2 = target**2 + residuals * 2.0 * target * scale
         pred = self._predictions(torch.sqrt(mass2).numpy())
@@ -197,10 +195,9 @@ class HiggsMassLossTest(unittest.TestCase):
             pred,
             target_mass=target,
             scale=scale,
-            delta=delta,
         )
 
-        expected = F.huber_loss(residuals, torch.zeros_like(residuals), delta=delta)
+        expected = F.l1_loss(residuals, torch.zeros_like(residuals))
         torch.testing.assert_close(loss, expected)
 
     def test_spacelike_sum_has_finite_nonzero_corrective_gradients(self):
@@ -438,33 +435,18 @@ class LightningModelLossTest(unittest.TestCase):
                 },
             )
 
-    def test_rejects_invalid_mmd_transform_config_at_model_construction(self):
-        invalid_transforms = (
-            {},
-            None,
-            {"kind": "log"},
-            {"kind": "sqrt", "epsilon": 0.0},
-            {"kind": "sqrt", "epsilon": -1.0},
-            {"kind": "sqrt", "epsilon": float("nan")},
-            {"kind": "sqrt", "epsilon": float("inf")},
-            {"kind": "sqrt", "epsilon": "not-a-number"},
-            {"kind": "sqrt", "epsilon": 10**10000},
-            {"kind": "sqrt", "epsilon": 1.0e-3, "extra": True},
-        )
-        for transform in invalid_transforms:
-            with self.subTest(transform=transform):
-                with self.assertRaisesRegex(ValueError, "loss_transform"):
-                    self._basic_model(mmd_config={"loss_transform": transform})
+    def test_rejects_unknown_mmd_config_section(self):
+        with self.assertRaisesRegex(ValueError, "unsupported MMD config section.*unknown_section"):
+            self._basic_model(mmd_config={"unknown_section": {}})
 
-    def test_mmd_transform_is_applied_after_each_public_mmd_result(self):
+    def test_public_mmd_results_are_used_without_transformation(self):
         model = self._basic_model(
             loss_weights={
                 "huber": 0.0,
                 "alpha_mmd": 1.0,
                 "mass_mmd": 1.0,
                 "angular_mmd": 1.0,
-            },
-            mmd_config={"loss_transform": {"kind": "sqrt", "epsilon": 0.25}},
+            }
         )
         raw_values = {
             "alpha_mmd": torch.tensor(0.0),
@@ -484,51 +466,15 @@ class LightningModelLossTest(unittest.TestCase):
                 torch.zeros((1, 4)),
             )
 
-        expected = {
-            name: loss_module.transform_mmd_loss(value, kind="sqrt", epsilon=0.25)
-            for name, value in raw_values.items()
-        }
-        for name, value in expected.items():
-            torch.testing.assert_close(losses[name], value)
-        torch.testing.assert_close(total, sum(expected.values()))
-
-    def test_no_mmd_transform_preserves_public_mmd_squared_values(self):
-        model = self._basic_model(
-            loss_weights={"huber": 0.0, "alpha_mmd": 1.0},
-        )
-        mmd2 = torch.tensor(0.75)
-
-        with patch("model.model.alpha_mmd", return_value=mmd2):
-            total, losses = model._compute_losses(
-                torch.zeros((1, 21)),
-                torch.zeros((1, 10)),
-                torch.zeros((1, 8)),
-                torch.zeros((1, 4)),
-            )
-
-        self.assertIs(losses["alpha_mmd"], mmd2)
-        torch.testing.assert_close(total, mmd2)
+        self.assertIs(losses["alpha_mmd"], raw_values["alpha_mmd"])
+        self.assertIs(losses["mass_mmd"], raw_values["mass_mmd"])
+        self.assertIs(losses["angular_mmd"], raw_values["angular_mmd"])
+        torch.testing.assert_close(total, sum(raw_values.values()))
 
     def test_rejects_unsupported_loss_weight_keys(self):
         for key in ("w_mass_mmd", "kinematic_loss_mmd_typo"):
             with self.subTest(key=key):
                 with self.assertRaisesRegex(ValueError, f"unsupported loss_weights key.*{key}"):
-                    LightningWBoson(
-                        input_dim=21,
-                        d_model=8,
-                        num_heads=2,
-                        std_mean_train=np.zeros(21, dtype=np.float32),
-                        std_scale_train=np.ones(21, dtype=np.float32),
-                        loss_weights={key: 1.0},
-                    )
-
-    def test_rejects_deprecated_mmd_loss_names_with_migration(self):
-        for key, replacement in (
-            ("kinematic_loss_mmd", "alpha_mmd and mass_mmd"),
-            ("angular_loss_mmd", "angular_mmd"),
-        ):
-            with self.subTest(key=key):
-                with self.assertRaisesRegex(ValueError, replacement):
                     LightningWBoson(
                         input_dim=21,
                         d_model=8,
@@ -585,17 +531,15 @@ class LightningModelLossTest(unittest.TestCase):
 
         self.assertEqual(w_layer.call_count, 1)
         self.assertEqual(local_mmd.call_count, 3)
-        self.assertEqual([feature_count for feature_count, _ in captured], [1, 2, 4])
+        self.assertEqual([feature_count for feature_count, _ in captured], [1, 2, 6])
         for _, captured_condition in captured:
             torch.testing.assert_close(captured_condition, expected)
             self.assertEqual(captured_condition.shape, (4, 3))
 
 
 class NoHighLevelFeaturesTest(unittest.TestCase):
-    MODEL_CLASSES = (LightningWBoson, LightningWBosonNoDmet)
-
-    def _make_model(self, model_class, **kwargs):
-        return model_class(
+    def _make_model(self, **kwargs):
+        return LightningWBoson(
             input_dim=18,
             d_model=8,
             num_heads=2,
@@ -621,79 +565,68 @@ class NoHighLevelFeaturesTest(unittest.TestCase):
         return inputs
 
     def test_forward_without_high_level_features(self):
-        for model_class in self.MODEL_CLASSES:
-            with self.subTest(model=model_class.__name__):
-                model = self._make_model(model_class).eval()
+        model = self._make_model().eval()
 
-                predictions = model(self._valid_inputs())
+        predictions = model(self._valid_inputs())
 
-                self.assertEqual(predictions.shape, (4, 8))
-                self.assertIsNone(model.model.hl_embed)
-                self.assertEqual(model.model.hl_input_dim, 0)
-                self.assertEqual(model.model.num_tokens, 5)
+        self.assertEqual(predictions.shape, (4, 8))
+        self.assertIsNone(model.model.hl_embed)
+        self.assertEqual(model.model.hl_input_dim, 0)
+        self.assertEqual(model.model.num_tokens, 5)
 
     def test_mmd_condition_is_empty_without_high_level_features(self):
-        for model_class in self.MODEL_CLASSES:
-            with self.subTest(model=model_class.__name__):
-                model = self._make_model(model_class).eval()
+        model = self._make_model().eval()
 
-                condition = model.model._mmd_condition(self._valid_inputs())
+        condition = model.model._mmd_condition(self._valid_inputs())
 
-                self.assertEqual(condition.shape, (4, 0))
+        self.assertEqual(condition.shape, (4, 0))
 
     def test_mmd_local_is_forced_off_without_condition_features(self):
-        for model_class in self.MODEL_CLASSES:
-            with self.subTest(model=model_class.__name__):
-                model = self._make_model(model_class, mmd_config={"local": True})
+        model = self._make_model(mmd_config={"local": True})
 
-                self.assertIs(model._mmd_kwargs("mass")["local"], False)
-                self.assertIs(model._mmd_kwargs("angular")["local"], False)
+        self.assertIs(model._mmd_kwargs("mass")["local"], False)
+        self.assertIs(model._mmd_kwargs("angular")["local"], False)
 
     def test_mmd_losses_run_unconditioned_without_condition_features(self):
-        for model_class in self.MODEL_CLASSES:
-            with self.subTest(model=model_class.__name__):
-                model = self._make_model(
-                    model_class,
-                    loss_weights={
-                        "huber": 0.0,
-                        "alpha_mmd": 1.0,
-                        "mass_mmd": 1.0,
-                        "angular_mmd": 1.0,
-                    },
-                ).eval()
-                x = torch.zeros(4, 18)
-                w0 = torch.tensor([30.0, 5.0, 40.0, 100.0])
-                w1 = torch.tensor([-20.0, 15.0, -30.0, 90.0])
-                prediction = torch.cat([w0, w1]).repeat(4, 1)
-                target_w = torch.cat([w0 + torch.tensor([1.0, 0.0, 0.0, 0.0]), w1]).repeat(4, 1)
-                target = torch.cat([target_w, torch.zeros(4, 2)], dim=-1)
-                captured = []
+        model = self._make_model(
+            loss_weights={
+                "huber": 0.0,
+                "alpha_mmd": 1.0,
+                "mass_mmd": 1.0,
+                "angular_mmd": 1.0,
+            },
+        ).eval()
+        x = torch.zeros(4, 18)
+        w0 = torch.tensor([30.0, 5.0, 40.0, 100.0])
+        w1 = torch.tensor([-20.0, 15.0, -30.0, 90.0])
+        prediction = torch.cat([w0, w1]).repeat(4, 1)
+        target_w = torch.cat([w0 + torch.tensor([1.0, 0.0, 0.0, 0.0]), w1]).repeat(4, 1)
+        target = torch.cat([target_w, torch.zeros(4, 2)], dim=-1)
+        captured = []
 
-                def capture_local_mmd(pred_features, true_features, cond, **kwargs):
-                    captured.append((cond.detach().clone(), kwargs["local"]))
-                    return pred_features.sum() * 0.0
+        def capture_local_mmd(pred_features, true_features, cond, **kwargs):
+            captured.append((cond.detach().clone(), kwargs["local"]))
+            return pred_features.sum() * 0.0
 
-                with patch.object(model.model.w_layer, "forward", return_value=prediction):
-                    with patch("model.losses.compute_local_mmd", side_effect=capture_local_mmd):
-                        total, losses = model._compute_batch_losses(x, target)
+        with patch.object(model.model.w_layer, "forward", return_value=prediction):
+            with patch("model.losses.compute_local_mmd", side_effect=capture_local_mmd):
+                total, losses = model._compute_batch_losses(x, target)
 
-                self.assertEqual(len(captured), 3)
-                for condition, local in captured:
-                    self.assertEqual(condition.shape, (4, 0))
-                    self.assertIs(local, False)
-                self.assertTrue(torch.isfinite(total))
+        self.assertEqual(len(captured), 3)
+        for condition, local in captured:
+            self.assertEqual(condition.shape, (4, 0))
+            self.assertIs(local, False)
+        self.assertTrue(torch.isfinite(total))
 
     def test_rejects_unsupported_input_width(self):
-        for model_class in self.MODEL_CLASSES:
-            with self.subTest(model=model_class.__name__):
-                with self.assertRaisesRegex(ValueError, "input_dim"):
-                    model_class(
-                        input_dim=20,
-                        d_model=8,
-                        num_heads=2,
-                        std_mean_train=np.zeros(20, dtype=np.float32),
-                        std_scale_train=np.ones(20, dtype=np.float32),
-                    )
+        with self.assertRaisesRegex(ValueError, "input_dim"):
+            LightningWBoson(
+                input_dim=20,
+                d_model=8,
+                num_heads=2,
+                std_mean_train=np.zeros(20, dtype=np.float32),
+                std_scale_train=np.ones(20, dtype=np.float32),
+            )
 
 
 class LocalMMDTest(unittest.TestCase):
@@ -779,7 +712,7 @@ class LocalMMDTest(unittest.TestCase):
 
         torch.testing.assert_close(nonfinite_loss, finite_loss)
 
-    def test_equal_inputs_have_zero_biased_mmd(self):
+    def test_equal_inputs_have_zero_mmd(self):
         loss = loss_module.compute_local_mmd(
             self.truth,
             self.truth,
@@ -788,73 +721,111 @@ class LocalMMDTest(unittest.TestCase):
 
         torch.testing.assert_close(loss, torch.tensor(0.0))
 
-    def test_rejects_nonpositive_bandwidth_multiplier(self):
-        with self.assertRaisesRegex(ValueError, "finite and positive"):
+    def test_rejects_non_boolean_local(self):
+        with self.assertRaisesRegex(ValueError, "local must be a boolean"):
             loss_module.compute_local_mmd(
                 self.pred,
                 self.truth,
                 self.condition,
-                condition_bandwidth_multipliers=[0.0],
+                local=0,
             )
 
-    def test_empty_rows_have_finite_differentiable_transformed_loss(self):
-        prediction = torch.full((2, 1), float("nan"), requires_grad=True)
-        mmd2 = loss_module.compute_local_mmd(
-            prediction,
-            torch.zeros((2, 1)),
-            torch.zeros((2, 1)),
+    def test_rejects_empty_bandwidth_multiplier_lists(self):
+        for name in (
+            "feature_bandwidth_multipliers",
+            "condition_bandwidth_multipliers",
+        ):
+            with self.subTest(name=name):
+                with self.assertRaisesRegex(ValueError, "must contain at least one value"):
+                    loss_module.compute_local_mmd(
+                        self.pred,
+                        self.truth,
+                        self.condition,
+                        **{name: []},
+                    )
+
+    def test_rejects_nonpositive_bandwidth_multipliers(self):
+        for name in (
+            "feature_bandwidth_multipliers",
+            "condition_bandwidth_multipliers",
+        ):
+            for value in (0.0, -1.0):
+                with self.subTest(name=name, value=value):
+                    with self.assertRaisesRegex(ValueError, "finite and positive"):
+                        loss_module.compute_local_mmd(
+                            self.pred,
+                            self.truth,
+                            self.condition,
+                            **{name: [value]},
+                        )
+
+    def test_off_diagonal_estimator_matches_u_statistic_reference(self):
+        feature_multipliers = [0.5]
+        condition_multipliers = [1.0]
+
+        loss = loss_module.compute_local_mmd(
+            self.pred,
+            self.truth,
+            self.condition,
+            local=True,
+            feature_kernel="imq",
+            condition_kernel="rbf",
+            feature_bandwidth_multipliers=feature_multipliers,
+            condition_bandwidth_multipliers=condition_multipliers,
         )
 
-        loss = loss_module.transform_mmd_loss(mmd2, kind="sqrt", epsilon=1.0e-3)
-        loss.backward()
+        feature_scale = torch.median(
+            torch.pdist(self.truth, p=2)[torch.pdist(self.truth, p=2) > 0]
+        )
+        condition_scale = torch.median(
+            torch.pdist(self.condition, p=2)[torch.pdist(self.condition, p=2) > 0]
+        )
+        feature_bandwidth = feature_multipliers[0] * feature_scale
+        condition_bandwidth = condition_multipliers[0] * condition_scale
 
-        torch.testing.assert_close(loss, torch.tensor(0.0))
-        self.assertTrue(torch.isfinite(prediction.grad).all())
+        dxx = torch.cdist(self.pred, self.pred).square()
+        dyy = torch.cdist(self.truth, self.truth).square()
+        dxy = torch.cdist(self.pred, self.truth).square()
+        imq = lambda d: feature_bandwidth**2 / (feature_bandwidth**2 + d)
+        h = imq(dxx) + imq(dyy) - imq(dxy) - imq(dxy).t()
+        cond_matrix = torch.exp(
+            -0.5 * torch.cdist(self.condition, self.condition).square()
+            / condition_bandwidth**2
+        )
+        h = h * cond_matrix
 
+        n = h.shape[0]
+        off_diagonal = ~torch.eye(n, dtype=torch.bool, device=h.device)
+        expected = h[off_diagonal].mean()
 
-class MMDTransformTest(unittest.TestCase):
-    def test_mmd_transform_compatibility_mode_returns_exact_input(self):
-        mmd2 = torch.tensor(0.5, requires_grad=True)
+        torch.testing.assert_close(loss, expected)
 
-        transformed = loss_module.transform_mmd_loss(mmd2)
+    def test_diagonal_terms_are_excluded_from_mean(self):
+        feature_multipliers = [0.5]
 
-        self.assertIs(transformed, mmd2)
-
-    def test_mmd_transform_sqrt_is_exactly_zero_at_zero(self):
-        transformed = loss_module.transform_mmd_loss(
-            torch.tensor(0.0),
-            kind="sqrt",
-            epsilon=1.0e-3,
+        loss = loss_module.compute_local_mmd(
+            self.pred,
+            self.truth,
+            self.condition,
+            local=False,
+            feature_kernel="imq",
+            feature_bandwidth_multipliers=feature_multipliers,
         )
 
-        torch.testing.assert_close(transformed, torch.tensor(0.0))
-
-    def test_mmd_transform_sqrt_matches_smoothed_formula(self):
-        mmd2 = torch.tensor(0.75, dtype=torch.float64)
-        epsilon = 0.125
-
-        transformed = loss_module.transform_mmd_loss(mmd2, kind="sqrt", epsilon=epsilon)
-
-        expected = torch.sqrt(mmd2 + epsilon**2) - epsilon
-        torch.testing.assert_close(transformed, expected)
-
-    def test_mmd_transform_has_finite_gradients_at_and_near_zero(self):
-        mmd2 = torch.tensor([0.0, 1.0e-12], dtype=torch.float64, requires_grad=True)
-
-        loss_module.transform_mmd_loss(mmd2, kind="sqrt").sum().backward()
-
-        self.assertTrue(torch.isfinite(mmd2.grad).all())
-
-    def test_mmd_transform_clamps_tiny_negative_value_to_finite_zero(self):
-        transformed = loss_module.transform_mmd_loss(
-            torch.tensor(-1.0e-8),
-            kind="sqrt",
-            epsilon=1.0e-3,
+        feature_scale = torch.median(
+            torch.pdist(self.truth, p=2)[torch.pdist(self.truth, p=2) > 0]
         )
+        feature_bandwidth = feature_multipliers[0] * feature_scale
 
-        torch.testing.assert_close(transformed, torch.tensor(0.0))
-        self.assertTrue(torch.isfinite(transformed))
+        dxx = torch.cdist(self.pred, self.pred).square()
+        dyy = torch.cdist(self.truth, self.truth).square()
+        dxy = torch.cdist(self.pred, self.truth).square()
+        imq = lambda d: feature_bandwidth**2 / (feature_bandwidth**2 + d)
+        h = imq(dxx) + imq(dyy) - imq(dxy) - imq(dxy).t()
 
+        biased_mean = h.mean()
+
+        self.assertGreater(float(biased_mean), float(loss))
 
 class AlphaMMDTest(unittest.TestCase):
     def test_matches_visualization_alpha_with_truth_on_shell_ordering(self):
@@ -1003,15 +974,6 @@ class AlphaMMDTest(unittest.TestCase):
 
         self.assertTrue(torch.isfinite(y_pred.grad).all())
 
-    def test_requires_condition_features(self):
-        with self.assertRaisesRegex(ValueError, "requires the high-level"):
-            loss_module.alpha_mmd(
-                torch.zeros((1, 21)),
-                torch.zeros((1, 10)),
-                torch.zeros((1, 8)),
-                torch.empty((1, 0)),
-            )
-
     def test_all_nonfinite_rows_return_differentiable_zero(self):
         y_pred = torch.full((2, 8), float("nan"), requires_grad=True)
 
@@ -1084,6 +1046,56 @@ class MassMMDTest(unittest.TestCase):
 
 
 class AngularMMDTest(unittest.TestCase):
+    def test_encodes_phi_as_sine_cosine_pairs(self):
+        true_booster = Mock()
+        pred_booster = Mock()
+        true_booster.valid_rest_frame_mask.return_value = torch.tensor([True, True])
+        pred_booster.valid_rest_frame_mask.return_value = torch.tensor([True, True])
+        true_angles = (
+            torch.tensor([0.0, torch.pi]),
+            torch.tensor([-torch.pi / 2.0, torch.pi]),
+            torch.tensor([torch.pi / 2.0, torch.pi / 4.0]),
+            torch.tensor([0.0, -torch.pi / 2.0]),
+        )
+        pred_angles = (
+            torch.tensor([torch.pi / 4.0, torch.pi / 2.0]),
+            torch.tensor([torch.pi / 2.0, -torch.pi]),
+            torch.tensor([torch.pi, 0.0]),
+            torch.tensor([torch.pi / 2.0, 0.0]),
+        )
+        true_booster.lep_theta_phi_in_w_rest.return_value = true_angles
+        pred_booster.lep_theta_phi_in_w_rest.return_value = pred_angles
+        captured = {}
+
+        def capture_local_mmd(pred_features, true_features, cond, **kwargs):
+            captured["pred"] = pred_features
+            captured["true"] = true_features
+            return pred_features.sum() * 0.0
+
+        with patch("model.losses.Booster", side_effect=[true_booster, pred_booster]):
+            with patch("model.losses.compute_local_mmd", side_effect=capture_local_mmd):
+                loss_module.angular_mmd(
+                    torch.zeros((2, 21)),
+                    torch.zeros((2, 10)),
+                    torch.zeros((2, 8)),
+                    torch.zeros((2, 4)),
+                )
+
+        expected_true = torch.tensor(
+            [
+                [-1.0, -1.0, 0.0, 0.0, 0.0, 1.0],
+                [1.0, 0.0, -1.0, -0.5, -1.0, 0.0],
+            ]
+        )
+        expected_pred = torch.tensor(
+            [
+                [-0.5, 1.0, 0.0, 1.0, 1.0, 0.0],
+                [0.0, 0.0, -1.0, -1.0, 0.0, 1.0],
+            ]
+        )
+        torch.testing.assert_close(captured["true"], expected_true, atol=1.0e-6, rtol=0.0)
+        torch.testing.assert_close(captured["pred"], expected_pred, atol=1.0e-6, rtol=0.0)
+
     def test_uses_common_truth_prediction_validity_mask(self):
         true_booster = Mock()
         pred_booster = Mock()
@@ -1162,7 +1174,7 @@ class GradientCosineLoggingTest(unittest.TestCase):
                     model.on_train_epoch_end()
 
         log_cosines.assert_called_once()
-        self.assertEqual(set(log_cosines.call_args.args[0]), {"higgs_mass"})
+        self.assertEqual(set(log_cosines.call_args.args[0]), {"huber", "higgs_mass"})
         self.assertEqual(model.loss_weights, original_weights)
 
 

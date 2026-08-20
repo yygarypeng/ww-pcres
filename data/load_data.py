@@ -3,7 +3,7 @@ import numpy as np
 from sklearn.preprocessing import StandardScaler
 
 from data.preprocessing import BASE_INPUT_DIM, RAW_INPUT_DIM, valid_input_energy_rows
-from physics import deta, dphi, eta
+from physics import eta
 
 
 def select_categories(available_categories, categories=None):
@@ -209,27 +209,16 @@ def load_data(
 
         lep_pos_pt = category_data["pos_lep"]["pt"]  # noqa: F841
         lep_neg_pt = category_data["neg_lep"]["pt"]  # noqa: F841
-        lep_pos_eta = category_data["pos_lep"]["eta"]
-        lep_neg_eta = category_data["neg_lep"]["eta"]
-        lep_pos_phi = category_data["pos_lep"]["phi"]
-        lep_neg_phi = category_data["neg_lep"]["phi"]
-
         dilep_px = lep_pos_px + lep_neg_px
         dilep_py = lep_pos_py + lep_neg_py
         dilep_pz = lep_pos_pz + lep_neg_pz
-        dilep_energy = lep_pos_energy + lep_neg_energy
         dilep_eta = eta(dilep_px, dilep_py, dilep_pz)  # noqa: F841
-        m_ll2 = dilep_energy**2 - dilep_px**2 - dilep_py**2 - dilep_pz**2
-        m_ll = np.where(m_ll2 >= -1.0e-6, np.sqrt(np.clip(m_ll2, 0.0, None)), np.nan)
 
         met_px = category_data["met"]["px"]
         met_py = category_data["met"]["py"]
         # truth met (ptvv)
         # truth_ptvv_px = (category_data["truth_pos_w"]["px"] - category_data["pos_lep"]["px"]) + (category_data["truth_neg_w"]["px"] - category_data["neg_lep"]["px"])
         # truth_ptvv_py = (category_data["truth_pos_w"]["py"] - category_data["pos_lep"]["py"]) + (category_data["truth_neg_w"]["py"] - category_data["neg_lep"]["py"])
-
-        dphi_ll = dphi(lep_pos_phi, lep_neg_phi)
-        deta_ll = deta(lep_pos_eta, lep_neg_eta)
 
         jet_px = category_data["jets"]["px"][:, 0:2]
         jet_py = category_data["jets"]["py"][:, 0:2]
