@@ -8,7 +8,7 @@ import torch
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.append(str(REPO_ROOT))
 
-from convert_to_onnx import find_checkpoint, make_valid_raw_inputs
+from convert_to_onnx import default_onnx_path, find_checkpoint, make_valid_raw_inputs
 
 from model import LightningWBoson
 from train import load_config
@@ -23,7 +23,11 @@ def main():
         help="Path to YAML config file",
     )
     parser.add_argument("--checkpoint", help="Specific .ckpt file to compare against")
-    parser.add_argument("--onnx", default="hww_pcres_regressor.onnx", help="ONNX model path")
+    parser.add_argument(
+        "--onnx",
+        default=default_onnx_path(),
+        help="ONNX model path",
+    )
     parser.add_argument("--batch-size", type=int, default=16, help="Random comparison batch size")
     parser.add_argument("--seed", type=int, default=0, help="Random input seed")
     args = parser.parse_args()
@@ -48,7 +52,11 @@ def main():
     )
     pytorch_model.eval()
 
-    test_input = make_valid_raw_inputs(args.batch_size, seed=args.seed).numpy()
+    test_input = make_valid_raw_inputs(
+        args.batch_size,
+        input_dim=pytorch_model.hparams.input_dim,
+        seed=args.seed,
+    ).numpy()
 
     input_name = ort_session.get_inputs()[0].name
     ort_result = ort_session.run(None, {input_name: test_input})[0]

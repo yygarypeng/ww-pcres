@@ -19,7 +19,6 @@ The model predicts neutrino momenta from leptons, MET, and jets event features, 
 - `notebooks/`: exploratory notebooks and notebook plotting helpers.
 - `onnx/`: ONNX export and validation utilities.
 - `docs/`: notes for generated files and project workflows.
-- `archive/`: old experiments kept for reference only.
 
 Generated outputs belong under `outputs/` or W&B/Lightning output folders and are ignored by git.
 
@@ -90,14 +89,9 @@ The local MMD losses use a product of two independently configured kernel mixtur
 - an output-feature kernel for `alpha_mmd`, joint charge-ordered `mass_mmd`, or `angular_mmd`;
 - a condition kernel over standardized `m_ll` and `deta_ll` plus unstandardized `dphi_ll`.
 
-Feature and condition bandwidth lists form a normalized Cartesian-product mixture. Adding another bandwidth therefore changes kernel coverage without mechanically rescaling the loss. The mass loss applies `asinh(m_W^2 / 80.4^2)` and fixed robust statistics fitted on the training truth split. Angular features use `2 * theta / pi - 1` and `phi / pi`, so all four lie in [-1, 1].
+Feature and condition bandwidth lists form a normalized Cartesian-product mixture. Adding another bandwidth therefore changes kernel coverage without mechanically rescaling the loss. The mass loss applies `asinh(m_W^2 / 80.4^2)` and fixed robust statistics fitted on the training truth split. Angular features use `2 * theta / pi - 1` together with `sin(phi)` and `cos(phi)`, producing six features in [-1, 1] while preserving phi periodicity.
 
-Configure the two sides separately under the top-level `mmd` section; see `configs/config.example.yaml` for the supported keys. Older local configs must replace:
-
-- `kinematic_loss_mmd` with separate `alpha_mmd` and `mass_mmd` weights;
-- `angular_loss_mmd` with `angular_mmd`.
-
-Unsupported or retired names fail with an explicit migration message instead of being ignored.
+Configure the two sides separately under the top-level `mmd` section; see `configs/config.example.yaml` for the supported keys. Unsupported loss names are rejected instead of being ignored.
 
 Set `mmd.local: true` (the default) to multiply each output-feature kernel by the condition kernel over the three high-level features. Set `mmd.local: false` to use global MMD over output features only. Global mode still passes the high-level features into the neural network; it only removes them from MMD conditioning.
 
