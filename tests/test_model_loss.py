@@ -435,33 +435,18 @@ class LightningModelLossTest(unittest.TestCase):
                 },
             )
 
-    def test_rejects_invalid_mmd_transform_config_at_model_construction(self):
-        invalid_transforms = (
-            {},
-            None,
-            {"kind": "log"},
-            {"kind": "sqrt", "epsilon": 0.0},
-            {"kind": "sqrt", "epsilon": -1.0},
-            {"kind": "sqrt", "epsilon": float("nan")},
-            {"kind": "sqrt", "epsilon": float("inf")},
-            {"kind": "sqrt", "epsilon": "not-a-number"},
-            {"kind": "sqrt", "epsilon": 10**10000},
-            {"kind": "sqrt", "epsilon": 1.0e-3, "extra": True},
-        )
-        for transform in invalid_transforms:
-            with self.subTest(transform=transform):
-                with self.assertRaisesRegex(ValueError, "loss_transform"):
-                    self._basic_model(mmd_config={"loss_transform": transform})
+    def test_rejects_unknown_mmd_config_section(self):
+        with self.assertRaisesRegex(ValueError, "unsupported MMD config section.*unknown_section"):
+            self._basic_model(mmd_config={"unknown_section": {}})
 
-    def test_mmd_transform_is_applied_after_each_public_mmd_result(self):
+    def test_public_mmd_results_are_used_without_transformation(self):
         model = self._basic_model(
             loss_weights={
                 "huber": 0.0,
                 "alpha_mmd": 1.0,
                 "mass_mmd": 1.0,
                 "angular_mmd": 1.0,
-            },
-            mmd_config={"loss_transform": {"kind": "sqrt", "epsilon": 0.25}},
+            }
         )
         raw_values = {
             "alpha_mmd": torch.tensor(0.0),
@@ -481,30 +466,10 @@ class LightningModelLossTest(unittest.TestCase):
                 torch.zeros((1, 4)),
             )
 
-        expected = {
-            name: loss_module.transform_mmd_loss(value, kind="sqrt", epsilon=0.25)
-            for name, value in raw_values.items()
-        }
-        for name, value in expected.items():
-            torch.testing.assert_close(losses[name], value)
-        torch.testing.assert_close(total, sum(expected.values()))
-
-    def test_no_mmd_transform_preserves_public_mmd_squared_values(self):
-        model = self._basic_model(
-            loss_weights={"huber": 0.0, "alpha_mmd": 1.0},
-        )
-        mmd2 = torch.tensor(0.75)
-
-        with patch("model.model.alpha_mmd", return_value=mmd2):
-            total, losses = model._compute_losses(
-                torch.zeros((1, 21)),
-                torch.zeros((1, 10)),
-                torch.zeros((1, 8)),
-                torch.zeros((1, 4)),
-            )
-
-        self.assertIs(losses["alpha_mmd"], mmd2)
-        torch.testing.assert_close(total, mmd2)
+        self.assertIs(losses["alpha_mmd"], raw_values["alpha_mmd"])
+        self.assertIs(losses["mass_mmd"], raw_values["mass_mmd"])
+        self.assertIs(losses["angular_mmd"], raw_values["angular_mmd"])
+        torch.testing.assert_close(total, sum(raw_values.values()))
 
     def test_rejects_unsupported_loss_weight_keys(self):
         for key in ("w_mass_mmd", "kinematic_loss_mmd_typo"):
@@ -756,6 +721,44 @@ class LocalMMDTest(unittest.TestCase):
 
         torch.testing.assert_close(loss, torch.tensor(0.0))
 
+    def test_rejects_non_boolean_local(self):
+        with self.assertRaisesRegex(ValueError, "local must be a boolean"):
+            loss_module.compute_local_mmd(
+                self.pred,
+                self.truth,
+                self.condition,
+                local=0,
+            )
+
+    def test_rejects_empty_bandwidth_multiplier_lists(self):
+        for name in (
+            "feature_bandwidth_multipliers",
+            "condition_bandwidth_multipliers",
+        ):
+            with self.subTest(name=name):
+                with self.assertRaisesRegex(ValueError, "must contain at least one value"):
+                    loss_module.compute_local_mmd(
+                        self.pred,
+                        self.truth,
+                        self.condition,
+                        **{name: []},
+                    )
+
+    def test_rejects_nonpositive_bandwidth_multipliers(self):
+        for name in (
+            "feature_bandwidth_multipliers",
+            "condition_bandwidth_multipliers",
+        ):
+            for value in (0.0, -1.0):
+                with self.subTest(name=name, value=value):
+                    with self.assertRaisesRegex(ValueError, "finite and positive"):
+                        loss_module.compute_local_mmd(
+                            self.pred,
+                            self.truth,
+                            self.condition,
+                            **{name: [value]},
+                        )
+
     def test_off_diagonal_estimator_matches_u_statistic_reference(self):
         feature_multipliers = [0.5]
         condition_multipliers = [1.0]
@@ -823,65 +826,6 @@ class LocalMMDTest(unittest.TestCase):
         biased_mean = h.mean()
 
         self.assertGreater(float(biased_mean), float(loss))
-
-    def test_empty_rows_have_finite_differentiable_transformed_loss(self):
-        prediction = torch.full((2, 1), float("nan"), requires_grad=True)
-        mmd2 = loss_module.compute_local_mmd(
-            prediction,
-            torch.zeros((2, 1)),
-            torch.zeros((2, 1)),
-        )
-
-        loss = loss_module.transform_mmd_loss(mmd2, kind="sqrt", epsilon=1.0e-3)
-        loss.backward()
-
-        torch.testing.assert_close(loss, torch.tensor(0.0))
-        self.assertTrue(torch.isfinite(prediction.grad).all())
-
-
-class MMDTransformTest(unittest.TestCase):
-    def test_mmd_transform_compatibility_mode_returns_exact_input(self):
-        mmd2 = torch.tensor(0.5, requires_grad=True)
-
-        transformed = loss_module.transform_mmd_loss(mmd2)
-
-        self.assertIs(transformed, mmd2)
-
-    def test_mmd_transform_sqrt_is_exactly_zero_at_zero(self):
-        transformed = loss_module.transform_mmd_loss(
-            torch.tensor(0.0),
-            kind="sqrt",
-            epsilon=1.0e-3,
-        )
-
-        torch.testing.assert_close(transformed, torch.tensor(0.0))
-
-    def test_mmd_transform_sqrt_matches_smoothed_formula(self):
-        mmd2 = torch.tensor(0.75, dtype=torch.float64)
-        epsilon = 0.125
-
-        transformed = loss_module.transform_mmd_loss(mmd2, kind="sqrt", epsilon=epsilon)
-
-        expected = torch.sqrt(mmd2 + epsilon**2) - epsilon
-        torch.testing.assert_close(transformed, expected)
-
-    def test_mmd_transform_has_finite_gradients_at_and_near_zero(self):
-        mmd2 = torch.tensor([0.0, 1.0e-12], dtype=torch.float64, requires_grad=True)
-
-        loss_module.transform_mmd_loss(mmd2, kind="sqrt").sum().backward()
-
-        self.assertTrue(torch.isfinite(mmd2.grad).all())
-
-    def test_mmd_transform_clamps_tiny_negative_value_to_finite_zero(self):
-        transformed = loss_module.transform_mmd_loss(
-            torch.tensor(-1.0e-8),
-            kind="sqrt",
-            epsilon=1.0e-3,
-        )
-
-        torch.testing.assert_close(transformed, torch.tensor(0.0))
-        self.assertTrue(torch.isfinite(transformed))
-
 
 class AlphaMMDTest(unittest.TestCase):
     def test_matches_visualization_alpha_with_truth_on_shell_ordering(self):

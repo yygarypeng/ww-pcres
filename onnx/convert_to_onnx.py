@@ -1,7 +1,6 @@
 import argparse
 import math
 import sys
-from datetime import datetime
 from pathlib import Path
 
 import torch
@@ -13,10 +12,6 @@ sys.path.append(str(REPO_ROOT))
 
 from model import LightningWBoson
 from train import load_config
-
-
-def default_onnx_path():
-    return str(REPO_ROOT / f"onnx/models/hww_pcres_{datetime.now():%y%m%d}.onnx")
 
 
 class Opset11MultiheadAttention(nn.Module):
@@ -111,7 +106,7 @@ def main():
     parser.add_argument("--checkpoint", help="Specific .ckpt file to export")
     parser.add_argument(
         "--output",
-        default=default_onnx_path(),
+        default=str(REPO_ROOT / "onnx/models/hww_pcres_regressor.onnx"),
         help="Output ONNX path",
     )
     parser.add_argument("--batch-size", type=int, default=1, help="Dummy export batch size")

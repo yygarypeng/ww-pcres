@@ -8,7 +8,7 @@ import torch
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.append(str(REPO_ROOT))
 
-from convert_to_onnx import default_onnx_path, find_checkpoint, make_valid_raw_inputs
+from convert_to_onnx import find_checkpoint, make_valid_raw_inputs
 
 from model import LightningWBoson
 from train import load_config
@@ -25,7 +25,7 @@ def main():
     parser.add_argument("--checkpoint", help="Specific .ckpt file to compare against")
     parser.add_argument(
         "--onnx",
-        default=default_onnx_path(),
+        default=str(REPO_ROOT / "onnx/models/hww_pcres_regressor.onnx"),
         help="ONNX model path",
     )
     parser.add_argument("--batch-size", type=int, default=16, help="Random comparison batch size")
