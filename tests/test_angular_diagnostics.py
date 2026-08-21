@@ -311,8 +311,10 @@ class _GradientModel(nn.Module):
         self.w_fourvec_scales = torch.ones(4)
         self.loss_weights = {"huber": 50.0, "sum": -2.0, "disabled": 0.0}
         self.seen_features = None
+        self.forward_calls = 0
 
     def forward(self, features, return_aux=False):
+        self.forward_calls += 1
         values = features[:, :1]
         prediction = torch.cat(
             [
@@ -326,8 +328,12 @@ class _GradientModel(nn.Module):
         return prediction
 
     def _compute_batch_losses(self, features, targets):
+        prediction, auxiliary = self(features, return_aux=True)
+        return self._compute_losses(features, targets, prediction, auxiliary["cond"], auxiliary)
+
+    def _compute_losses(self, features, targets, prediction, condition, auxiliary=None):
+        del condition, auxiliary
         self.seen_features = features.detach().clone()
-        prediction = self(features)
         residual = prediction - targets[:, :8]
         huber = torch.nn.functional.huber_loss(residual, torch.zeros_like(residual))
         losses = {"huber": huber, "sum": self.slot_scale.sum()}
@@ -373,6 +379,20 @@ def test_gradient_rows_use_persisted_batch_and_report_weighted_reference_cosines
     assert by_name["huber_wplus"]["cosine_huber_wplus"] == pytest.approx(1.0)
     assert by_name["huber_wplus"]["cosine_huber_wminus"] == pytest.approx(0.0)
     assert all(row["epoch"] == 3 for row in rows)
+
+
+def test_gradient_rows_reuse_one_forward_for_losses_and_huber_references():
+    model = _GradientModel()
+
+    gradient_diagnostic_rows(
+        model,
+        torch.ones((512, 2)),
+        torch.zeros((512, 8)),
+        range(512),
+        epoch=3,
+    )
+
+    assert model.forward_calls == 1
 
 
 def test_gradient_csv_has_stable_schema(tmp_path):
