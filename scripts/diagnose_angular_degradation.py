@@ -7,9 +7,14 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
 
+import matplotlib
 import numpy as np
 import torch
 import torch.nn.functional as F
+
+matplotlib.use("Agg")
+
+from matplotlib import pyplot as plt
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
@@ -17,6 +22,7 @@ sys.path.insert(0, str(REPO_ROOT))
 from data.load_data import load_data
 from model import LightningWBoson
 from model.losses import angular_mmd_features, compute_local_mmd
+from notebooks.plottingtool import plot_angular_1d_grid, plot_angular_2d_grid
 from physics.torchBoost import Booster
 from scripts.evaluate_mmd_bandwidths import discover_unique_checkpoints, tensor_batch
 
@@ -36,6 +42,15 @@ CSV_COLUMNS = (
     "pred_rest_frame_valid_fraction",
     "negative_raw_mmd_batch_fraction",
     "learning_rate",
+)
+GRADIENT_CSV_COLUMNS = (
+    "epoch",
+    "loss",
+    "raw_loss",
+    "effective_weight",
+    "weighted_gradient_l2",
+    "cosine_huber_wplus",
+    "cosine_huber_wminus",
 )
 
 
@@ -307,6 +322,215 @@ def write_metrics_csv(path, rows):
             writer.writerow({name: row[name] for name in CSV_COLUMNS})
 
 
+def write_gradient_csv(path, rows):
+    with Path(path).open("w", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=GRADIENT_CSV_COLUMNS, extrasaction="raise")
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def _wrap_angle(values):
+    return (values + np.pi) % (2.0 * np.pi) - np.pi
+
+
+def _angular_plot_observables(prediction, truth, plot_bins):
+    theta_bins = np.asarray(plot_bins["theta"], dtype=float)
+    phi_bins = np.asarray(plot_bins["phi"], dtype=float)
+    wrapped_bins = phi_bins / np.pi
+
+    def observable(pred, true, label, bins, *, log=True, vmax=800.0):
+        return {
+            "pred": pred,
+            "truth": true,
+            "label": label,
+            "bins": bins,
+            "log": log,
+            "vmax": vmax,
+        }
+
+    angular = [
+        observable(
+            prediction[:, 0] + prediction[:, 2],
+            truth[:, 0] + truth[:, 2],
+            r"$\sum_{+-}\theta^*_{\ell}$",
+            np.linspace(2.0 * theta_bins[0], 2.0 * theta_bins[-1], len(theta_bins)) / np.pi,
+        ),
+        observable(
+            prediction[:, 0] - prediction[:, 2],
+            truth[:, 0] - truth[:, 2],
+            r"$\Delta_{+-}\theta^*_{\ell}$",
+            np.linspace(
+                theta_bins[0] - theta_bins[-1],
+                theta_bins[-1] - theta_bins[0],
+                len(theta_bins),
+            )
+            / np.pi,
+        ),
+        observable(
+            _wrap_angle(prediction[:, 1] + prediction[:, 3]),
+            _wrap_angle(truth[:, 1] + truth[:, 3]),
+            r"$\sum_{+-}\phi^*_{\ell}$",
+            wrapped_bins,
+            log=False,
+            vmax=300.0,
+        ),
+        observable(
+            _wrap_angle(prediction[:, 1] - prediction[:, 3]),
+            _wrap_angle(truth[:, 1] - truth[:, 3]),
+            r"$\Delta_{+-}\phi^*_{\ell}$",
+            wrapped_bins,
+            log=False,
+            vmax=300.0,
+        ),
+    ]
+    mixed_sum = []
+    mixed_diff = []
+    for theta_slot, phi_slot, signs in (
+        (0, 1, "++"),
+        (0, 3, "+-"),
+        (2, 1, "-+"),
+        (2, 3, "--"),
+    ):
+        mixed_sum.append(
+            observable(
+                _wrap_angle(prediction[:, theta_slot] + prediction[:, phi_slot]),
+                _wrap_angle(truth[:, theta_slot] + truth[:, phi_slot]),
+                rf"$\sum_{{{signs}}}\theta^*\phi^*$",
+                wrapped_bins,
+            )
+        )
+        mixed_diff.append(
+            observable(
+                _wrap_angle(prediction[:, theta_slot] - prediction[:, phi_slot]),
+                _wrap_angle(truth[:, theta_slot] - truth[:, phi_slot]),
+                rf"$\Delta_{{{signs}}}\theta^*\phi^*$",
+                wrapped_bins,
+            )
+        )
+    return angular, mixed_sum, mixed_diff
+
+
+def save_angular_plots(output_dir, *, epoch, prediction, truth, plot_bins):
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    angular, mixed_sum, mixed_diff = _angular_plot_observables(
+        np.asarray(prediction), np.asarray(truth), plot_bins
+    )
+    definitions = (
+        (
+            "angular_1d",
+            plot_angular_1d_grid,
+            angular,
+            "Angular sums and differences: 1D distributions",
+            {},
+        ),
+        (
+            "angular_2d",
+            plot_angular_2d_grid,
+            angular,
+            "Angular sums and differences: 2D correlations",
+            {},
+        ),
+        (
+            "mixed_sum_1d",
+            plot_angular_1d_grid,
+            mixed_sum,
+            "Mixed angular sums: 1D distributions",
+            {"share_axes": True},
+        ),
+        (
+            "mixed_sum_2d",
+            plot_angular_2d_grid,
+            mixed_sum,
+            "Mixed angular sums: 2D correlations",
+            {"shared_colorbar": True, "share_axes": True},
+        ),
+        (
+            "mixed_diff_1d",
+            plot_angular_1d_grid,
+            mixed_diff,
+            "Mixed angular differences: 1D distributions",
+            {"share_axes": True},
+        ),
+        (
+            "mixed_diff_2d",
+            plot_angular_2d_grid,
+            mixed_diff,
+            "Mixed angular differences: 2D correlations",
+            {"shared_colorbar": True, "share_axes": True},
+        ),
+    )
+    paths = []
+    for name, plotter, observables, title, kwargs in definitions:
+        figure, _ = plotter(observables, title, **kwargs)
+        path = output_dir / f"epoch_{epoch:04d}_{name}.png"
+        try:
+            figure.savefig(path, bbox_inches="tight")
+        finally:
+            plt.close(figure)
+        paths.append(path)
+    return paths
+
+
+def _parameter_gradient(loss, parameters):
+    gradients = torch.autograd.grad(loss, parameters, retain_graph=True, allow_unused=True)
+    return torch.cat(
+        [
+            (torch.zeros_like(parameter) if gradient is None else gradient).reshape(-1)
+            for parameter, gradient in zip(parameters, gradients)
+        ]
+    )
+
+
+def gradient_diagnostic_rows(model, features, targets, gradient_indices, *, epoch):
+    if len(gradient_indices) != PARTITION_ROWS:
+        raise ValueError("gradient diagnostics require exactly 512 persisted indices")
+    model.eval()
+    indices = torch.as_tensor(gradient_indices, dtype=torch.long, device=features.device)
+    features = features[indices]
+    targets = targets[indices]
+    _, losses = model._compute_batch_losses(features, targets)
+    prediction = model(features)
+    residual = (prediction - targets[:, :8]).reshape(len(prediction), 2, 4)
+    residual = residual / model.w_fourvec_scales
+    references = {
+        "huber_wplus": F.huber_loss(residual[:, 0], torch.zeros_like(residual[:, 0])),
+        "huber_wminus": F.huber_loss(residual[:, 1], torch.zeros_like(residual[:, 1])),
+    }
+    weights = model._effective_loss_weights()
+    parameters = tuple(parameter for parameter in model.parameters() if parameter.requires_grad)
+    if not parameters:
+        raise ValueError("gradient diagnostics require trainable model parameters")
+    reference_gradients = {
+        name: _parameter_gradient(loss, parameters) for name, loss in references.items()
+    }
+    all_losses = {**losses, **references}
+    rows = []
+    for name, loss in all_losses.items():
+        weight = 0.5 * weights.get("huber", 0.0) if name in references else weights.get(name, 0.0)
+        gradient = _parameter_gradient(loss, parameters)
+        rows.append(
+            {
+                "epoch": epoch,
+                "loss": name,
+                "raw_loss": float(loss.detach()),
+                "effective_weight": float(weight),
+                "weighted_gradient_l2": float(abs(weight) * torch.linalg.vector_norm(gradient)),
+                "cosine_huber_wplus": float(
+                    F.cosine_similarity(
+                        gradient, reference_gradients["huber_wplus"], dim=0, eps=1.0e-12
+                    )
+                ),
+                "cosine_huber_wminus": float(
+                    F.cosine_similarity(
+                        gradient, reference_gradients["huber_wminus"], dim=0, eps=1.0e-12
+                    )
+                ),
+            }
+        )
+    return rows
+
+
 def _angular_angles(inputs, w_fourvectors):
     booster = Booster(inputs[..., :8], w_fourvectors)
     valid = booster.valid_rest_frame_mask()
@@ -342,7 +566,9 @@ def _checkpoint_learning_rate(path):
     return float(checkpoint["hyper_parameters"]["lr"])
 
 
-def evaluate_checkpoint(checkpoint, features, targets, manifest, device, *, block_size):
+def evaluate_checkpoint(
+    checkpoint, features, targets, manifest, device, *, block_size, plot_output_dir=None
+):
     model = (
         LightningWBoson.load_from_checkpoint(
             checkpoint.path, map_location="cpu", weights_only=False
@@ -374,8 +600,12 @@ def evaluate_checkpoint(checkpoint, features, targets, manifest, device, *, bloc
             totals.append(float(total))
     prediction = torch.cat(predictions)
     condition = torch.cat(conditions)
-    truth_angular, truth_valid = _angular_features(features, targets[:, :8])
-    pred_angular, pred_valid = _angular_features(features, prediction)
+    truth_angles, truth_valid = _angular_angles(features, targets[:, :8])
+    pred_angles, pred_valid = _angular_angles(features, prediction)
+    truth_angular = features.new_full((len(features), 6), torch.nan)
+    pred_angular = features.new_full((len(features), 6), torch.nan)
+    truth_angular[truth_valid] = angular_mmd_features(truth_angles[truth_valid])
+    pred_angular[pred_valid] = angular_mmd_features(pred_angles[pred_valid])
     angular_metrics = angular_checkpoint_metrics(
         pred_angular,
         truth_angular,
@@ -387,6 +617,14 @@ def evaluate_checkpoint(checkpoint, features, targets, manifest, device, *, bloc
         raw_mmd_kwargs=model._mmd_kwargs("angular"),
         block_size=block_size,
     )
+    if plot_output_dir is not None:
+        save_angular_plots(
+            plot_output_dir,
+            epoch=checkpoint.epoch,
+            prediction=pred_angles.detach().cpu().numpy(),
+            truth=truth_angles.detach().cpu().numpy(),
+            plot_bins=manifest["plot_bins"],
+        )
     # This is intentionally the validation loss recomputed on the fixed 4,096-row panel.
     return {
         "epoch": checkpoint.epoch,
@@ -400,6 +638,22 @@ def evaluate_checkpoint(checkpoint, features, targets, manifest, device, *, bloc
     }
 
 
+def evaluate_checkpoint_gradients(checkpoint, features, targets, device):
+    model = (
+        LightningWBoson.load_from_checkpoint(
+            checkpoint.path, map_location="cpu", weights_only=False
+        )
+        .eval()
+        .to(device)
+    )
+    model.trainer = SimpleNamespace(current_epoch=checkpoint.epoch)
+    features = tensor_batch(features, device)
+    targets = tensor_batch(targets, device)
+    return gradient_diagnostic_rows(
+        model, features, targets, range(PARTITION_ROWS), epoch=checkpoint.epoch
+    )
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description=(
@@ -411,6 +665,8 @@ def parse_args():
     parser.add_argument("--data-path", type=Path, required=True)
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--plot-dir", type=Path)
+    parser.add_argument("--gradient-output", type=Path)
     parser.add_argument("--split", default="ggF_val")
     parser.add_argument("--seed", type=int, default=20260821)
     parser.add_argument("--block-size", type=int, default=512)
@@ -439,7 +695,12 @@ def main():
 
     validate_manifest(manifest, validation_size=len(features))
     selected = np.asarray(manifest["validation_indices"], dtype=np.int64)
+    gradient_selected = np.asarray(manifest["gradient_indices"], dtype=np.int64)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    plot_dir = args.plot_dir or args.output.with_name(f"{args.output.stem}_plots")
+    gradient_output = args.gradient_output or args.output.with_name(
+        f"{args.output.stem}_gradients.csv"
+    )
     rows = [
         evaluate_checkpoint(
             checkpoint,
@@ -448,10 +709,22 @@ def main():
             manifest,
             device,
             block_size=args.block_size,
+            plot_output_dir=plot_dir,
         )
         for checkpoint in checkpoints
     ]
+    gradient_rows = [
+        row
+        for checkpoint in checkpoints
+        for row in evaluate_checkpoint_gradients(
+            checkpoint,
+            features[gradient_selected],
+            targets[gradient_selected],
+            device,
+        )
+    ]
     write_metrics_csv(args.output, rows)
+    write_gradient_csv(gradient_output, gradient_rows)
 
 
 if __name__ == "__main__":
