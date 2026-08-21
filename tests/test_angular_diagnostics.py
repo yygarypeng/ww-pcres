@@ -11,7 +11,9 @@ from scripts.diagnose_angular_degradation import (
     angular_checkpoint_metrics,
     blockwise_mmd_v,
     build_manifest,
+    manifest_partition_positions,
     partitioned_raw_mmd,
+    validate_manifest,
     write_metrics_csv,
 )
 
@@ -30,17 +32,21 @@ def _angles(rows):
 
 
 def test_manifest_is_deterministic_serializable_and_preserves_fixed_selection():
-    filtered_indices = np.arange(10_000, 14_300)
+    filtered_indices = np.arange(4_300)
     truth_angles = _angles(len(filtered_indices))
+    truth_valid = torch.ones(len(filtered_indices), dtype=torch.bool)
+    truth_valid[::7] = False
 
-    first = build_manifest(filtered_indices, truth_angles, seed=73)
-    second = build_manifest(filtered_indices, truth_angles, seed=73)
+    first = build_manifest(filtered_indices, truth_angles, truth_valid, seed=73)
+    second = build_manifest(filtered_indices, truth_angles, truth_valid, seed=73)
 
     assert first == second
     json.dumps(first, allow_nan=False)
+    validate_manifest(first, validation_size=len(filtered_indices))
     assert len(first["validation_indices"]) == 4096
     assert len(set(first["validation_indices"])) == 4096
     assert set(first["validation_indices"]) <= set(filtered_indices)
+    assert any(not truth_valid[index] for index in first["validation_indices"])
     assert first["gradient_indices"] == first["validation_indices"][:512]
     assert len(first["partitions"]) == 8
     assert all(len(partition) == 512 for partition in first["partitions"])
@@ -90,19 +96,48 @@ def test_blockwise_v_statistic_matches_exact_kernel_matrix(kernel):
     torch.testing.assert_close(actual, expected, atol=1.0e-14, rtol=1.0e-12)
 
 
-def test_invalid_predictions_remain_in_valid_fraction_denominator():
+def test_blockwise_v_statistic_matches_unequal_count_reference():
+    prediction = torch.tensor([[-0.5], [0.1], [0.8]], dtype=torch.float64)
+    truth = torch.tensor([[-0.4], [0.0], [0.4], [0.9], [1.2]], dtype=torch.float64)
+    bandwidths = torch.tensor([0.3, 0.8], dtype=torch.float64)
+
+    def kernel(left, right):
+        distance = torch.cdist(left, right).square().unsqueeze(0)
+        squared = bandwidths.square().reshape(-1, 1, 1)
+        return (squared / (squared + distance + 1.0e-16)).mean(dim=0)
+
+    expected = (
+        kernel(prediction, prediction).mean()
+        + kernel(truth, truth).mean()
+        - 2.0 * kernel(prediction, truth).mean()
+    ).clamp_min(0.0)
+
+    actual = blockwise_mmd_v(prediction, truth, bandwidths, block_size=2)
+
+    torch.testing.assert_close(actual, expected, atol=1.0e-14, rtol=1.0e-12)
+
+
+def test_invalid_prediction_and_truth_rows_use_independent_fixed_samples():
     truth = torch.tensor(
         [[0.0], [0.25], [0.5], [0.75], [1.0], [1.25]], dtype=torch.float64
     ).repeat(1, 6)
     prediction = truth.clone()
     prediction[1] = torch.nan
-    prediction[4] = torch.inf
-    valid = torch.tensor([True, False, True, True, False, True])
+    truth[4] = torch.nan
+    prediction_valid = torch.tensor([True, False, True, True, True, True])
+    truth_valid = torch.tensor([True, True, True, True, False, True])
+    expected = blockwise_mmd_v(
+        prediction[prediction_valid],
+        truth[truth_valid],
+        [0.5],
+        block_size=2,
+    )
 
     metrics = angular_checkpoint_metrics(
         prediction,
         truth,
-        valid,
+        prediction_valid,
+        truth_valid,
         feature_bandwidths={
             "joint": [0.5],
             "wplus": [0.5],
@@ -112,8 +147,66 @@ def test_invalid_predictions_remain_in_valid_fraction_denominator():
         block_size=2,
     )
 
-    assert metrics["pred_rest_frame_valid_fraction"] == pytest.approx(4 / 6)
-    assert metrics["mmd_joint_fixed"] == pytest.approx(0.0, abs=1.0e-14)
+    assert metrics["pred_rest_frame_valid_fraction"] == pytest.approx(5 / 6)
+    assert metrics["mmd_joint_fixed"] == pytest.approx(float(expected))
+
+
+def _valid_manifest():
+    selected = list(range(4096))
+    return {
+        "seed": 1,
+        "validation_indices": selected,
+        "gradient_indices": selected[:512],
+        "partitions": [selected[start : start + 512] for start in range(0, 4096, 512)],
+        "plot_bins": {"theta": [0.0, 1.0], "phi": [-1.0, 0.0, 1.0]},
+        "feature_bandwidths": {
+            "joint": [0.5],
+            "wplus": [0.25, 0.5],
+            "wminus": [1.0],
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (lambda manifest: manifest["validation_indices"].pop(), "4,096"),
+        (lambda manifest: manifest["validation_indices"].__setitem__(1, 0), "unique"),
+        (lambda manifest: manifest["validation_indices"].__setitem__(0, 5000), "in range"),
+        (lambda manifest: manifest["gradient_indices"].reverse(), "gradient"),
+        (lambda manifest: manifest["partitions"].reverse(), "partitions"),
+        (lambda manifest: manifest["plot_bins"]["theta"].reverse(), "plot bins"),
+        (lambda manifest: manifest["plot_bins"].__setitem__("theta", ["bad"]), "plot bins"),
+        (
+            lambda manifest: manifest["feature_bandwidths"]["joint"].__setitem__(0, 0.0),
+            "bandwidth",
+        ),
+        (
+            lambda manifest: manifest["feature_bandwidths"].__setitem__("joint", ["bad"]),
+            "bandwidth",
+        ),
+    ],
+)
+def test_manifest_validation_rejects_broken_invariants(mutate, message):
+    manifest = _valid_manifest()
+    mutate(manifest)
+
+    with pytest.raises(ValueError, match=message):
+        validate_manifest(manifest, validation_size=4300)
+
+
+def test_persisted_partitions_are_mapped_to_selected_panel_positions():
+    manifest = _valid_manifest()
+    manifest["validation_indices"] = [1000 + index for index in manifest["validation_indices"]]
+    manifest["gradient_indices"] = manifest["validation_indices"][:512]
+    manifest["partitions"] = [
+        manifest["validation_indices"][start : start + 512]
+        for start in range(0, 4096, 512)
+    ]
+
+    positions = manifest_partition_positions(manifest)
+
+    assert positions == [list(range(start, start + 512)) for start in range(0, 4096, 512)]
 
 
 def test_partitioned_raw_mmd_uses_fixed_partitions_and_counts_negative_batches():

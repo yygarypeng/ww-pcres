@@ -46,18 +46,96 @@ def _fit_bandwidths(features):
     return [float(scale * multiplier) for multiplier in BANDWIDTH_MULTIPLIERS]
 
 
-def build_manifest(filtered_indices, truth_angles, *, seed):
+def validate_manifest(manifest, *, validation_size):
+    selected = manifest.get("validation_indices")
+    if not isinstance(selected, list) or len(selected) != VALIDATION_ROWS:
+        raise ValueError("manifest must contain exactly 4,096 validation indices")
+    if any(not isinstance(index, int) or isinstance(index, bool) for index in selected):
+        raise ValueError("manifest validation indices must be integers")
+    if len(set(selected)) != VALIDATION_ROWS:
+        raise ValueError("manifest validation indices must be unique")
+    if any(index < 0 or index >= validation_size for index in selected):
+        raise ValueError("manifest validation indices must be in range")
+
+    if manifest.get("gradient_indices") != selected[:PARTITION_ROWS]:
+        raise ValueError("manifest gradient indices must equal the first 512 validation indices")
+    partitions = manifest.get("partitions")
+    if (
+        not isinstance(partitions, list)
+        or len(partitions) != VALIDATION_ROWS // PARTITION_ROWS
+        or any(
+            not isinstance(partition, list) or len(partition) != PARTITION_ROWS
+            for partition in partitions
+        )
+        or [index for partition in partitions for index in partition] != selected
+    ):
+        raise ValueError("manifest partitions must be eight ordered 512-row panel partitions")
+
+    plot_bins = manifest.get("plot_bins")
+    if not isinstance(plot_bins, dict) or set(plot_bins) != {"theta", "phi"}:
+        raise ValueError("manifest plot bins must contain theta and phi")
+    for values in plot_bins.values():
+        try:
+            values = np.asarray(values, dtype=float)
+        except (TypeError, ValueError):
+            raise ValueError("manifest plot bins must be numeric") from None
+        if (
+            values.ndim != 1
+            or len(values) < 2
+            or not np.isfinite(values).all()
+            or not np.all(np.diff(values) > 0)
+        ):
+            raise ValueError("manifest plot bins must be finite and strictly increasing")
+
+    bandwidths = manifest.get("feature_bandwidths")
+    if not isinstance(bandwidths, dict) or set(bandwidths) != {"joint", "wplus", "wminus"}:
+        raise ValueError("manifest bandwidths must contain joint, wplus, and wminus")
+    for values in bandwidths.values():
+        try:
+            values = np.asarray(values, dtype=float)
+        except (TypeError, ValueError):
+            raise ValueError("manifest bandwidth values must be numeric") from None
+        if (
+            values.ndim != 1
+            or len(values) == 0
+            or not np.isfinite(values).all()
+            or not np.all(values > 0)
+        ):
+            raise ValueError("manifest bandwidth values must be finite and positive")
+    return manifest
+
+
+def manifest_partition_positions(manifest):
+    position_by_index = {
+        selected_index: position
+        for position, selected_index in enumerate(manifest["validation_indices"])
+    }
+    return [
+        [position_by_index[selected_index] for selected_index in partition]
+        for partition in manifest["partitions"]
+    ]
+
+
+def build_manifest(filtered_indices, truth_angles, truth_valid, *, seed):
     filtered_indices = np.asarray(filtered_indices)
     truth_angles = torch.as_tensor(truth_angles, dtype=torch.float64)
-    if filtered_indices.ndim != 1 or len(filtered_indices) != len(truth_angles):
-        raise ValueError("filtered indices and truth angles must contain the same number of rows")
+    truth_valid = torch.as_tensor(truth_valid, dtype=torch.bool)
+    if (
+        filtered_indices.ndim != 1
+        or len(filtered_indices) != len(truth_angles)
+        or len(filtered_indices) != len(truth_valid)
+    ):
+        raise ValueError(
+            "filtered indices, truth angles, and truth validity must contain the same rows"
+        )
     if len(filtered_indices) < VALIDATION_ROWS:
         raise ValueError(f"at least {VALIDATION_ROWS} filtered validation rows are required")
 
     rng = np.random.default_rng(seed)
     selected_positions = rng.choice(len(filtered_indices), size=VALIDATION_ROWS, replace=False)
     selected_indices = filtered_indices[selected_positions].astype(np.int64).tolist()
-    features = angular_mmd_features(truth_angles[selected_positions])
+    selected_truth_valid = truth_valid[selected_positions]
+    features = angular_mmd_features(truth_angles[selected_positions][selected_truth_valid])
     feature_bandwidths = {
         "joint": _fit_bandwidths(features),
         "wplus": _fit_bandwidths(features[:, :3]),
@@ -67,7 +145,7 @@ def build_manifest(filtered_indices, truth_angles, *, seed):
         selected_indices[start : start + PARTITION_ROWS]
         for start in range(0, VALIDATION_ROWS, PARTITION_ROWS)
     ]
-    return {
+    manifest = {
         "seed": int(seed),
         "validation_indices": selected_indices,
         "gradient_indices": selected_indices[:PARTITION_ROWS],
@@ -78,6 +156,7 @@ def build_manifest(filtered_indices, truth_angles, *, seed):
         },
         "feature_bandwidths": feature_bandwidths,
     }
+    return validate_manifest(manifest, validation_size=len(filtered_indices))
 
 
 def _mixed_kernel(left, right, bandwidths, kernel):
@@ -96,27 +175,30 @@ def _mixed_kernel(left, right, bandwidths, kernel):
 def blockwise_mmd_v(prediction, truth, bandwidths, *, kernel="imq", block_size=512):
     prediction = prediction.reshape(prediction.shape[0], -1)
     truth = truth.reshape(truth.shape[0], -1)
-    if prediction.shape != truth.shape:
-        raise ValueError("prediction and truth must have the same shape")
-    if prediction.shape[0] == 0:
+    if prediction.shape[1:] != truth.shape[1:]:
+        raise ValueError("prediction and truth must have the same feature shape")
+    if prediction.shape[0] == 0 or truth.shape[0] == 0:
         raise ValueError("cannot compute MMD for zero rows")
     if block_size <= 0:
         raise ValueError("block size must be positive")
 
-    total = prediction.new_zeros(())
-    for row_start in range(0, len(prediction), block_size):
-        row_pred = prediction[row_start : row_start + block_size]
-        row_truth = truth[row_start : row_start + block_size]
-        for column_start in range(0, len(prediction), block_size):
-            column_pred = prediction[column_start : column_start + block_size]
-            column_truth = truth[column_start : column_start + block_size]
-            total += (
-                _mixed_kernel(row_pred, column_pred, bandwidths, kernel)
-                + _mixed_kernel(row_truth, column_truth, bandwidths, kernel)
-                - _mixed_kernel(row_pred, column_truth, bandwidths, kernel)
-                - _mixed_kernel(row_truth, column_pred, bandwidths, kernel)
-            ).sum()
-    return (total / prediction.shape[0] ** 2).clamp_min(0.0)
+    def kernel_sum(left, right):
+        total = prediction.new_zeros(())
+        for row_start in range(0, len(left), block_size):
+            row = left[row_start : row_start + block_size]
+            for column_start in range(0, len(right), block_size):
+                column = right[column_start : column_start + block_size]
+                total += _mixed_kernel(row, column, bandwidths, kernel).sum()
+        return total
+
+    m = prediction.shape[0]
+    n = truth.shape[0]
+    value = (
+        kernel_sum(prediction, prediction) / m**2
+        + kernel_sum(truth, truth) / n**2
+        - 2.0 * kernel_sum(prediction, truth) / (m * n)
+    )
+    return value.clamp_min(0.0)
 
 
 def partitioned_raw_mmd(
@@ -154,6 +236,7 @@ def angular_checkpoint_metrics(
     prediction,
     truth,
     prediction_valid,
+    truth_valid,
     *,
     feature_bandwidths,
     partitions,
@@ -162,45 +245,48 @@ def angular_checkpoint_metrics(
     block_size=512,
 ):
     prediction_valid = torch.as_tensor(prediction_valid, dtype=torch.bool, device=prediction.device)
-    if len(prediction_valid) != len(prediction):
-        raise ValueError("prediction validity must have one value per selected row")
-    finite = torch.isfinite(prediction).all(dim=1) & torch.isfinite(truth).all(dim=1)
-    valid = prediction_valid & finite
-    if not valid.any():
+    truth_valid = torch.as_tensor(truth_valid, dtype=torch.bool, device=truth.device)
+    if len(prediction_valid) != len(prediction) or len(truth_valid) != len(truth):
+        raise ValueError("angular validity must have one value per selected row")
+    prediction_valid = prediction_valid & torch.isfinite(prediction).all(dim=1)
+    truth_valid = truth_valid & torch.isfinite(truth).all(dim=1)
+    if not prediction_valid.any():
         raise ValueError("checkpoint has no valid angular predictions")
+    if not truth_valid.any():
+        raise ValueError("panel has no valid truth angular samples")
 
     raw, negative_fraction, _ = partitioned_raw_mmd(
         prediction,
         truth,
-        valid,
+        prediction_valid & truth_valid,
         partitions,
         condition=condition,
         mmd_kwargs=raw_mmd_kwargs,
     )
-    pred_valid = prediction[valid]
-    truth_valid = truth[valid]
+    pred_samples = prediction[prediction_valid]
+    truth_samples = truth[truth_valid]
     return {
         "raw_angular_mmd": raw,
         "mmd_joint_fixed": float(
             blockwise_mmd_v(
-                pred_valid,
-                truth_valid,
+                pred_samples,
+                truth_samples,
                 feature_bandwidths["joint"],
                 block_size=block_size,
             )
         ),
         "mmd_wplus_fixed": float(
             blockwise_mmd_v(
-                pred_valid[:, :3],
-                truth_valid[:, :3],
+                pred_samples[:, :3],
+                truth_samples[:, :3],
                 feature_bandwidths["wplus"],
                 block_size=block_size,
             )
         ),
         "mmd_wminus_fixed": float(
             blockwise_mmd_v(
-                pred_valid[:, 3:],
-                truth_valid[:, 3:],
+                pred_samples[:, 3:],
+                truth_samples[:, 3:],
                 feature_bandwidths["wminus"],
                 block_size=block_size,
             )
@@ -221,11 +307,21 @@ def write_metrics_csv(path, rows):
             writer.writerow({name: row[name] for name in CSV_COLUMNS})
 
 
-def _angular_features(inputs, w_fourvectors):
+def _angular_angles(inputs, w_fourvectors):
     booster = Booster(inputs[..., :8], w_fourvectors)
     valid = booster.valid_rest_frame_mask()
-    angles = torch.stack(booster.lep_theta_phi_in_w_rest(), dim=-1)
-    return angular_mmd_features(angles), valid
+    angles = inputs.new_full((len(inputs), 4), torch.nan)
+    if valid.any():
+        valid_angles = booster.lep_theta_phi_in_w_rest(booster.particles[valid])[:4]
+        angles[valid] = torch.stack(valid_angles, dim=-1)
+    return angles, valid
+
+
+def _angular_features(inputs, w_fourvectors):
+    angles, valid = _angular_angles(inputs, w_fourvectors)
+    encoded = inputs.new_full((len(inputs), 6), torch.nan)
+    encoded[valid] = angular_mmd_features(angles[valid])
+    return encoded, valid
 
 
 def _slot_huber(prediction, truth, scales, slot):
@@ -257,10 +353,7 @@ def evaluate_checkpoint(checkpoint, features, targets, manifest, device, *, bloc
     model.trainer = SimpleNamespace(current_epoch=checkpoint.epoch)
     features = tensor_batch(features, device)
     targets = tensor_batch(targets, device)
-    partitions = [
-        list(range(start, start + PARTITION_ROWS))
-        for start in range(0, len(features), PARTITION_ROWS)
-    ]
+    partitions = manifest_partition_positions(manifest)
     predictions = []
     conditions = []
     totals = []
@@ -283,18 +376,18 @@ def evaluate_checkpoint(checkpoint, features, targets, manifest, device, *, bloc
     condition = torch.cat(conditions)
     truth_angular, truth_valid = _angular_features(features, targets[:, :8])
     pred_angular, pred_valid = _angular_features(features, prediction)
-    if not truth_valid.all():
-        raise RuntimeError("manifest contains a truth row without a valid rest frame")
     angular_metrics = angular_checkpoint_metrics(
         pred_angular,
         truth_angular,
         pred_valid,
+        truth_valid,
         feature_bandwidths=manifest["feature_bandwidths"],
         partitions=partitions,
         condition=condition,
         raw_mmd_kwargs=model._mmd_kwargs("angular"),
         block_size=block_size,
     )
+    # This is intentionally the validation loss recomputed on the fixed 4,096-row panel.
     return {
         "epoch": checkpoint.epoch,
         "val_loss": float(np.mean(totals)),
@@ -339,13 +432,12 @@ def main():
     else:
         all_features = tensor_batch(features, torch.device("cpu"))
         all_targets = tensor_batch(targets, torch.device("cpu"))
-        truth_angles, truth_valid = _angular_features(all_features, all_targets[:, :8])
-        filtered_indices = torch.nonzero(truth_valid, as_tuple=False).flatten()
-        manifest = build_manifest(
-            filtered_indices.numpy(), truth_angles[truth_valid], seed=args.seed
-        )
+        truth_angles, truth_valid = _angular_angles(all_features, all_targets[:, :8])
+        filtered_indices = np.arange(len(features))
+        manifest = build_manifest(filtered_indices, truth_angles, truth_valid, seed=args.seed)
         args.manifest.write_text(json.dumps(manifest, indent=2, allow_nan=False) + "\n")
 
+    validate_manifest(manifest, validation_size=len(features))
     selected = np.asarray(manifest["validation_indices"], dtype=np.int64)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     rows = [
