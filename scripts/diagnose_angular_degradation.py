@@ -472,8 +472,8 @@ def save_angular_plots(output_dir, *, epoch, prediction, truth, plot_bins):
     return paths
 
 
-def _parameter_gradient(loss, parameters):
-    gradients = torch.autograd.grad(loss, parameters, retain_graph=True, allow_unused=True)
+def _parameter_gradient(loss, parameters, *, retain_graph):
+    gradients = torch.autograd.grad(loss, parameters, retain_graph=retain_graph, allow_unused=True)
     return torch.cat(
         [
             (torch.zeros_like(parameter) if gradient is None else gradient).reshape(-1)
@@ -489,8 +489,8 @@ def gradient_diagnostic_rows(model, features, targets, gradient_indices, *, epoc
     indices = torch.as_tensor(gradient_indices, dtype=torch.long, device=features.device)
     features = features[indices]
     targets = targets[indices]
-    _, losses = model._compute_batch_losses(features, targets)
-    prediction = model(features)
+    prediction, auxiliary = model(features, return_aux=True)
+    _, losses = model._compute_losses(features, targets, prediction, auxiliary["cond"], auxiliary)
     residual = (prediction - targets[:, :8]).reshape(len(prediction), 2, 4)
     residual = residual / model.w_fourvec_scales
     references = {
@@ -501,14 +501,15 @@ def gradient_diagnostic_rows(model, features, targets, gradient_indices, *, epoc
     parameters = tuple(parameter for parameter in model.parameters() if parameter.requires_grad)
     if not parameters:
         raise ValueError("gradient diagnostics require trainable model parameters")
-    reference_gradients = {
-        name: _parameter_gradient(loss, parameters) for name, loss in references.items()
-    }
     all_losses = {**losses, **references}
+    gradients = {
+        name: _parameter_gradient(loss, parameters, retain_graph=index < len(all_losses) - 1)
+        for index, (name, loss) in enumerate(all_losses.items())
+    }
     rows = []
     for name, loss in all_losses.items():
         weight = 0.5 * weights.get("huber", 0.0) if name in references else weights.get(name, 0.0)
-        gradient = _parameter_gradient(loss, parameters)
+        gradient = gradients[name]
         rows.append(
             {
                 "epoch": epoch,
@@ -517,14 +518,10 @@ def gradient_diagnostic_rows(model, features, targets, gradient_indices, *, epoc
                 "effective_weight": float(weight),
                 "weighted_gradient_l2": float(abs(weight) * torch.linalg.vector_norm(gradient)),
                 "cosine_huber_wplus": float(
-                    F.cosine_similarity(
-                        gradient, reference_gradients["huber_wplus"], dim=0, eps=1.0e-12
-                    )
+                    F.cosine_similarity(gradient, gradients["huber_wplus"], dim=0, eps=1.0e-12)
                 ),
                 "cosine_huber_wminus": float(
-                    F.cosine_similarity(
-                        gradient, reference_gradients["huber_wminus"], dim=0, eps=1.0e-12
-                    )
+                    F.cosine_similarity(gradient, gradients["huber_wminus"], dim=0, eps=1.0e-12)
                 ),
             }
         )
