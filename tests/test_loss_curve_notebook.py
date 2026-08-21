@@ -1,30 +1,18 @@
-import json
-from pathlib import Path
-
 import matplotlib
+
 matplotlib.use("Agg")
 from matplotlib import pyplot as plt
 import numpy as np
 import pandas as pd
 
-
-REPO_ROOT = Path(__file__).resolve().parents[1]
-NOTEBOOK_PATH = REPO_ROOT / "notebooks" / "visualize.ipynb"
-
-
-def load_loss_cell():
-    notebook = json.loads(NOTEBOOK_PATH.read_text())
-    cell = next(cell for cell in notebook["cells"] if cell.get("id") == "loss-curves")
-    assert cell["execution_count"] is None
-    assert cell["outputs"] == []
-    namespace = {
-        "LOG_DIR": None,
-        "np": np,
-        "pd": pd,
-        "plt": plt,
-    }
-    exec("".join(cell["source"]), namespace)
-    return namespace
+from notebooks import plottingtool
+from notebooks.plottingtool import (
+    LOSS_COMPONENTS,
+    _metric_series,
+    _prepare_loss_plot_data,
+    plot_gradient_cosine_heatmaps,
+    plot_loss_curves,
+)
 
 
 def sparse_metrics(epochs, component_values, weights):
@@ -46,7 +34,6 @@ def sparse_metrics(epochs, component_values, weights):
 
 
 def test_static_data_keeps_epoch_zero_and_reconstructs_totals():
-    namespace = load_loss_cell()
     weights = {"huber": 2.0, "dmet": 3.0}
     df = sparse_metrics(
         epochs=[0, 1, 2],
@@ -63,7 +50,7 @@ def test_static_data_keeps_epoch_zero_and_reconstructs_totals():
         }
     }
 
-    data = namespace["_prepare_loss_plot_data"](df, cfg)
+    data = _prepare_loss_plot_data(df, cfg)
 
     assert data["best_epoch"] == 1
     assert data["final_epoch"] == 2
@@ -76,7 +63,6 @@ def test_static_data_keeps_epoch_zero_and_reconstructs_totals():
 
 
 def test_partial_loss_weights_inherit_model_defaults():
-    namespace = load_loss_cell()
     expected_weights = {
         "huber": 1.0,
         "higgs_mass": 0.0,
@@ -96,7 +82,7 @@ def test_partial_loss_weights_inherit_model_defaults():
     )
     cfg = {"parameters": {"loss_weights": {"dmet": 2.0}}}
 
-    data = namespace["_prepare_loss_plot_data"](df, cfg)
+    data = _prepare_loss_plot_data(df, cfg)
 
     assert {
         name: series.iloc[0]
@@ -106,7 +92,6 @@ def test_partial_loss_weights_inherit_model_defaults():
 
 
 def test_logged_weights_override_static_config_and_use_last_duplicate():
-    namespace = load_loss_cell()
     df = sparse_metrics(
         epochs=[0, 1, 2],
         component_values={
@@ -130,7 +115,7 @@ def test_logged_weights_override_static_config_and_use_last_duplicate():
         }
     }
 
-    data = namespace["_prepare_loss_plot_data"](df, cfg)
+    data = _prepare_loss_plot_data(df, cfg)
 
     pd.testing.assert_series_equal(
         data["weights"]["huber"],
@@ -143,7 +128,6 @@ def test_logged_weights_override_static_config_and_use_last_duplicate():
 
 
 def test_sparse_logged_weights_seed_initial_value_then_forward_fill():
-    namespace = load_loss_cell()
     df = sparse_metrics(
         epochs=[0, 1, 2, 3],
         component_values={"huber": ([1.0] * 4, [1.0] * 4)},
@@ -162,7 +146,7 @@ def test_sparse_logged_weights_seed_initial_value_then_forward_fill():
         ignore_index=True,
     )
 
-    data = namespace["_prepare_loss_plot_data"](
+    data = _prepare_loss_plot_data(
         df,
         {"parameters": {"loss_weights": {"huber": 2.0}}},
     )
@@ -178,7 +162,6 @@ def test_sparse_logged_weights_seed_initial_value_then_forward_fill():
 
 
 def test_component_only_epoch_gets_forward_filled_effective_weight():
-    namespace = load_loss_cell()
     df = pd.DataFrame(
         [
             {"epoch": 0, "loss": 5.0, "val_loss": 6.0},
@@ -187,7 +170,7 @@ def test_component_only_epoch_gets_forward_filled_effective_weight():
         ]
     )
 
-    data = namespace["_prepare_loss_plot_data"](
+    data = _prepare_loss_plot_data(
         df,
         {"parameters": {"loss_weights": {"huber": 1.0}}},
     )
@@ -205,7 +188,6 @@ def test_component_only_epoch_gets_forward_filled_effective_weight():
 
 
 def test_metric_series_keeps_last_value_for_duplicate_epoch():
-    namespace = load_loss_cell()
     df = pd.DataFrame(
         {
             "epoch": [1, 0, 1],
@@ -213,7 +195,7 @@ def test_metric_series_keeps_last_value_for_duplicate_epoch():
         }
     )
 
-    result = namespace["_metric_series"](df, "huber_loss")
+    result = _metric_series(df, "huber_loss")
 
     pd.testing.assert_series_equal(
         result,
@@ -222,8 +204,7 @@ def test_metric_series_keeps_last_value_for_duplicate_epoch():
 
 
 def test_plot_loss_curves_builds_two_slide_subplot_figures(tmp_path, capsys):
-    namespace = load_loss_cell()
-    component_names = [name for name, _ in namespace["LOSS_COMPONENTS"]]
+    component_names = [name for name, _ in LOSS_COMPONENTS]
     weights = {name: index + 1.0 for index, name in enumerate(component_names)}
     df = sparse_metrics(
         epochs=[0, 1],
@@ -241,7 +222,7 @@ def test_plot_loss_curves_builds_two_slide_subplot_figures(tmp_path, capsys):
     df.to_csv(metrics_path, index=False)
     cfg = {"parameters": {"loss_weights": weights, "adaptive_loss_weights": False}}
 
-    diagnostics = namespace["plot_loss_curves"](metrics_path, cfg)
+    diagnostics = plot_loss_curves(metrics_path, cfg)
 
     assert diagnostics["mismatches"] == ["val"]
     assert [len(figure.axes) for figure in diagnostics["figures"]] == [8, 8]
@@ -254,7 +235,7 @@ def test_plot_loss_curves_builds_two_slide_subplot_figures(tmp_path, capsys):
     assert (weighted_figure.axes[0].get_subplotspec().get_gridspec().nrows,
             weighted_figure.axes[0].get_subplotspec().get_gridspec().ncols) == (2, 4)
 
-    for index, (name, label) in enumerate(namespace["LOSS_COMPONENTS"]):
+    for index, (name, label) in enumerate(LOSS_COMPONENTS):
         raw_axis = raw_figure.axes[index]
         weighted_axis = weighted_figure.axes[index]
         raw_lines = {line.get_label(): line for line in raw_axis.lines}
@@ -324,41 +305,35 @@ def test_plot_loss_curves_builds_two_slide_subplot_figures(tmp_path, capsys):
 
 
 def test_removed_loss_dashboard_helpers_are_absent():
-    namespace = load_loss_cell()
-
-    assert "_contribution_shares" not in namespace
-    assert "_loss_summary" not in namespace
-    assert "Normalize" not in namespace
+    assert not hasattr(plottingtool, "_contribution_shares")
+    assert not hasattr(plottingtool, "_loss_summary")
+    assert not hasattr(plottingtool, "Normalize")
 
 
 def test_plot_loss_curves_reports_missing_csv(tmp_path, capsys):
-    namespace = load_loss_cell()
-
-    result = namespace["plot_loss_curves"](tmp_path / "missing.csv", {"parameters": {}})
+    result = plot_loss_curves(tmp_path / "missing.csv", {"parameters": {}})
 
     assert result is None
     assert "No metrics.csv found" in capsys.readouterr().out
 
 
 def test_plot_loss_curves_reports_empty_csv(tmp_path, capsys):
-    namespace = load_loss_cell()
     metrics_path = tmp_path / "metrics.csv"
     metrics_path.write_text("")
 
-    result = namespace["plot_loss_curves"](metrics_path, {"parameters": {}})
+    result = plot_loss_curves(metrics_path, {"parameters": {}})
 
     assert result is None
     assert "Cannot plot losses" in capsys.readouterr().out
 
 
 def test_plot_loss_curves_reports_when_all_components_are_unavailable(tmp_path, capsys):
-    namespace = load_loss_cell()
     metrics_path = tmp_path / "metrics.csv"
     pd.DataFrame(
         {"epoch": [0, 1], "loss": [2.0, 1.0], "val_loss": [3.0, 2.0]}
     ).to_csv(metrics_path, index=False)
 
-    diagnostics = namespace["plot_loss_curves"](metrics_path, {"parameters": {}})
+    diagnostics = plot_loss_curves(metrics_path, {"parameters": {}})
 
     raw_figure, weighted_figure = diagnostics["figures"]
     assert [len(figure.axes) for figure in diagnostics["figures"]] == [8, 8]
@@ -367,25 +342,14 @@ def test_plot_loss_curves_reports_when_all_components_are_unavailable(tmp_path, 
     assert all(not axis.axison for axis in weighted_figure.axes)
     assert "summary" not in diagnostics
     assert "contribution_shares" not in diagnostics
-    assert len(diagnostics["unavailable"]) == len(namespace["LOSS_COMPONENTS"])
+    assert len(diagnostics["unavailable"]) == len(LOSS_COMPONENTS)
     assert "Unavailable train/validation pairs" in capsys.readouterr().out
     plt.close("all")
 
 
-def test_gradient_cosine_cell_loads_its_own_metrics(tmp_path, capsys):
-    metrics_path = tmp_path / "metrics.csv"
-    pd.DataFrame({"epoch": [0], "loss": [1.0]}).to_csv(metrics_path, index=False)
-    notebook = json.loads(NOTEBOOK_PATH.read_text())
-    cell = next(cell for cell in notebook["cells"] if cell.get("id") == "grad-cos-plot")
-    namespace = {
-        "LOG_DIR": tmp_path,
-        "np": np,
-        "pd": pd,
-        "plt": plt,
-    }
+def test_plot_gradient_cosine_heatmaps_reports_missing_columns(capsys):
+    df = pd.DataFrame({"epoch": [0], "loss": [1.0]})
 
-    exec("".join(cell["source"]), namespace)
+    plot_gradient_cosine_heatmaps(df)
 
     assert "No grad_cos columns found" in capsys.readouterr().out
-    assert cell["execution_count"] is None
-    assert cell["outputs"] == []
