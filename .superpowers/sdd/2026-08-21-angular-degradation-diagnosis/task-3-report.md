@@ -117,5 +117,6 @@ This report is committed as a task-metadata follow-up to that implementation com
 - Checkpoints are loaded separately for fixed-panel inference and 512-event gradient evaluation.
   This avoids retaining the 4,096-event inference model/graph and keeps the existing evaluator
   minimally changed, at the cost of one additional trusted checkpoint load per epoch.
-- The first RED attempt hit the same class of intermittent native import segmentation fault noted
-  in Task 2; all subsequent focused and full serial verification runs completed normally.
+- The first RED attempt and one post-commit verification attempt hit the same class of intermittent
+  native import segmentation fault noted in Task 2. Both immediate serial retries completed
+  normally; the final retry passed all 221 tests in 5.14 seconds.
