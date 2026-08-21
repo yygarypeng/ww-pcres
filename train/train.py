@@ -209,7 +209,7 @@ def build_training_callbacks(params):
         ModelCheckpoint(
             monitor="val_loss",
             mode="min",
-            save_top_k=3,
+            save_top_k=16,
             save_last=True,
             filename="reg-{epoch:02d}-{val_loss:.2f}",
         ),
