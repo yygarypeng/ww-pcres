@@ -721,6 +721,54 @@ class LocalMMDTest(unittest.TestCase):
 
         torch.testing.assert_close(loss, torch.tensor(0.0))
 
+    def test_v_statistic_is_nonnegative(self):
+        loss = loss_module.compute_local_mmd(
+            torch.tensor([[0.0]]),
+            torch.tensor([[1.0]]),
+            torch.tensor([[0.0]]),
+            local=False,
+            feature_bandwidths=[1.0],
+            estimator="v",
+        )
+
+        self.assertGreaterEqual(float(loss), 0.0)
+        torch.testing.assert_close(loss, torch.tensor(1.0))
+
+    def test_absolute_feature_bandwidths_are_reused(self):
+        narrow_multiplier = loss_module.compute_local_mmd(
+            self.pred,
+            self.truth,
+            self.condition,
+            local=False,
+            feature_bandwidths=[0.75],
+            feature_bandwidth_multipliers=[0.01],
+        )
+        wide_multiplier = loss_module.compute_local_mmd(
+            self.pred,
+            self.truth,
+            self.condition,
+            local=False,
+            feature_bandwidths=[0.75],
+            feature_bandwidth_multipliers=[100.0],
+        )
+
+        torch.testing.assert_close(narrow_multiplier, wide_multiplier)
+
+    def test_default_estimator_is_unchanged_u_statistic(self):
+        default = loss_module.compute_local_mmd(
+            self.pred,
+            self.truth,
+            self.condition,
+        )
+        explicit_u = loss_module.compute_local_mmd(
+            self.pred,
+            self.truth,
+            self.condition,
+            estimator="u",
+        )
+
+        self.assertTrue(torch.equal(default, explicit_u))
+
     def test_rejects_non_boolean_local(self):
         with self.assertRaisesRegex(ValueError, "local must be a boolean"):
             loss_module.compute_local_mmd(
@@ -1046,6 +1094,16 @@ class MassMMDTest(unittest.TestCase):
 
 
 class AngularMMDTest(unittest.TestCase):
+    def test_feature_order_is_w_plus_then_w_minus(self):
+        angles = torch.tensor(
+            [[0.0, -torch.pi / 2.0, torch.pi, torch.pi]],
+        )
+
+        features = loss_module.angular_mmd_features(angles)
+
+        expected = torch.tensor([[-1.0, -1.0, 0.0, 1.0, 0.0, -1.0]])
+        torch.testing.assert_close(features, expected, atol=1.0e-6, rtol=0.0)
+
     def test_encodes_phi_as_sine_cosine_pairs(self):
         true_booster = Mock()
         pred_booster = Mock()

@@ -103,6 +103,26 @@ def _mass_features(w_fourvecs, center, scale):
     return (transformed - center) / scale
 
 
+def angular_mmd_features(angles):
+    """Encode (theta+, phi+, theta-, phi-) in charge order for angular MMD."""
+    theta_pos = angles[..., 0]
+    phi_pos = angles[..., 1]
+    theta_neg = angles[..., 2]
+    phi_neg = angles[..., 3]
+
+    return torch.stack(
+        [
+            2.0 * theta_pos / torch.pi - 1.0,
+            torch.sin(phi_pos),
+            torch.cos(phi_pos),
+            2.0 * theta_neg / torch.pi - 1.0,
+            torch.sin(phi_neg),
+            torch.cos(phi_neg),
+        ],
+        dim=-1,
+    )
+
+
 ####################
 # Loss functions
 ####################
@@ -155,19 +175,29 @@ def compute_local_mmd(
     condition_kernel="rbf",
     feature_bandwidth_multipliers=(0.25, 0.5, 1.0, 2.0),
     condition_bandwidth_multipliers=(0.5, 1.0, 2.0),
+    feature_bandwidths=None,
+    estimator="u",
 ):
-    """Paired off-diagonal feature MMD, optionally localized by a condition kernel.
+    """Paired feature MMD, optionally localized by a condition kernel.
 
-    All i == j terms are excluded from XX, YY, XY, and YX. The remaining
-    pairwise terms are averaged over n * (n - 1), so this finite-batch
-    estimator can be negative.
+    The default U-statistic excludes paired diagonal terms and can be negative.
+    The V-statistic includes all terms and is nonnegative. Feature bandwidths
+    may be fixed absolutely or inferred from y using the multiplier defaults.
     """
     if not isinstance(local, bool):
         raise ValueError("local must be a boolean")
-    feature_bandwidth_multipliers = _validate_bandwidth_multipliers(
-        feature_bandwidth_multipliers,
-        "feature_bandwidth_multipliers",
-    )
+    if estimator not in ("u", "v"):
+        raise ValueError("estimator must be 'u' or 'v'")
+    if feature_bandwidths is None:
+        feature_bandwidth_multipliers = _validate_bandwidth_multipliers(
+            feature_bandwidth_multipliers,
+            "feature_bandwidth_multipliers",
+        )
+    else:
+        feature_bandwidths = _validate_bandwidth_multipliers(
+            feature_bandwidths,
+            "feature_bandwidths",
+        )
     if local:
         condition_bandwidth_multipliers = _validate_bandwidth_multipliers(
             condition_bandwidth_multipliers,
@@ -189,7 +219,7 @@ def compute_local_mmd(
     y = y[finit_mask]
     cond = cond[finit_mask]
 
-    if x.shape[0] < 2:
+    if x.shape[0] == 0 or (estimator == "u" and x.shape[0] < 2):
         return (
             torch.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0).sum()
             + torch.nan_to_num(y, nan=0.0, posinf=0.0, neginf=0.0).sum()
@@ -197,8 +227,11 @@ def compute_local_mmd(
         ) * 0.0
 
     with torch.no_grad():
-        feature_scale = _positive_median_pairwise_distance(y)
-        feature_bandwidths = [value * feature_scale for value in feature_bandwidth_multipliers]
+        if feature_bandwidths is None:
+            feature_scale = _positive_median_pairwise_distance(y)
+            feature_bandwidths = [
+                value * feature_scale for value in feature_bandwidth_multipliers
+            ]
         if local:
             condition_scale = _positive_median_pairwise_distance(cond)
             condition_bandwidths = [
@@ -252,6 +285,8 @@ def compute_local_mmd(
         XY = XY * cond_matrix
 
     h = XX + YY - XY - XY.T
+    if estimator == "v":
+        return h.mean().clamp_min(0.0)
     off_diagonal = ~torch.eye(h.shape[0], dtype=torch.bool, device=h.device)
     return h[off_diagonal].mean()
 
@@ -310,24 +345,6 @@ def mass_mmd(x_batch, y_true, y_pred, cond, center, scale, **mmd_kwargs):
 
 
 def angular_mmd(x_batch, y_true, y_pred, cond, **mmd_kwargs):
-    def _features_for_mmd(angles):
-        theta0 = angles[..., 0]
-        phi0 = angles[..., 1]
-        theta1 = angles[..., 2]
-        phi1 = angles[..., 3]
-
-        return torch.stack(
-            [
-                2.0 * theta0 / torch.pi - 1.0,
-                torch.sin(phi0),
-                torch.cos(phi0),
-                2.0 * theta1 / torch.pi - 1.0,
-                torch.sin(phi1),
-                torch.cos(phi1),
-            ],
-            dim=-1,
-        )
-
     lep = x_batch[..., :8]
     true_w0, true_w1 = y_true[..., :4], y_true[..., 4:8]
     pred_w0, pred_w1 = y_pred[..., :4], y_pred[..., 4:8]
@@ -345,8 +362,8 @@ def angular_mmd(x_batch, y_true, y_pred, cond, **mmd_kwargs):
             torch.nan_to_num(pred_w, nan=0.0, posinf=0.0, neginf=0.0) * 0.0
         ).sum()
 
-    true_ang = _features_for_mmd(true_ang)
-    pred_ang = _features_for_mmd(pred_ang)
+    true_ang = angular_mmd_features(true_ang)
+    pred_ang = angular_mmd_features(pred_ang)
 
     cond = cond[valid]
     return compute_local_mmd(pred_ang, true_ang, cond, **mmd_kwargs)
