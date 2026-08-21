@@ -2,6 +2,7 @@ import re
 
 import numpy as np
 import pytest
+import torch
 
 from data.data_module import WBosonDataModule
 
@@ -76,3 +77,39 @@ def test_presplit_validation_is_checked_before_test_validation():
             X_test=np.zeros((3, 3)),
             Y_test=np.zeros((2, 2)),
         )
+
+
+def test_training_shuffle_continues_from_restored_generator_state():
+    features = np.arange(12, dtype=np.float32).reshape(-1, 1)
+    targets = np.zeros((12, 1), dtype=np.float32)
+
+    def make_datamodule():
+        datamodule = WBosonDataModule(
+            features,
+            targets,
+            X_val=features[:2],
+            Y_val=targets[:2],
+            batch_size=4,
+            seed=73,
+            num_workers=0,
+            pin_memory=False,
+        )
+        datamodule.setup()
+        return datamodule
+
+    def epoch_order(datamodule):
+        return torch.cat(
+            [batch_features[:, 0] for batch_features, _ in datamodule.train_dataloader()]
+        )
+
+    uninterrupted = make_datamodule()
+    initial_order = epoch_order(uninterrupted)
+    saved_state = uninterrupted.state_dict()
+    expected_next_order = epoch_order(uninterrupted)
+
+    restored = make_datamodule()
+    restored.load_state_dict(saved_state)
+    restored_next_order = epoch_order(restored)
+
+    torch.testing.assert_close(restored_next_order, expected_next_order, rtol=0, atol=0)
+    assert not torch.equal(restored_next_order, initial_order)

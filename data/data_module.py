@@ -122,6 +122,7 @@ class WBosonDataModule(L.LightningDataModule):
         self.pin_memory = bool(pin_memory and torch.cuda.is_available())
         self.prefetch_factor = prefetch_factor
         self.seed = int(seed)
+        self._train_generator = torch.Generator().manual_seed(self.seed)
 
         if num_workers is None:
             cpu_count = os.cpu_count() or 1
@@ -226,6 +227,12 @@ class WBosonDataModule(L.LightningDataModule):
     def _make_generator(self):
         return torch.Generator().manual_seed(self.seed)
 
+    def state_dict(self):
+        return {"train_generator_state": self._train_generator.get_state()}
+
+    def load_state_dict(self, state_dict):
+        self._train_generator.set_state(state_dict["train_generator_state"])
+
     def train_indices_array(self):
         if self.train_ds is None:
             raise RuntimeError("DataModule.setup() must be called before requesting split indices")
@@ -244,7 +251,7 @@ class WBosonDataModule(L.LightningDataModule):
             "pin_memory": self.pin_memory,
             "persistent_workers": self.persistent_workers,
             "worker_init_fn": self._worker_init_fn,
-            "generator": self._make_generator(),
+            "generator": self._train_generator if shuffle else self._make_generator(),
         }
         if self.prefetch_factor is not None:
             kwargs["prefetch_factor"] = self.prefetch_factor

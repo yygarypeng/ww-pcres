@@ -240,10 +240,23 @@ class RNGStateCallback(Callback):
         self._pending_state = None
 
 
+class RetentionModelCheckpoint(ModelCheckpoint):
+    @property
+    def state_key(self):
+        return self._generate_state_key(
+            monitor=self.monitor,
+            mode=self.mode,
+            every_n_train_steps=self._every_n_train_steps,
+            every_n_epochs=self._every_n_epochs,
+            train_time_interval=self._train_time_interval,
+            save_top_k=self.save_top_k,
+        )
+
+
 def build_training_callbacks(params):
     save_every_epoch = params.get("save_every_epoch", False)
     callbacks = [
-        ModelCheckpoint(
+        RetentionModelCheckpoint(
             monitor="val_loss",
             mode="min",
             save_top_k=-1 if save_every_epoch else 16,
@@ -259,9 +272,8 @@ def build_training_callbacks(params):
             mode="min",
             verbose=False,
         ),
+        RNGStateCallback(),
     ]
-    if save_every_epoch:
-        callbacks.append(RNGStateCallback())
     return callbacks
 
 
@@ -313,10 +325,12 @@ def run_training(
     callbacks = build_training_callbacks(params)
     ckpt = callbacks[0]
     steps_per_epoch = max(1, len(dm.train_dataloader()))
+    saved_path = resolve_repo_path(saved_path).resolve()
     resume_from = getattr(arg, "resume_from", None)
-    resume_path = resolve_repo_path(resume_from) if resume_from else None
-    if resume_path is None:
-        clean_training_output(saved_path)
+    resume_path = resolve_repo_path(resume_from).resolve() if resume_from else None
+    if resume_path is not None and resume_path.is_relative_to(saved_path):
+        raise ValueError("resume_from checkpoint must be outside paths.saved_path")
+    clean_training_output(saved_path)
     loggers, wandb_logger = create_loggers(cfg, model, saved_path, arg, steps_per_epoch)
 
     trainer = Trainer(
