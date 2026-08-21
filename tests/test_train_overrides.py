@@ -265,7 +265,8 @@ class DeferredEarlyStoppingTest(unittest.TestCase):
         checkpoint = callbacks[0]
         self.assertEqual(checkpoint.save_top_k, 16)
         self.assertTrue(checkpoint.save_last)
-        self.assertEqual(len(callbacks), 2)
+        self.assertEqual(len(callbacks), 3)
+        self.assertIsInstance(callbacks[2], train_module.RNGStateCallback)
 
     def test_diagnosis_checkpointing_saves_every_epoch_and_last(self):
         callbacks = build_training_callbacks({"save_every_epoch": True})
@@ -277,6 +278,12 @@ class DeferredEarlyStoppingTest(unittest.TestCase):
         self.assertTrue(
             any(isinstance(callback, train_module.RNGStateCallback) for callback in callbacks)
         )
+
+    def test_checkpoint_state_identity_differs_by_retention_mode(self):
+        top_16_checkpoint = build_training_callbacks({})[0]
+        all_epoch_checkpoint = build_training_callbacks({"save_every_epoch": True})[0]
+
+        self.assertNotEqual(top_16_checkpoint.state_key, all_epoch_checkpoint.state_key)
 
 
 class RNGStateCallbackTest(unittest.TestCase):
@@ -326,7 +333,7 @@ class RNGStateCallbackTest(unittest.TestCase):
 
 
 class ResumeTrainingTest(unittest.TestCase):
-    def test_resume_uses_lightning_full_checkpoint_restore(self):
+    def _run_training(self, *, saved_path, resume_from, clean_output, create_loggers, trainer_class):
         params = {
             "batch_size": 2,
             "epochs": 1,
@@ -345,9 +352,9 @@ class ResumeTrainingTest(unittest.TestCase):
                 "build_training_callbacks",
                 return_value=[SimpleNamespace()],
             ),
-            unittest.mock.patch.object(train_module, "clean_training_output") as clean_output,
-            unittest.mock.patch.object(train_module, "create_loggers", return_value=([], None)),
-            unittest.mock.patch.object(train_module, "Trainer") as trainer_class,
+            unittest.mock.patch.object(train_module, "clean_training_output", clean_output),
+            unittest.mock.patch.object(train_module, "create_loggers", create_loggers),
+            unittest.mock.patch.object(train_module, "Trainer", trainer_class),
         ):
             train_module.run_training(
                 cfg,
@@ -358,16 +365,55 @@ class ResumeTrainingTest(unittest.TestCase):
                 np.ones(3),
                 (0.0, 1.0),
                 np.ones(2),
-                "unused-output",
-                SimpleNamespace(resume_from="outputs/epoch=17.ckpt"),
+                saved_path,
+                SimpleNamespace(resume_from=resume_from),
             )
 
-        model_class.load_from_checkpoint.assert_not_called()
+        return model_class, datamodule
+
+    def test_resume_rejects_checkpoint_inside_destination_tree(self):
+        clean_output = unittest.mock.Mock()
+        create_loggers = unittest.mock.Mock(return_value=([], None))
+        trainer_class = unittest.mock.Mock()
+
+        with self.assertRaisesRegex(ValueError, "outside.*saved_path"):
+            self._run_training(
+                saved_path=train_module.resolve_repo_path("outputs/continuation"),
+                resume_from="outputs/continuation/checkpoints/epoch=17.ckpt",
+                clean_output=clean_output,
+                create_loggers=create_loggers,
+                trainer_class=trainer_class,
+            )
+
         clean_output.assert_not_called()
+        create_loggers.assert_not_called()
+        trainer_class.assert_not_called()
+
+    def test_separate_destination_is_cleaned_before_loggers_on_full_resume(self):
+        calls = []
+        clean_output = unittest.mock.Mock(side_effect=lambda path: calls.append("clean"))
+        create_loggers = unittest.mock.Mock(
+            side_effect=lambda *args: (calls.append("loggers") or ([], None))
+        )
+        trainer_class = unittest.mock.Mock()
+        saved_path = train_module.resolve_repo_path("outputs/continuation")
+        resume_from = "outputs/baseline/checkpoints/epoch=17.ckpt"
+
+        model_class, datamodule = self._run_training(
+            saved_path=saved_path,
+            resume_from=resume_from,
+            clean_output=clean_output,
+            create_loggers=create_loggers,
+            trainer_class=trainer_class,
+        )
+
+        model_class.load_from_checkpoint.assert_not_called()
+        clean_output.assert_called_once_with(saved_path)
+        self.assertEqual(calls, ["clean", "loggers"])
         trainer_class.return_value.fit.assert_called_once_with(
             model_class.return_value,
             datamodule=datamodule,
-            ckpt_path=train_module.resolve_repo_path("outputs/epoch=17.ckpt"),
+            ckpt_path=train_module.resolve_repo_path(resume_from),
             weights_only=False,
         )
 
