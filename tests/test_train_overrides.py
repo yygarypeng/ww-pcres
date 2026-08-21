@@ -1,9 +1,11 @@
+import random
 import unittest
 import unittest.mock
 from argparse import Namespace
 from types import SimpleNamespace
 
 import numpy as np
+import torch
 from pytorch_lightning.callbacks import EarlyStopping
 from pytorch_lightning.trainer.states import TrainerFn
 
@@ -25,6 +27,15 @@ class TrainingOverrideTest(unittest.TestCase):
             args = parse_args()
 
         self.assertEqual(args.higgs_mass_weight, 4.5)
+
+    def test_parser_and_override_enable_save_every_epoch(self):
+        config = {"parameters": {"save_every_epoch": False}}
+        with unittest.mock.patch("sys.argv", ["train.py", "--save-every-epoch"]):
+            args = parse_args()
+
+        updated = apply_cli_overrides(config, args)
+
+        self.assertTrue(updated["parameters"]["save_every_epoch"])
 
     def test_higgs_mass_weight_override_changes_only_higgs_weight(self):
         config = {
@@ -247,6 +258,118 @@ class DeferredEarlyStoppingTest(unittest.TestCase):
         callbacks = build_training_callbacks({})
 
         self.assertEqual(callbacks[1].start_epoch, 0)
+
+    def test_default_checkpointing_keeps_top_16_and_last(self):
+        callbacks = build_training_callbacks({})
+
+        checkpoint = callbacks[0]
+        self.assertEqual(checkpoint.save_top_k, 16)
+        self.assertTrue(checkpoint.save_last)
+        self.assertEqual(len(callbacks), 2)
+
+    def test_diagnosis_checkpointing_saves_every_epoch_and_last(self):
+        callbacks = build_training_callbacks({"save_every_epoch": True})
+
+        checkpoint = callbacks[0]
+        self.assertEqual(checkpoint.save_top_k, -1)
+        self.assertEqual(checkpoint.every_n_epochs, 1)
+        self.assertTrue(checkpoint.save_last)
+        self.assertTrue(
+            any(isinstance(callback, train_module.RNGStateCallback) for callback in callbacks)
+        )
+
+
+class RNGStateCallbackTest(unittest.TestCase):
+    def test_restores_python_numpy_torch_cpu_and_all_cuda_rng_states(self):
+        callback = train_module.RNGStateCallback()
+        random.seed(101)
+        np.random.seed(202)
+        torch.manual_seed(303)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(404)
+        state = callback.state_dict()
+
+        expected_python = random.random()
+        expected_numpy = np.random.random()
+        expected_torch = torch.rand(4)
+        expected_cuda_states = [rng_state.clone() for rng_state in state["cuda"]]
+
+        random.seed(501)
+        np.random.seed(502)
+        torch.manual_seed(503)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(504)
+
+        callback.load_state_dict(state)
+        self.assertNotEqual(random.random(), expected_python)
+        callback.on_train_start(None, None)
+
+        self.assertEqual(random.random(), expected_python)
+        self.assertEqual(np.random.random(), expected_numpy)
+        torch.testing.assert_close(torch.rand(4), expected_torch, rtol=0, atol=0)
+        self.assertEqual(len(torch.cuda.get_rng_state_all()), len(expected_cuda_states))
+        for actual, expected in zip(torch.cuda.get_rng_state_all(), expected_cuda_states):
+            torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+
+    def test_restores_only_once_at_training_start(self):
+        callback = train_module.RNGStateCallback()
+        random.seed(601)
+        state = callback.state_dict()
+        callback.load_state_dict(state)
+        callback.on_train_start(None, None)
+
+        first = random.random()
+        callback.on_train_start(None, None)
+        second = random.random()
+
+        self.assertNotEqual(first, second)
+
+
+class ResumeTrainingTest(unittest.TestCase):
+    def test_resume_uses_lightning_full_checkpoint_restore(self):
+        params = {
+            "batch_size": 2,
+            "epochs": 1,
+            "learning_rate": 1.0e-4,
+            "loss_weights": {"huber": 1.0},
+            "d_model": 8,
+            "n_heads": 2,
+        }
+        cfg = {"parameters": params}
+        datamodule = SimpleNamespace(train_dataloader=lambda: [object()], test_ds=None)
+
+        with (
+            unittest.mock.patch.object(train_module, "LightningWBoson") as model_class,
+            unittest.mock.patch.object(
+                train_module,
+                "build_training_callbacks",
+                return_value=[SimpleNamespace()],
+            ),
+            unittest.mock.patch.object(train_module, "clean_training_output") as clean_output,
+            unittest.mock.patch.object(train_module, "create_loggers", return_value=([], None)),
+            unittest.mock.patch.object(train_module, "Trainer") as trainer_class,
+        ):
+            train_module.run_training(
+                cfg,
+                datamodule,
+                21,
+                (np.zeros(21), np.ones(21)),
+                (np.zeros(3), np.ones(3)),
+                np.ones(3),
+                (0.0, 1.0),
+                np.ones(2),
+                "unused-output",
+                SimpleNamespace(resume_from="outputs/epoch=17.ckpt"),
+            )
+
+        model_class.load_from_checkpoint.assert_not_called()
+        clean_output.assert_not_called()
+        trainer_class.return_value.fit.assert_called_once_with(
+            model_class.return_value,
+            datamodule=datamodule,
+            ckpt_path=train_module.resolve_repo_path("outputs/epoch=17.ckpt"),
+            weights_only=False,
+        )
 
 
 class TrainingScaleTest(unittest.TestCase):
