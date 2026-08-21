@@ -128,8 +128,6 @@ The MMD condition path is separate from neural aggregation and constructs three 
 
 The loader also builds 10 targets. Target columns contain each W boson's `(px, py, pz, energy)` in GeV followed by the two truth W masses. Each truth W must be finite and timelike, have a nonnegative stored mass, and agree with $E^2-|p|^2$ within `1e-6 + 1e-6` times the sum-of-squares scale; the combined W pair must also be timelike.
 
-The current input-preprocessing schema version is 3. Checkpoints from earlier preprocessing schemas, including schema-version-2 checkpoints created before the current decoder and regression-head architecture, are incompatible and require retraining; partial weight migration is not supported. Preserve existing checkpoints, ONNX files, and run outputs. Because a fresh training run deletes its configured run directory, set `paths.saved_path` to a new directory before retraining.
-
 ## ONNX
 
 ONNX export is a supported workflow. See `onnx/README.md`.
