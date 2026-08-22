@@ -49,8 +49,6 @@ def build_continuation_specs(base_config, angular_bandwidths, *, output_root):
                 "epochs": 137,
                 "save_every_epoch": True,
                 "disable_early_stopping": True,
-                "num_workers": 0,
-                "persistent_workers": False,
             }
         )
         config.setdefault("paths", {})["saved_path"] = str(Path(output_root) / name)

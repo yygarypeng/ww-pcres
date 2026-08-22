@@ -19,6 +19,7 @@ from scripts.diagnose_angular_degradation import (
     build_angular_selection,
     build_manifest,
     gradient_diagnostic_rows,
+    legacy_raw_mmd_kwargs,
     manifest_partition_positions,
     partitioned_raw_mmd,
     save_angular_plots,
@@ -27,6 +28,24 @@ from scripts.diagnose_angular_degradation import (
     write_gradient_csv,
     write_metrics_csv,
 )
+
+
+def test_legacy_raw_mmd_kwargs_override_fixed_v_checkpoint_policy():
+    model = SimpleNamespace(
+        _mmd_kwargs=lambda _name: {
+            "local": False,
+            "feature_kernel": "imq",
+            "feature_bandwidth_multipliers": [0.05, 0.5, 5.0],
+            "estimator": "v",
+            "feature_bandwidths": [0.5, 1.0, 2.0, 4.0],
+        }
+    )
+
+    kwargs = legacy_raw_mmd_kwargs(model)
+
+    assert kwargs["estimator"] == "u"
+    assert "feature_bandwidths" not in kwargs
+    assert kwargs["feature_bandwidth_multipliers"] == [0.05, 0.5, 5.0]
 
 
 def test_angular_checkpoint_selection_uses_score_and_validity_floor():
