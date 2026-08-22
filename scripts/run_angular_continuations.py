@@ -36,8 +36,7 @@ def build_continuation_specs(base_config, angular_bandwidths, *, output_root):
         "C": {"angular_mmd_weight": 0.0},
         "D": {
             "angular_mmd_weight": 2000.0,
-            "angular_mmd_estimator": "v",
-            "angular_mmd_feature_bandwidths": bandwidths,
+            "angular_mmd_bandwidths": bandwidths,
         },
     }
     specs = []

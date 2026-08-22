@@ -8,7 +8,7 @@ import numpy as np
 import torch
 
 import scripts.evaluate_mmd_bandwidths as mmd_script
-from model.losses import compute_local_mmd
+from model.losses import compute_mmd
 from scripts.evaluate_mmd_bandwidths import (
     CheckpointInfo,
     _capture_mmd_inputs,
@@ -45,29 +45,19 @@ class BandwidthEvaluationTest(unittest.TestCase):
     def test_single_bandwidth_mean_matches_feature_kernel_mixture(self):
         prediction = torch.tensor([[0.0], [0.5], [1.0], [1.5]])
         truth = torch.tensor([[0.0], [0.25], [1.0], [2.0]])
-        condition = torch.tensor([[0.0], [1.0], [2.0], [3.0]])
-        feature_multipliers = [0.01, 0.1, 1.0, 10.0, 100.0]
-        condition_multipliers = [0.1, 1.0, 10.0]
+        bandwidths = [0.01, 0.1, 1.0, 10.0, 100.0]
 
         individual = per_bandwidth_mmd(
             prediction,
             truth,
-            condition,
-            local=True,
-            feature_kernel="imq",
-            condition_kernel="imq",
-            feature_bandwidth_multipliers=feature_multipliers,
-            condition_bandwidth_multipliers=condition_multipliers,
+            kernel="imq",
+            bandwidths=bandwidths,
         )
-        mixed = compute_local_mmd(
+        mixed = compute_mmd(
             prediction,
             truth,
-            condition,
-            local=True,
-            feature_kernel="imq",
-            condition_kernel="imq",
-            feature_bandwidth_multipliers=feature_multipliers,
-            condition_bandwidth_multipliers=condition_multipliers,
+            kernel="imq",
+            bandwidths=bandwidths,
         )
 
         torch.testing.assert_close(torch.stack(individual).mean(), mixed)
@@ -75,17 +65,13 @@ class BandwidthEvaluationTest(unittest.TestCase):
     def test_bandwidth_diagnostics_match_values_and_include_gradients(self):
         prediction = torch.tensor([[0.0], [0.5], [1.0], [1.5]])
         truth = torch.tensor([[0.0], [0.25], [1.0], [2.0]])
-        condition = torch.tensor([[0.0], [1.0], [2.0], [3.0]])
         kwargs = {
-            "local": True,
-            "feature_kernel": "imq",
-            "condition_kernel": "imq",
-            "feature_bandwidth_multipliers": [0.1, 1.0, 10.0],
-            "condition_bandwidth_multipliers": [0.1, 1.0, 10.0],
+            "kernel": "imq",
+            "bandwidths": [0.1, 1.0, 10.0],
         }
 
-        diagnostics = per_bandwidth_mmd_diagnostics(prediction, truth, condition, **kwargs)
-        values = per_bandwidth_mmd(prediction, truth, condition, **kwargs)
+        diagnostics = per_bandwidth_mmd_diagnostics(prediction, truth, **kwargs)
+        values = per_bandwidth_mmd(prediction, truth, **kwargs)
 
         for (mmd2, loss, gradient_squared_sum, gradient_elements), expected_value in zip(
             diagnostics, values
@@ -102,19 +88,15 @@ class BandwidthEvaluationTest(unittest.TestCase):
     def test_bandwidth_diagnostics_remove_mean_reduction_gradient_scaling(self):
         prediction = torch.tensor([[0.0], [0.5], [1.0], [1.5]], requires_grad=True)
         truth = torch.tensor([[0.0], [0.25], [1.0], [2.0]])
-        condition = torch.tensor([[0.0], [1.0], [2.0], [3.0]])
         kwargs = {
-            "local": True,
-            "feature_kernel": "imq",
-            "condition_kernel": "imq",
-            "feature_bandwidth_multipliers": [1.0],
-            "condition_bandwidth_multipliers": [0.1, 1.0, 10.0],
+            "kernel": "imq",
+            "bandwidths": [1.0],
         }
 
-        value = per_bandwidth_mmd(prediction, truth, condition, **kwargs)[0]
+        value = per_bandwidth_mmd(prediction, truth, **kwargs)[0]
         expected_gradient = torch.autograd.grad(value, prediction)[0] * prediction.shape[0]
         _, _, gradient_squared_sum, gradient_elements = per_bandwidth_mmd_diagnostics(
-            prediction, truth, condition, **kwargs
+            prediction, truth, **kwargs
         )[0]
 
         torch.testing.assert_close(gradient_squared_sum, expected_gradient.square().sum())
@@ -202,12 +184,10 @@ class BandwidthEvaluationTest(unittest.TestCase):
 
         self.assertNotEqual(first, second)
 
-    def test_valid_mmd_rows_matches_compute_local_mmd_filter(self):
+    def test_valid_mmd_rows_matches_compute_mmd_filter(self):
         prediction = torch.tensor([[0.0], [float("nan")], [2.0]])
         truth = torch.tensor([[0.0], [1.0], [float("inf")]])
-        condition = torch.tensor([[0.0], [1.0], [2.0]])
-
-        mask = valid_mmd_rows(prediction, truth, condition, local=True)
+        mask = valid_mmd_rows(prediction, truth)
 
         torch.testing.assert_close(mask, torch.tensor([True, False, False]))
 

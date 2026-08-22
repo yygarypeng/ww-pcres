@@ -244,8 +244,7 @@ class ContinuationTreatmentCallback(Callback):
     _SUPPORTED = {
         "learning_rate",
         "angular_mmd_weight",
-        "angular_mmd_estimator",
-        "angular_mmd_feature_bandwidths",
+        "angular_mmd_bandwidths",
     }
 
     def __init__(self, treatment):
@@ -266,11 +265,9 @@ class ContinuationTreatmentCallback(Callback):
 
         if "angular_mmd_weight" in self.treatment:
             pl_module.loss_weights["angular_mmd"] = float(self.treatment["angular_mmd_weight"])
-        if "angular_mmd_estimator" in self.treatment:
-            pl_module.angular_mmd_estimator = self.treatment["angular_mmd_estimator"]
-        if "angular_mmd_feature_bandwidths" in self.treatment:
-            pl_module.angular_mmd_feature_bandwidths = list(
-                self.treatment["angular_mmd_feature_bandwidths"]
+        if "angular_mmd_bandwidths" in self.treatment:
+            pl_module.mmd_config["angular"]["bandwidths"] = list(
+                self.treatment["angular_mmd_bandwidths"]
             )
 
 
@@ -330,7 +327,6 @@ def run_training(
 ):
     params = cfg["parameters"]
     continuation_treatment = cfg.get("continuation_treatment")
-    angular_mmd_policy = continuation_treatment or {}
     model_loss_weights = dict(params["loss_weights"])
     if continuation_treatment is not None and "angular_mmd_weight" in continuation_treatment:
         model_loss_weights["angular_mmd"] = continuation_treatment["angular_mmd_weight"]
@@ -353,13 +349,6 @@ def run_training(
         weight_decay=params.get("weight_decay", 1e-4),
         loss_weights=model_loss_weights,
         mmd_config=cfg.get("mmd", {}),
-        angular_mmd_estimator=angular_mmd_policy.get(
-            "angular_mmd_estimator", params.get("angular_mmd_estimator", "u")
-        ),
-        angular_mmd_feature_bandwidths=angular_mmd_policy.get(
-            "angular_mmd_feature_bandwidths",
-            params.get("angular_mmd_feature_bandwidths"),
-        ),
         angular_mmd_ramp_epochs=params.get("angular_mmd_ramp_epochs", 0),
         adaptive_loss_weights=params.get("adaptive_loss_weights", False),
         log_loss_gradient_cosines=params.get("log_loss_gradient_cosines", False),

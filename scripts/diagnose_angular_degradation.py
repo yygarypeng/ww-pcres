@@ -31,6 +31,7 @@ from scripts.evaluate_mmd_bandwidths import discover_unique_checkpoints, tensor_
 VALIDATION_ROWS = 4096
 PARTITION_ROWS = 512
 BANDWIDTH_MULTIPLIERS = (0.25, 0.5, 1.0, 2.0)
+LEGACY_RAW_BANDWIDTH_MULTIPLIERS = (0.05, 0.5, 5.0)
 CSV_COLUMNS = (
     "epoch",
     "val_loss",
@@ -689,9 +690,12 @@ def evaluate_checkpoint(
 
 def legacy_raw_mmd_kwargs(model):
     kwargs = dict(model._mmd_kwargs("angular"))
-    kwargs["estimator"] = "u"
-    kwargs.pop("feature_bandwidths", None)
-    return kwargs
+    return {
+        "local": False,
+        "feature_kernel": kwargs["kernel"],
+        "feature_bandwidth_multipliers": list(LEGACY_RAW_BANDWIDTH_MULTIPLIERS),
+        "estimator": "u",
+    }
 
 
 def evaluate_checkpoint_gradients(checkpoint, features, targets, device):
