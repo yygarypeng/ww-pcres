@@ -261,6 +261,8 @@ class LightningWBoson(L.LightningModule):
         weight_decay=1e-4,
         loss_weights=None,
         mmd_config=None,
+        angular_mmd_estimator="u",
+        angular_mmd_feature_bandwidths=None,
         angular_mmd_ramp_epochs=0,
         adaptive_loss_weights=False,
         log_loss_gradient_cosines=False,
@@ -306,6 +308,16 @@ class LightningWBoson(L.LightningModule):
                 raise ValueError("angular_mmd_ramp_epochs must be a non-negative integer")
             angular_mmd_ramp_epochs = int(ramp_epochs)
         mmd_config = resolve_mmd_config(mmd_config)
+        if angular_mmd_estimator not in {"u", "v"}:
+            raise ValueError("angular_mmd_estimator must be 'u' or 'v'")
+        if angular_mmd_feature_bandwidths is not None:
+            angular_mmd_feature_bandwidths = [
+                float(value) for value in angular_mmd_feature_bandwidths
+            ]
+            if not angular_mmd_feature_bandwidths or not all(
+                math.isfinite(value) and value > 0.0 for value in angular_mmd_feature_bandwidths
+            ):
+                raise ValueError("angular_mmd_feature_bandwidths must be finite and positive")
         self.save_hyperparameters()
         if w_fourvec_scales is None:
             w_fourvec_scales = torch.ones(4, dtype=torch.float32)
@@ -375,6 +387,8 @@ class LightningWBoson(L.LightningModule):
         self.log_loss_gradient_cosines = bool(log_loss_gradient_cosines)
         self._gradient_analysis_batch = None
         self.mmd_config = mmd_config
+        self.angular_mmd_estimator = angular_mmd_estimator
+        self.angular_mmd_feature_bandwidths = angular_mmd_feature_bandwidths
         self.angular_mmd_ramp_epochs = angular_mmd_ramp_epochs
         self.higgs_mass_target = higgs_mass_target
         self.higgs_mass_scale = higgs_mass_scale
@@ -432,13 +446,18 @@ class LightningWBoson(L.LightningModule):
     def _mmd_kwargs(self, feature_name):
         condition = self.mmd_config["condition"]
         feature = self.mmd_config[feature_name]
-        return {
+        kwargs = {
             "local": self.mmd_config["local"] and self.model.hl_input_dim > 0,
             "feature_kernel": feature["kernel"],
             "condition_kernel": condition["kernel"],
             "feature_bandwidth_multipliers": feature["bandwidth_multipliers"],
             "condition_bandwidth_multipliers": condition["bandwidth_multipliers"],
         }
+        if feature_name == "angular":
+            kwargs["estimator"] = self.angular_mmd_estimator
+            if self.angular_mmd_feature_bandwidths is not None:
+                kwargs["feature_bandwidths"] = self.angular_mmd_feature_bandwidths
+        return kwargs
 
     def _compute_losses(self, x, y, y_pred, cond, aux=None):
         losses = {}
