@@ -663,7 +663,7 @@ def evaluate_checkpoint(
         feature_bandwidths=manifest["feature_bandwidths"],
         partitions=partitions,
         condition=condition,
-        raw_mmd_kwargs=model._mmd_kwargs("angular"),
+        raw_mmd_kwargs=legacy_raw_mmd_kwargs(model),
         block_size=block_size,
     )
     if plot_output_dir is not None:
@@ -685,6 +685,13 @@ def evaluate_checkpoint(
         ),
         "learning_rate": _checkpoint_learning_rate(checkpoint.path),
     }
+
+
+def legacy_raw_mmd_kwargs(model):
+    kwargs = dict(model._mmd_kwargs("angular"))
+    kwargs["estimator"] = "u"
+    kwargs.pop("feature_bandwidths", None)
+    return kwargs
 
 
 def evaluate_checkpoint_gradients(checkpoint, features, targets, device):

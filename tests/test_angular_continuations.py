@@ -61,13 +61,15 @@ class ContinuationSpecificationTest(unittest.TestCase):
                 self.assertEqual(params["epochs"], 137)
                 self.assertTrue(params["save_every_epoch"])
                 self.assertTrue(params["disable_early_stopping"])
-                self.assertEqual(params["num_workers"], 0)
-                self.assertFalse(params["persistent_workers"])
+                self.assertEqual(params["num_workers"], 8)
+                self.assertTrue(params["persistent_workers"])
 
     def test_treatments_change_only_the_declared_variable(self):
         specs = {
             spec.name: spec
-            for spec in build_continuation_specs(self.base, self.bandwidths, output_root=Path("runs"))
+            for spec in build_continuation_specs(
+                self.base, self.bandwidths, output_root=Path("runs")
+            )
         }
 
         self.assertEqual(specs["B"].config["continuation_treatment"], {"learning_rate": 5.0e-5})
@@ -170,7 +172,9 @@ class ContinuationRestoreTreatmentTest(unittest.TestCase):
         )
 
         self.assertEqual(callbacks[0].save_top_k, -1)
-        self.assertFalse(any(item.__class__.__name__ == "DeferredEarlyStopping" for item in callbacks))
+        self.assertFalse(
+            any(item.__class__.__name__ == "DeferredEarlyStopping" for item in callbacks)
+        )
         self.assertTrue(any(item.__class__.__name__ == "RNGStateCallback" for item in callbacks))
         self.assertTrue(any(isinstance(item, ContinuationTreatmentCallback) for item in callbacks))
 
