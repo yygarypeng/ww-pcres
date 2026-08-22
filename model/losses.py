@@ -229,9 +229,7 @@ def compute_local_mmd(
     with torch.no_grad():
         if feature_bandwidths is None:
             feature_scale = _positive_median_pairwise_distance(y)
-            feature_bandwidths = [
-                value * feature_scale for value in feature_bandwidth_multipliers
-            ]
+            feature_bandwidths = [value * feature_scale for value in feature_bandwidth_multipliers]
         if local:
             condition_scale = _positive_median_pairwise_distance(cond)
             condition_bandwidths = [
