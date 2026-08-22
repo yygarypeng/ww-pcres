@@ -16,15 +16,106 @@ from scripts.diagnose_angular_degradation import (
     CSV_COLUMNS,
     angular_checkpoint_metrics,
     blockwise_mmd_v,
+    build_angular_selection,
     build_manifest,
     gradient_diagnostic_rows,
     manifest_partition_positions,
     partitioned_raw_mmd,
     save_angular_plots,
+    select_angular_checkpoint,
     validate_manifest,
     write_gradient_csv,
     write_metrics_csv,
 )
+
+
+def test_angular_checkpoint_selection_uses_score_and_validity_floor():
+    rows = [
+        {
+            "epoch": 10,
+            "mmd_joint_fixed": 0.2,
+            "mmd_wplus_fixed": 0.1,
+            "mmd_wminus_fixed": 0.3,
+            "pred_rest_frame_valid_fraction": 1.0,
+        },
+        {
+            "epoch": 11,
+            "mmd_joint_fixed": 0.1,
+            "mmd_wplus_fixed": 0.1,
+            "mmd_wminus_fixed": 0.1,
+            "pred_rest_frame_valid_fraction": 0.95,
+        },
+        {
+            "epoch": 12,
+            "mmd_joint_fixed": 0.15,
+            "mmd_wplus_fixed": 0.1,
+            "mmd_wminus_fixed": 0.2,
+            "pred_rest_frame_valid_fraction": 1.0,
+        },
+    ]
+
+    selected = select_angular_checkpoint(rows, validity_floor=1.0)
+
+    assert selected["epoch"] == 12
+    assert selected["angular_checkpoint_score"] == pytest.approx(0.35)
+
+
+def test_angular_checkpoint_selection_ignores_non_finite_rows():
+    rows = [
+        {
+            "epoch": 10,
+            "mmd_joint_fixed": float("nan"),
+            "mmd_wplus_fixed": 0.1,
+            "mmd_wminus_fixed": 0.1,
+            "pred_rest_frame_valid_fraction": float("nan"),
+        },
+        {
+            "epoch": 11,
+            "mmd_joint_fixed": 0.2,
+            "mmd_wplus_fixed": 0.1,
+            "mmd_wminus_fixed": 0.1,
+            "pred_rest_frame_valid_fraction": 1.0,
+        },
+    ]
+
+    assert select_angular_checkpoint(rows, validity_floor=1.0)["epoch"] == 11
+
+
+def test_angular_selection_maps_selected_epoch_to_checkpoint(tmp_path):
+    rows = [
+        {
+            "epoch": 12,
+            "mmd_joint_fixed": 0.2,
+            "mmd_wplus_fixed": 0.1,
+            "mmd_wminus_fixed": 0.1,
+            "pred_rest_frame_valid_fraction": 1.0,
+        }
+    ]
+    checkpoint = SimpleNamespace(epoch=12, path=tmp_path / "epoch=12.ckpt")
+
+    selection = build_angular_selection(rows, [checkpoint], validity_floor=1.0)
+
+    assert selection["checkpoint"] == str(checkpoint.path.resolve())
+    assert selection["validity_floor"] == 1.0
+
+
+def test_angular_selection_rejects_conflicting_checkpoints_for_one_epoch(tmp_path):
+    rows = [
+        {
+            "epoch": 12,
+            "mmd_joint_fixed": 0.2,
+            "mmd_wplus_fixed": 0.1,
+            "mmd_wminus_fixed": 0.1,
+            "pred_rest_frame_valid_fraction": 1.0,
+        }
+    ]
+    checkpoints = [
+        SimpleNamespace(epoch=12, path=tmp_path / "first.ckpt"),
+        SimpleNamespace(epoch=12, path=tmp_path / "second.ckpt"),
+    ]
+
+    with pytest.raises(ValueError, match="multiple checkpoints.*epoch 12"):
+        build_angular_selection(rows, checkpoints, validity_floor=1.0)
 
 
 def _angles(rows):

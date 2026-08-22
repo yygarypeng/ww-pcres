@@ -97,6 +97,13 @@ Set `mmd.local: true` (the default) to multiply each output-feature kernel by th
 
 Set `parameters.angular_mmd_ramp_epochs` to ramp the angular MMD weight over $R$ epochs. At epoch $e$, its effective weight is $w_{\mathrm{angular}}[1 - \cos(\pi \min(e / R, 1))] / 2$, reaching the configured $w_{\mathrm{angular}}$ at epoch $R$; setting $R$ to zero applies the full configured weight immediately. Other loss weights are unaffected. Early stopping starts checking `val_loss` at epoch $R$, so the ramp-up phase cannot stop training prematurely; with $R$ set to zero it checks from epoch 0 as usual.
 
+Set `parameters.angular_mmd_estimator: v` together with
+`parameters.angular_mmd_feature_bandwidths` to use a non-negative angular
+V-statistic with absolute bandwidths. Fit those bandwidths once from truth
+angular features and keep them fixed across training and validation; the
+commented keys in `configs/config.example.yaml` show where to provide them.
+Omitting these keys preserves the legacy batch-fitted U-statistic.
+
 ### Visualization and inference check
 
 `notebooks/visualize.ipynb` reads the component losses, effective weights, and gradient-cosine columns from the Lightning `metrics.csv`. Its loss panels include the separate alpha and joint-mass MMD histories.
