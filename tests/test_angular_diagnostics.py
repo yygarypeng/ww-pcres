@@ -1,13 +1,17 @@
 import csv
 import json
+from types import SimpleNamespace
 
+import matplotlib
 import numpy as np
 import pytest
 import torch
 from matplotlib import pyplot as plt
+from matplotlib.mathtext import MathTextParser
 from torch import nn
 
 from model.losses import compute_local_mmd
+from scripts import diagnose_angular_degradation as diagnostic_script
 from scripts.diagnose_angular_degradation import (
     CSV_COLUMNS,
     angular_checkpoint_metrics,
@@ -304,6 +308,35 @@ def test_angular_plots_use_fixed_events_bins_names_and_close_figures(tmp_path, m
     assert calls[3][2] == {"shared_colorbar": True, "share_axes": True}
 
 
+def test_angular_plot_saving_disables_mathtext_parsing(tmp_path, monkeypatch):
+    def plotter(observables, title, **kwargs):
+        del observables, title, kwargs
+        figure, axis = plt.subplots()
+        axis.set_title(r"$must_remain_literal$")
+        return figure, None
+
+    def reject_mathtext(*args, **kwargs):
+        raise AssertionError("mathtext parser was invoked")
+
+    monkeypatch.setattr("scripts.diagnose_angular_degradation.plot_angular_1d_grid", plotter)
+    monkeypatch.setattr("scripts.diagnose_angular_degradation.plot_angular_2d_grid", plotter)
+    monkeypatch.setattr(MathTextParser, "parse", reject_mathtext)
+
+    with matplotlib.rc_context({"text.parse_math": True}):
+        paths = save_angular_plots(
+            tmp_path,
+            epoch=1,
+            prediction=_angles(5).numpy(),
+            truth=_angles(5).numpy(),
+            plot_bins={
+                "theta": np.linspace(0.0, np.pi, 5),
+                "phi": np.linspace(-np.pi, np.pi, 5),
+            },
+        )
+
+    assert len(paths) == 6
+
+
 class _GradientModel(nn.Module):
     def __init__(self):
         super().__init__()
@@ -413,3 +446,127 @@ def test_gradient_csv_has_stable_schema(tmp_path):
         reader = csv.DictReader(stream)
         assert reader.fieldnames == list(row)
         assert next(reader)["loss"] == "huber"
+
+
+def test_checkpoint_evaluation_resumes_only_complete_epochs_without_duplicates(
+    tmp_path, monkeypatch, capsys
+):
+    checkpoints = [
+        SimpleNamespace(epoch=1, path=tmp_path / "one.ckpt"),
+        SimpleNamespace(epoch=2, path=tmp_path / "two.ckpt"),
+    ]
+    for checkpoint in checkpoints:
+        torch.save(
+            {
+                "hyper_parameters": {
+                    "loss_weights": {"huber": 1.0},
+                    "angular_mmd_ramp_epochs": 0,
+                    "adaptive_loss_weights": False,
+                }
+            },
+            checkpoint.path,
+        )
+    metrics_path = tmp_path / "metrics.csv"
+    gradient_path = tmp_path / "gradients.csv"
+    plot_dir = tmp_path / "plots"
+    metric_calls = []
+    gradient_calls = []
+    fail_epoch_two = True
+
+    def metric_row(epoch):
+        return {
+            "epoch": epoch,
+            "val_loss": 1.0,
+            "raw_angular_mmd": 0.1,
+            "mmd_joint_fixed": 0.2,
+            "mmd_wplus_fixed": 0.3,
+            "mmd_wminus_fixed": 0.4,
+            "huber_wplus": 0.5,
+            "huber_wminus": 0.6,
+            "pred_rest_frame_valid_fraction": 1.0,
+            "negative_raw_mmd_batch_fraction": 0.0,
+            "learning_rate": 0.001,
+        }
+
+    def evaluate_metrics(checkpoint, *args, plot_output_dir, **kwargs):
+        del args, kwargs
+        metric_calls.append(checkpoint.epoch)
+        plot_output_dir.mkdir(parents=True, exist_ok=True)
+        for family in (
+            "angular_1d",
+            "angular_2d",
+            "mixed_sum_1d",
+            "mixed_sum_2d",
+            "mixed_diff_1d",
+            "mixed_diff_2d",
+        ):
+            (plot_output_dir / f"epoch_{checkpoint.epoch:04d}_{family}.png").touch()
+        return metric_row(checkpoint.epoch)
+
+    def evaluate_gradients(checkpoint, *args, **kwargs):
+        nonlocal fail_epoch_two
+        del args, kwargs
+        gradient_calls.append(checkpoint.epoch)
+        if checkpoint.epoch == 2 and fail_epoch_two:
+            fail_epoch_two = False
+            raise RuntimeError("transient gradient failure")
+        return [
+            {
+                "epoch": checkpoint.epoch,
+                "loss": loss,
+                "raw_loss": 0.1,
+                "effective_weight": 1.0,
+                "weighted_gradient_l2": 0.2,
+                "cosine_huber_wplus": 0.3,
+                "cosine_huber_wminus": 0.4,
+            }
+            for loss in ("huber", "huber_wplus", "huber_wminus")
+        ]
+
+    monkeypatch.setattr(
+        "scripts.diagnose_angular_degradation.evaluate_checkpoint", evaluate_metrics
+    )
+    monkeypatch.setattr(
+        "scripts.diagnose_angular_degradation.evaluate_checkpoint_gradients",
+        evaluate_gradients,
+    )
+    kwargs = {
+        "checkpoints": checkpoints,
+        "features": np.zeros((4096, 2)),
+        "targets": np.zeros((4096, 8)),
+        "manifest": _valid_manifest(),
+        "device": torch.device("cpu"),
+        "block_size": 2,
+        "metrics_output": metrics_path,
+        "gradient_output": gradient_path,
+        "plot_dir": plot_dir,
+    }
+
+    with pytest.raises(RuntimeError, match="transient gradient failure"):
+        diagnostic_script.run_checkpoint_evaluations(**kwargs)
+
+    with metrics_path.open(newline="") as stream:
+        assert [int(row["epoch"]) for row in csv.DictReader(stream)] == [1]
+    with gradient_path.open(newline="") as stream:
+        assert [int(row["epoch"]) for row in csv.DictReader(stream)] == [1, 1, 1]
+
+    diagnostic_script.run_checkpoint_evaluations(**kwargs)
+
+    with metrics_path.open(newline="") as stream:
+        metric_rows = list(csv.DictReader(stream))
+    with gradient_path.open(newline="") as stream:
+        gradient_rows = list(csv.DictReader(stream))
+    assert [int(row["epoch"]) for row in metric_rows] == [1, 2]
+    assert [(int(row["epoch"]), row["loss"]) for row in gradient_rows] == [
+        (1, "huber"),
+        (1, "huber_wplus"),
+        (1, "huber_wminus"),
+        (2, "huber"),
+        (2, "huber_wplus"),
+        (2, "huber_wminus"),
+    ]
+    assert metric_calls == [1, 2, 2]
+    assert gradient_calls == [1, 2, 2]
+    progress = capsys.readouterr().out
+    assert "Skipped epoch 1" in progress
+    assert "Completed epoch 2" in progress
