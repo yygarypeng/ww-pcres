@@ -257,9 +257,12 @@ class ContinuationTreatmentCallback(Callback):
     def on_train_start(self, trainer, pl_module):
         learning_rate = self.treatment.get("learning_rate")
         if learning_rate is not None:
+            learning_rate = float(learning_rate)
             for optimizer in trainer.optimizers:
                 for group in optimizer.param_groups:
-                    group["lr"] = float(learning_rate)
+                    group["lr"] = learning_rate
+            pl_module.lr = learning_rate
+            pl_module.hparams.lr = learning_rate
 
         if "angular_mmd_weight" in self.treatment:
             pl_module.loss_weights["angular_mmd"] = float(self.treatment["angular_mmd_weight"])

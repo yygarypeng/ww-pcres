@@ -6,6 +6,8 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 import numpy as np
+import pytorch_lightning as L
+
 from model import LightningWBoson
 from scripts.run_angular_continuations import (
     build_continuation_specs,
@@ -124,11 +126,15 @@ class ContinuationRestoreTreatmentTest(unittest.TestCase):
         callback = ContinuationTreatmentCallback({"learning_rate": 5.0e-5})
         optimizer = SimpleNamespace(param_groups=[{"lr": 5.0e-4}, {"lr": 2.0e-4}])
         trainer = SimpleNamespace(optimizers=[optimizer])
-        model = SimpleNamespace()
+        model = L.LightningModule()
+        model.lr = 5.0e-4
+        model.save_hyperparameters({"lr": 5.0e-4})
 
         callback.on_train_start(trainer, model)
 
         self.assertEqual([group["lr"] for group in optimizer.param_groups], [5.0e-5, 5.0e-5])
+        self.assertEqual(model.lr, 5.0e-5)
+        self.assertEqual(model.hparams.lr, 5.0e-5)
 
     def test_model_treatment_is_reapplied_after_checkpoint_restore(self):
         treatment = {
