@@ -110,9 +110,10 @@ class WBosonRegressor(nn.Module):
         if mmd_cond_mean_train is None:
             mmd_cond_mean_train = torch.zeros(self.hl_input_dim, dtype=torch.float32)
             mmd_cond_scale_train = torch.ones(self.hl_input_dim, dtype=torch.float32)
-        if len(mmd_cond_mean_train) != self.hl_input_dim or len(
-            mmd_cond_scale_train
-        ) != self.hl_input_dim:
+        if (
+            len(mmd_cond_mean_train) != self.hl_input_dim
+            or len(mmd_cond_scale_train) != self.hl_input_dim
+        ):
             raise ValueError(
                 f"MMD condition mean and scale must each contain {self.hl_input_dim} values; "
                 "retraining required for incompatible checkpoints"
