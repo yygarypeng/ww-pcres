@@ -817,6 +817,52 @@ def run_checkpoint_evaluations(
         print(f"Completed epoch {checkpoint.epoch}", flush=True)
 
 
+def select_angular_checkpoint(rows, *, validity_floor):
+    validity_floor = float(validity_floor)
+    if not math.isfinite(validity_floor) or not 0.0 <= validity_floor <= 1.0:
+        raise ValueError("validity_floor must be finite and between zero and one")
+
+    eligible = []
+    for row in rows:
+        validity = float(row["pred_rest_frame_valid_fraction"])
+        components = [
+            float(row["mmd_joint_fixed"]),
+            float(row["mmd_wplus_fixed"]),
+            float(row["mmd_wminus_fixed"]),
+        ]
+        if not math.isfinite(validity) or not all(map(math.isfinite, components)):
+            continue
+        if validity < validity_floor:
+            continue
+        score = components[0] + max(components[1:])
+        selected_row = dict(row)
+        selected_row["angular_checkpoint_score"] = score
+        eligible.append(selected_row)
+    if not eligible:
+        raise ValueError("no checkpoint meets the validity floor")
+    return min(eligible, key=lambda row: (row["angular_checkpoint_score"], int(row["epoch"])))
+
+
+def build_angular_selection(rows, checkpoints, *, validity_floor):
+    selected = select_angular_checkpoint(rows, validity_floor=validity_floor)
+    checkpoint_by_epoch = {}
+    for checkpoint in checkpoints:
+        path = checkpoint.path.resolve()
+        existing = checkpoint_by_epoch.get(checkpoint.epoch)
+        if existing is not None and existing != path:
+            raise ValueError(f"multiple checkpoints found for epoch {checkpoint.epoch}")
+        checkpoint_by_epoch[checkpoint.epoch] = path
+    epoch = int(selected["epoch"])
+    if epoch not in checkpoint_by_epoch:
+        raise ValueError(f"selected epoch {epoch} has no checkpoint")
+    return {
+        **selected,
+        "epoch": epoch,
+        "validity_floor": float(validity_floor),
+        "checkpoint": str(checkpoint_by_epoch[epoch]),
+    }
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description=(
@@ -830,6 +876,8 @@ def parse_args():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--plot-dir", type=Path)
     parser.add_argument("--gradient-output", type=Path)
+    parser.add_argument("--selection-output", type=Path)
+    parser.add_argument("--validity-floor", type=float, default=1.0)
     parser.add_argument("--split", default="ggF_val")
     parser.add_argument("--seed", type=int, default=20260821)
     parser.add_argument("--block-size", type=int, default=512)
@@ -873,6 +921,17 @@ def main():
         gradient_output=gradient_output,
         plot_dir=plot_dir,
     )
+    selection = build_angular_selection(
+        _read_csv(args.output, CSV_COLUMNS),
+        checkpoints,
+        validity_floor=args.validity_floor,
+    )
+    selection_output = args.selection_output or args.output.with_name(
+        f"{args.output.stem}_selection.json"
+    )
+    selection_output.parent.mkdir(parents=True, exist_ok=True)
+    selection_output.write_text(json.dumps(selection, indent=2, allow_nan=False) + "\n")
+    print(f"Selected epoch {selection['epoch']}: {selection['checkpoint']}", flush=True)
 
 
 if __name__ == "__main__":

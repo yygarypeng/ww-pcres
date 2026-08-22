@@ -330,6 +330,7 @@ def run_training(
 ):
     params = cfg["parameters"]
     continuation_treatment = cfg.get("continuation_treatment")
+    angular_mmd_policy = continuation_treatment or {}
     model_loss_weights = dict(params["loss_weights"])
     if continuation_treatment is not None and "angular_mmd_weight" in continuation_treatment:
         model_loss_weights["angular_mmd"] = continuation_treatment["angular_mmd_weight"]
@@ -352,9 +353,12 @@ def run_training(
         weight_decay=params.get("weight_decay", 1e-4),
         loss_weights=model_loss_weights,
         mmd_config=cfg.get("mmd", {}),
-        angular_mmd_estimator=(continuation_treatment or {}).get("angular_mmd_estimator", "u"),
-        angular_mmd_feature_bandwidths=(continuation_treatment or {}).get(
-            "angular_mmd_feature_bandwidths"
+        angular_mmd_estimator=angular_mmd_policy.get(
+            "angular_mmd_estimator", params.get("angular_mmd_estimator", "u")
+        ),
+        angular_mmd_feature_bandwidths=angular_mmd_policy.get(
+            "angular_mmd_feature_bandwidths",
+            params.get("angular_mmd_feature_bandwidths"),
         ),
         angular_mmd_ramp_epochs=params.get("angular_mmd_ramp_epochs", 0),
         adaptive_loss_weights=params.get("adaptive_loss_weights", False),
