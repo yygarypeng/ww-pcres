@@ -2,9 +2,11 @@
 import argparse
 import csv
 import json
+import math
 import sys
 from contextlib import redirect_stdout
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 from types import SimpleNamespace
 
 import matplotlib
@@ -51,6 +53,25 @@ GRADIENT_CSV_COLUMNS = (
     "weighted_gradient_l2",
     "cosine_huber_wplus",
     "cosine_huber_wminus",
+)
+GRADIENT_LOSS_ORDER = (
+    "huber",
+    "higgs_mass",
+    "w_mass_huber",
+    "alpha_mmd",
+    "mass_mmd",
+    "angular_mmd",
+    "dmet",
+    "huber_wplus",
+    "huber_wminus",
+)
+PLOT_FAMILIES = (
+    "angular_1d",
+    "angular_2d",
+    "mixed_sum_1d",
+    "mixed_sum_2d",
+    "mixed_diff_1d",
+    "mixed_diff_2d",
 )
 
 
@@ -318,7 +339,7 @@ def write_metrics_csv(path, rows):
         writer.writeheader()
         for source in rows:
             row = dict(source)
-            row["weighted_angular_mmd"] = 2000.0 * row["raw_angular_mmd"]
+            row["weighted_angular_mmd"] = 2000.0 * float(row["raw_angular_mmd"])
             writer.writerow({name: row[name] for name in CSV_COLUMNS})
 
 
@@ -327,6 +348,31 @@ def write_gradient_csv(path, rows):
         writer = csv.DictWriter(stream, fieldnames=GRADIENT_CSV_COLUMNS, extrasaction="raise")
         writer.writeheader()
         writer.writerows(rows)
+
+
+def _read_csv(path, columns):
+    path = Path(path)
+    if not path.exists():
+        return []
+    with path.open(newline="") as stream:
+        reader = csv.DictReader(stream)
+        if reader.fieldnames != list(columns):
+            raise ValueError(f"{path} has an incompatible CSV schema")
+        return list(reader)
+
+
+def _atomic_write_csv(path, writer, rows):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with NamedTemporaryFile(
+        dir=path.parent, prefix=f".{path.name}.", suffix=".tmp", delete=False
+    ) as stream:
+        temporary = Path(stream.name)
+    try:
+        writer(temporary, rows)
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def _wrap_angle(values):
@@ -411,6 +457,7 @@ def _angular_plot_observables(prediction, truth, plot_bins):
 
 
 def save_angular_plots(output_dir, *, epoch, prediction, truth, plot_bins):
+    matplotlib.rcParams["text.parse_math"] = False
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     angular, mixed_sum, mixed_diff = _angular_plot_observables(
@@ -470,6 +517,11 @@ def save_angular_plots(output_dir, *, epoch, prediction, truth, plot_bins):
             plt.close(figure)
         paths.append(path)
     return paths
+
+
+def angular_plot_paths(output_dir, epoch):
+    output_dir = Path(output_dir)
+    return [output_dir / f"epoch_{epoch:04d}_{family}.png" for family in PLOT_FAMILIES]
 
 
 def _parameter_gradient(loss, parameters, *, retain_graph):
@@ -651,6 +703,120 @@ def evaluate_checkpoint_gradients(checkpoint, features, targets, device):
     )
 
 
+def expected_gradient_loss_names(checkpoint):
+    saved = torch.load(checkpoint.path, map_location="cpu", weights_only=False)
+    hyper_parameters = saved["hyper_parameters"]
+    defaults = {
+        "huber": 1.0,
+        "higgs_mass": 0.0,
+        "w_mass_huber": 0.0,
+        "alpha_mmd": 0.0,
+        "mass_mmd": 0.0,
+        "angular_mmd": 0.0,
+        "dmet": 0.0,
+    }
+    weights = {
+        **defaults,
+        **hyper_parameters.get("loss_weights", {}),
+    }
+    effective_weights = dict(weights)
+    ramp_epochs = hyper_parameters.get("angular_mmd_ramp_epochs", 0)
+    if ramp_epochs:
+        progress = min(max(checkpoint.epoch / ramp_epochs, 0.0), 1.0)
+        effective_weights["angular_mmd"] *= (1.0 - math.cos(math.pi * progress)) / 2.0
+    adaptive = hyper_parameters.get("adaptive_loss_weights", False)
+    names = [
+        name
+        for name in GRADIENT_LOSS_ORDER[:-2]
+        if effective_weights[name] != 0.0 or (adaptive and weights[name] != 0.0)
+    ]
+    return (*names, "huber_wplus", "huber_wminus")
+
+
+def _row_epoch(row):
+    return int(float(row["epoch"]))
+
+
+def _epoch_is_complete(epoch, expected_losses, metric_rows, gradient_rows, plot_dir):
+    epoch_metrics = [row for row in metric_rows if _row_epoch(row) == epoch]
+    epoch_gradients = [row for row in gradient_rows if _row_epoch(row) == epoch]
+    return (
+        len(epoch_metrics) == 1
+        and len(epoch_gradients) == len(expected_losses)
+        and {row["loss"] for row in epoch_gradients} == set(expected_losses)
+        and all(path.is_file() for path in angular_plot_paths(plot_dir, epoch))
+    )
+
+
+def run_checkpoint_evaluations(
+    *,
+    checkpoints,
+    features,
+    targets,
+    manifest,
+    device,
+    block_size,
+    metrics_output,
+    gradient_output,
+    plot_dir,
+):
+    metric_rows = _read_csv(metrics_output, CSV_COLUMNS)
+    gradient_rows = _read_csv(gradient_output, GRADIENT_CSV_COLUMNS)
+    selected = np.asarray(manifest["validation_indices"], dtype=np.int64)
+    gradient_selected = np.asarray(manifest["gradient_indices"], dtype=np.int64)
+    loss_position = {name: index for index, name in enumerate(GRADIENT_LOSS_ORDER)}
+
+    for checkpoint in sorted(checkpoints, key=lambda item: item.epoch):
+        expected_losses = expected_gradient_loss_names(checkpoint)
+        if _epoch_is_complete(
+            checkpoint.epoch,
+            expected_losses,
+            metric_rows,
+            gradient_rows,
+            plot_dir,
+        ):
+            print(f"Skipped epoch {checkpoint.epoch}", flush=True)
+            continue
+
+        metric_row = evaluate_checkpoint(
+            checkpoint,
+            features[selected],
+            targets[selected],
+            manifest,
+            device,
+            block_size=block_size,
+            plot_output_dir=plot_dir,
+        )
+        checkpoint_gradients = evaluate_checkpoint_gradients(
+            checkpoint,
+            features[gradient_selected],
+            targets[gradient_selected],
+            device,
+        )
+        if len(checkpoint_gradients) != len(expected_losses) or {
+            row["loss"] for row in checkpoint_gradients
+        } != set(expected_losses):
+            raise ValueError(f"epoch {checkpoint.epoch} produced incomplete gradient diagnostics")
+
+        metric_rows = [row for row in metric_rows if _row_epoch(row) != checkpoint.epoch] + [
+            metric_row
+        ]
+        gradient_rows = [
+            row for row in gradient_rows if _row_epoch(row) != checkpoint.epoch
+        ] + checkpoint_gradients
+        metric_rows.sort(key=_row_epoch)
+        gradient_rows.sort(
+            key=lambda row: (
+                _row_epoch(row),
+                loss_position.get(row["loss"], len(loss_position)),
+                row["loss"],
+            )
+        )
+        _atomic_write_csv(metrics_output, write_metrics_csv, metric_rows)
+        _atomic_write_csv(gradient_output, write_gradient_csv, gradient_rows)
+        print(f"Completed epoch {checkpoint.epoch}", flush=True)
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description=(
@@ -691,37 +857,22 @@ def main():
         args.manifest.write_text(json.dumps(manifest, indent=2, allow_nan=False) + "\n")
 
     validate_manifest(manifest, validation_size=len(features))
-    selected = np.asarray(manifest["validation_indices"], dtype=np.int64)
-    gradient_selected = np.asarray(manifest["gradient_indices"], dtype=np.int64)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     plot_dir = args.plot_dir or args.output.with_name(f"{args.output.stem}_plots")
     gradient_output = args.gradient_output or args.output.with_name(
         f"{args.output.stem}_gradients.csv"
     )
-    rows = [
-        evaluate_checkpoint(
-            checkpoint,
-            features[selected],
-            targets[selected],
-            manifest,
-            device,
-            block_size=args.block_size,
-            plot_output_dir=plot_dir,
-        )
-        for checkpoint in checkpoints
-    ]
-    gradient_rows = [
-        row
-        for checkpoint in checkpoints
-        for row in evaluate_checkpoint_gradients(
-            checkpoint,
-            features[gradient_selected],
-            targets[gradient_selected],
-            device,
-        )
-    ]
-    write_metrics_csv(args.output, rows)
-    write_gradient_csv(gradient_output, gradient_rows)
+    run_checkpoint_evaluations(
+        checkpoints=checkpoints,
+        features=features,
+        targets=targets,
+        manifest=manifest,
+        device=device,
+        block_size=args.block_size,
+        metrics_output=args.output,
+        gradient_output=gradient_output,
+        plot_dir=plot_dir,
+    )
 
 
 if __name__ == "__main__":
