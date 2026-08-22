@@ -143,19 +143,21 @@ class TrainingOverrideTest(unittest.TestCase):
 
         self.assertEqual(model_class.call_args.kwargs["angular_mmd_ramp_epochs"], 80)
 
-    def test_run_training_routes_configured_angular_mmd_policy(self):
-        bandwidths = [0.5, 1.0, 2.0, 4.0]
+    def test_run_training_routes_absolute_mmd_config(self):
+        mmd_config = {
+            "alpha": {"kernel": "imq", "bandwidths": [0.2, 0.4]},
+            "mass": {"kernel": "imq", "bandwidths": [0.5]},
+            "angular": {"kernel": "imq", "bandwidths": [0.05, 0.5, 5.0]},
+        }
         params = {
             "batch_size": 2,
             "epochs": 1,
             "learning_rate": 1.0e-4,
             "loss_weights": {"angular_mmd": 2000.0},
-            "angular_mmd_estimator": "v",
-            "angular_mmd_feature_bandwidths": bandwidths,
             "d_model": 8,
             "n_heads": 2,
         }
-        cfg = {"parameters": params}
+        cfg = {"parameters": params, "mmd": mmd_config}
         datamodule = SimpleNamespace(train_dataloader=lambda: [object()], test_ds=None)
 
         with (
@@ -182,69 +184,9 @@ class TrainingOverrideTest(unittest.TestCase):
                 SimpleNamespace(resume_from=None),
             )
 
-        self.assertEqual(model_class.call_args.kwargs["angular_mmd_estimator"], "v")
-        self.assertEqual(model_class.call_args.kwargs["angular_mmd_feature_bandwidths"], bandwidths)
-
-    def test_run_training_preserves_legacy_angular_mmd_policy_by_default(self):
-        model_class = self._run_training_with_angular_policy({})
-
-        self.assertEqual(model_class.call_args.kwargs["angular_mmd_estimator"], "u")
-        self.assertIsNone(model_class.call_args.kwargs["angular_mmd_feature_bandwidths"])
-
-    def test_continuation_treatment_overrides_configured_angular_mmd_policy(self):
-        model_class = self._run_training_with_angular_policy(
-            {
-                "angular_mmd_estimator": "v",
-                "angular_mmd_feature_bandwidths": [0.5, 1.0],
-            },
-            treatment={
-                "angular_mmd_estimator": "u",
-                "angular_mmd_feature_bandwidths": [2.0, 4.0],
-            },
-        )
-
-        self.assertEqual(model_class.call_args.kwargs["angular_mmd_estimator"], "u")
-        self.assertEqual(model_class.call_args.kwargs["angular_mmd_feature_bandwidths"], [2.0, 4.0])
-
-    def _run_training_with_angular_policy(self, policy, treatment=None):
-        params = {
-            "batch_size": 2,
-            "epochs": 1,
-            "learning_rate": 1.0e-4,
-            "loss_weights": {"angular_mmd": 2000.0},
-            "d_model": 8,
-            "n_heads": 2,
-            **policy,
-        }
-        cfg = {"parameters": params}
-        if treatment is not None:
-            cfg["continuation_treatment"] = treatment
-        datamodule = SimpleNamespace(train_dataloader=lambda: [object()], test_ds=None)
-
-        with (
-            unittest.mock.patch.object(train_module, "LightningWBoson") as model_class,
-            unittest.mock.patch.object(
-                train_module,
-                "build_training_callbacks",
-                return_value=[SimpleNamespace()],
-            ),
-            unittest.mock.patch.object(train_module, "clean_training_output"),
-            unittest.mock.patch.object(train_module, "create_loggers", return_value=([], None)),
-            unittest.mock.patch.object(train_module, "Trainer"),
-        ):
-            train_module.run_training(
-                cfg,
-                datamodule,
-                21,
-                (np.zeros(21), np.ones(21)),
-                (np.zeros(3), np.ones(3)),
-                np.ones(3),
-                (0.0, 1.0),
-                np.ones(2),
-                "unused-output",
-                SimpleNamespace(resume_from=None),
-            )
-        return model_class
+        self.assertEqual(model_class.call_args.kwargs["mmd_config"], mmd_config)
+        self.assertNotIn("angular_mmd_estimator", model_class.call_args.kwargs)
+        self.assertNotIn("angular_mmd_feature_bandwidths", model_class.call_args.kwargs)
 
     def test_applies_training_overrides(self):
         config = {

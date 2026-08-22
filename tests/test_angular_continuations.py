@@ -28,10 +28,9 @@ class ContinuationSpecificationTest(unittest.TestCase):
                 "loss_weights": {"huber": 50.0, "angular_mmd": 2000.0},
             },
             "mmd": {
-                "local": False,
                 "angular": {
                     "kernel": "imq",
-                    "bandwidth_multipliers": [0.05, 0.5, 5.0],
+                    "bandwidths": [0.05, 0.5, 5.0],
                 },
             },
             "paths": {"saved_path": "outputs/original", "data_path": "local-data.h5"},
@@ -81,8 +80,7 @@ class ContinuationSpecificationTest(unittest.TestCase):
             specs["D"].config["continuation_treatment"],
             {
                 "angular_mmd_weight": 2000.0,
-                "angular_mmd_estimator": "v",
-                "angular_mmd_feature_bandwidths": self.bandwidths,
+                "angular_mmd_bandwidths": self.bandwidths,
             },
         )
         self.assertEqual(self.base["parameters"]["epochs"], 1024)
@@ -141,21 +139,18 @@ class ContinuationRestoreTreatmentTest(unittest.TestCase):
     def test_model_treatment_is_reapplied_after_checkpoint_restore(self):
         treatment = {
             "angular_mmd_weight": 0.0,
-            "angular_mmd_estimator": "v",
-            "angular_mmd_feature_bandwidths": [0.5, 1.0, 2.0, 4.0],
+            "angular_mmd_bandwidths": [0.5, 1.0, 2.0, 4.0],
         }
         callback = ContinuationTreatmentCallback(treatment)
         model = SimpleNamespace(
             loss_weights={"angular_mmd": 2000.0},
-            angular_mmd_estimator="u",
-            angular_mmd_feature_bandwidths=None,
+            mmd_config={"angular": {"kernel": "imq", "bandwidths": [0.05, 0.5, 5.0]}},
         )
 
         callback.on_train_start(SimpleNamespace(optimizers=[]), model)
 
         self.assertEqual(model.loss_weights["angular_mmd"], 0.0)
-        self.assertEqual(model.angular_mmd_estimator, "v")
-        self.assertEqual(model.angular_mmd_feature_bandwidths, [0.5, 1.0, 2.0, 4.0])
+        self.assertEqual(model.mmd_config["angular"]["bandwidths"], [0.5, 1.0, 2.0, 4.0])
 
     def test_control_callbacks_contain_no_treatment_callback(self):
         callbacks = build_training_callbacks(
@@ -180,7 +175,7 @@ class ContinuationRestoreTreatmentTest(unittest.TestCase):
 
 
 class AngularMmdContinuationRoutingTest(unittest.TestCase):
-    def test_fixed_v_statistic_is_routed_only_to_angular_mmd(self):
+    def test_absolute_bandwidths_are_routed_to_angular_mmd(self):
         model = LightningWBoson(
             input_dim=21,
             d_model=8,
@@ -189,8 +184,7 @@ class AngularMmdContinuationRoutingTest(unittest.TestCase):
             std_scale_train=np.ones(21, dtype=np.float32),
             mmd_cond_mean_train=np.zeros(3, dtype=np.float32),
             mmd_cond_scale_train=np.ones(3, dtype=np.float32),
-            angular_mmd_estimator="v",
-            angular_mmd_feature_bandwidths=[0.5, 1.0, 2.0, 4.0],
+            mmd_config={"angular": {"bandwidths": [0.5, 1.0, 2.0, 4.0]}},
             attention_blocks=1,
             attention_dropout=0.0,
             decoder_dropout=0.0,
@@ -199,10 +193,9 @@ class AngularMmdContinuationRoutingTest(unittest.TestCase):
         angular = model._mmd_kwargs("angular")
         mass = model._mmd_kwargs("mass")
 
-        self.assertEqual(angular["estimator"], "v")
-        self.assertEqual(angular["feature_bandwidths"], [0.5, 1.0, 2.0, 4.0])
-        self.assertNotIn("estimator", mass)
-        self.assertNotIn("feature_bandwidths", mass)
+        self.assertEqual(angular["bandwidths"], [0.5, 1.0, 2.0, 4.0])
+        self.assertEqual(set(angular), {"kernel", "bandwidths"})
+        self.assertEqual(set(mass), {"kernel", "bandwidths"})
 
 
 if __name__ == "__main__":

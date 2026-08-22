@@ -93,6 +93,10 @@ class Booster(nn.Module):
         )
 
     def valid_rest_frame_mask(self, particles=None):
+        state = self._rest_frame_state(particles)
+        return self._valid_rest_frame_mask(state[0], state[1], state[4])
+
+    def _rest_frame_state(self, particles=None):
         if particles is None:
             particles = self.particles
 
@@ -101,7 +105,17 @@ class Booster(nn.Module):
         w1 = particles[..., 8:12]
         lep1 = particles[..., 12:16]
         higgs = w0 + w1
+        w0_h = self._boost_to_rest(w0, higgs)
+        lep0_h = self._boost_to_rest(lep0, higgs)
         w1_h = self._boost_to_rest(w1, higgs)
+        lep1_h = self._boost_to_rest(lep1, higgs)
+        return particles, higgs, w0_h, lep0_h, w1_h, lep1_h
+
+    def _valid_rest_frame_mask(self, particles, higgs, w1_h):
+        w0 = particles[..., 0:4]
+        lep0 = particles[..., 4:8]
+        w1 = particles[..., 8:12]
+        lep1 = particles[..., 12:16]
         w1_axis = w1_h[..., 0:3]
         eps = self._eps(w1_h)
         axis_norm = torch.linalg.vector_norm(w1_axis, dim=-1)
@@ -213,19 +227,11 @@ class Booster(nn.Module):
 
         Both have shape [batch, 4] and are expressed in the (n, r, k) basis.
         """
-        if particles is None:
-            particles = self.particles
+        _, _, w0_h, lep0_h, w1_h, lep1_h = self._rest_frame_state(particles)
 
-        w0 = particles[..., 0:4]
-        lep0 = particles[..., 4:8]
-        w1 = particles[..., 8:12]
-        lep1 = particles[..., 12:16]
+        return self._lep_4_from_rest_frame_state(w0_h, lep0_h, w1_h, lep1_h)
 
-        higgs = w0 + w1
-        w0_h = self._boost_to_rest(w0, higgs)
-        lep0_h = self._boost_to_rest(lep0, higgs)
-        w1_h = self._boost_to_rest(w1, higgs)
-        lep1_h = self._boost_to_rest(lep1, higgs)
+    def _lep_4_from_rest_frame_state(self, w0_h, lep0_h, w1_h, lep1_h):
 
         # k is along W1 in the Higgs rest frame, beam direction is +z.
         n, r, k = self._basis(w1_h)
@@ -237,6 +243,16 @@ class Booster(nn.Module):
             self._project(lep0_w, n, r, k),
             self._project(lep1_w, n, r, k),
         )
+
+    def lep_theta_phi_with_validity(self, particles=None):
+        state = self._rest_frame_state(particles)
+        valid = self._valid_rest_frame_mask(state[0], state[1], state[4])
+        lep0, lep1 = self._lep_4_from_rest_frame_state(*state[2:])
+        angles = torch.stack(
+            [self._theta(lep0), self._phi(lep0), self._theta(lep1), self._phi(lep1)],
+            dim=-1,
+        )
+        return valid, angles
 
     def lep_theta_phi_in_w_rest(self, particles=None):
         lep0, lep1 = self.lep_4_in_w_rest(particles)

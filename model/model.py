@@ -24,37 +24,41 @@ from model.losses import (
 )
 
 DEFAULT_MMD_CONFIG = {
-    "condition": {
-        "kernel": "imq",
-        "bandwidth_multipliers": [0.03, 0.3, 3.0],
-    },
     "alpha": {
         "kernel": "imq",
-        "bandwidth_multipliers": [0.03, 0.3, 3.0],
+        "bandwidths": [0.05, 0.5, 5.0],
     },
     "mass": {
         "kernel": "imq",
-        "bandwidth_multipliers": [0.1, 0.3, 1.0],
+        "bandwidths": [0.05, 0.5, 5.0],
     },
     "angular": {
         "kernel": "imq",
-        "bandwidth_multipliers": [0.1, 1.0, 10.0],
+        "bandwidths": [0.05, 0.5, 5.0],
     },
 }
-DEFAULT_LOCAL_MMD = True
 
 
 def resolve_mmd_config(config=None):
-    config = {} if config is None else config
-    unknown_sections = set(config) - (set(DEFAULT_MMD_CONFIG) | {"local"})
+    config = {} if config is None else dict(config)
+    if (
+        "local" in config
+        or "condition" in config
+        or any("bandwidth_multipliers" in config.get(section, {}) for section in DEFAULT_MMD_CONFIG)
+    ):
+        config.pop("local", None)
+        config.pop("condition", None)
+        for section in DEFAULT_MMD_CONFIG:
+            supplied = dict(config.get(section, {}))
+            if "bandwidth_multipliers" in supplied:
+                supplied["bandwidths"] = supplied.pop("bandwidth_multipliers")
+            config[section] = supplied
+    unknown_sections = set(config) - set(DEFAULT_MMD_CONFIG)
     if unknown_sections:
         names = ", ".join(sorted(unknown_sections))
         raise ValueError(f"unsupported MMD config section(s): {names}")
 
-    local = config.get("local", DEFAULT_LOCAL_MMD)
-    if not isinstance(local, bool):
-        raise ValueError("mmd.local must be a boolean")
-    resolved = {"local": local}
+    resolved = {}
     for section, defaults in DEFAULT_MMD_CONFIG.items():
         supplied = config.get(section, {})
         unknown_keys = set(supplied) - set(defaults)
@@ -64,11 +68,11 @@ def resolve_mmd_config(config=None):
         resolved_section = {**defaults, **supplied}
         if resolved_section["kernel"] not in {"rbf", "imq"}:
             raise ValueError(f"unsupported MMD kernel in {section}: {resolved_section['kernel']}")
-        multipliers = resolved_section["bandwidth_multipliers"]
-        if not multipliers or not all(
-            math.isfinite(float(value)) and float(value) > 0.0 for value in multipliers
+        bandwidths = resolved_section["bandwidths"]
+        if not bandwidths or not all(
+            math.isfinite(float(value)) and float(value) > 0.0 for value in bandwidths
         ):
-            raise ValueError(f"MMD bandwidth_multipliers in {section} must be finite and positive")
+            raise ValueError(f"MMD bandwidths in {section} must be finite and positive")
         resolved[section] = resolved_section
     return resolved
 
@@ -309,17 +313,17 @@ class LightningWBoson(L.LightningModule):
                 raise ValueError("angular_mmd_ramp_epochs must be a non-negative integer")
             angular_mmd_ramp_epochs = int(ramp_epochs)
         mmd_config = resolve_mmd_config(mmd_config)
-        if angular_mmd_estimator not in {"u", "v"}:
-            raise ValueError("angular_mmd_estimator must be 'u' or 'v'")
         if angular_mmd_feature_bandwidths is not None:
-            angular_mmd_feature_bandwidths = [
-                float(value) for value in angular_mmd_feature_bandwidths
-            ]
-            if not angular_mmd_feature_bandwidths or not all(
-                math.isfinite(value) and value > 0.0 for value in angular_mmd_feature_bandwidths
+            legacy_bandwidths = [float(value) for value in angular_mmd_feature_bandwidths]
+            if not legacy_bandwidths or not all(
+                math.isfinite(value) and value > 0.0 for value in legacy_bandwidths
             ):
                 raise ValueError("angular_mmd_feature_bandwidths must be finite and positive")
-        self.save_hyperparameters()
+            mmd_config["angular"]["bandwidths"] = legacy_bandwidths
+        # Deprecated angular arguments remain accepted so older checkpoints load.
+        self.save_hyperparameters(
+            ignore=["angular_mmd_estimator", "angular_mmd_feature_bandwidths"]
+        )
         if w_fourvec_scales is None:
             w_fourvec_scales = torch.ones(4, dtype=torch.float32)
         self.register_buffer(
@@ -358,8 +362,6 @@ class LightningWBoson(L.LightningModule):
             attention_dropout=attention_dropout,
             decoder_dropout=decoder_dropout,
         )  # give a base model structure for forward()
-        if mmd_config["local"] and self.model.hl_input_dim == 0:
-            print("High-level features unavailable; MMD losses run unconditioned (local=false).")
         defaults = {
             # main loss
             "huber": 1.0,
@@ -388,8 +390,6 @@ class LightningWBoson(L.LightningModule):
         self.log_loss_gradient_cosines = bool(log_loss_gradient_cosines)
         self._gradient_analysis_batch = None
         self.mmd_config = mmd_config
-        self.angular_mmd_estimator = angular_mmd_estimator
-        self.angular_mmd_feature_bandwidths = angular_mmd_feature_bandwidths
         self.angular_mmd_ramp_epochs = angular_mmd_ramp_epochs
         self.higgs_mass_target = higgs_mass_target
         self.higgs_mass_scale = higgs_mass_scale
@@ -445,20 +445,8 @@ class LightningWBoson(L.LightningModule):
         )
 
     def _mmd_kwargs(self, feature_name):
-        condition = self.mmd_config["condition"]
         feature = self.mmd_config[feature_name]
-        kwargs = {
-            "local": self.mmd_config["local"] and self.model.hl_input_dim > 0,
-            "feature_kernel": feature["kernel"],
-            "condition_kernel": condition["kernel"],
-            "feature_bandwidth_multipliers": feature["bandwidth_multipliers"],
-            "condition_bandwidth_multipliers": condition["bandwidth_multipliers"],
-        }
-        if feature_name == "angular":
-            kwargs["estimator"] = self.angular_mmd_estimator
-            if self.angular_mmd_feature_bandwidths is not None:
-                kwargs["feature_bandwidths"] = self.angular_mmd_feature_bandwidths
-        return kwargs
+        return {"kernel": feature["kernel"], "bandwidths": feature["bandwidths"]}
 
     def _compute_losses(self, x, y, y_pred, cond, aux=None):
         losses = {}

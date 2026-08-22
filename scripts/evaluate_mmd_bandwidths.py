@@ -34,52 +34,40 @@ def tensor_batch(values, device):
     return torch.as_tensor(values, dtype=torch.float32, device=device)
 
 
-def valid_mmd_rows(prediction, truth, condition, *, local):
+def valid_mmd_rows(prediction, truth):
     valid = torch.isfinite(prediction).reshape(prediction.shape[0], -1).all(dim=1)
     valid &= torch.isfinite(truth).reshape(truth.shape[0], -1).all(dim=1)
-    if local:
-        valid &= torch.isfinite(condition).reshape(condition.shape[0], -1).all(dim=1)
     return valid
 
 
 def per_bandwidth_mmd(
     prediction,
     truth,
-    condition,
     *,
-    local,
-    feature_kernel,
-    condition_kernel,
-    feature_bandwidth_multipliers,
-    condition_bandwidth_multipliers,
+    kernel,
+    bandwidths,
 ):
     return [
-        loss_module.compute_local_mmd(
+        loss_module.compute_mmd(
             prediction,
             truth,
-            condition,
-            local=local,
-            feature_kernel=feature_kernel,
-            condition_kernel=condition_kernel,
-            feature_bandwidth_multipliers=[multiplier],
-            condition_bandwidth_multipliers=condition_bandwidth_multipliers,
+            kernel=kernel,
+            bandwidths=[bandwidth],
         )
-        for multiplier in feature_bandwidth_multipliers
+        for bandwidth in bandwidths
     ]
 
 
 def per_bandwidth_mmd_diagnostics(
     prediction,
     truth,
-    condition,
     **kwargs,
 ):
     prediction = prediction.detach().requires_grad_(True)
     truth = truth.detach()
-    condition = condition.detach()
     diagnostics = []
     with torch.enable_grad():
-        for mmd2 in per_bandwidth_mmd(prediction, truth, condition, **kwargs):
+        for mmd2 in per_bandwidth_mmd(prediction, truth, **kwargs):
             loss = mmd2
             gradient = torch.autograd.grad(loss, prediction)[0] * prediction.shape[0]
             diagnostics.append(
@@ -129,11 +117,11 @@ def result_label(checkpoint):
 def _capture_mmd_inputs(loss_fn, *args, **kwargs):
     captured = []
 
-    def capture(prediction, truth, condition, **mmd_kwargs):
-        captured.append((prediction, truth, condition, mmd_kwargs))
+    def capture(prediction, truth, **mmd_kwargs):
+        captured.append((prediction, truth, mmd_kwargs))
         return prediction.sum() * 0.0
 
-    with patch.object(loss_module, "compute_local_mmd", side_effect=capture):
+    with patch.object(loss_module, "compute_mmd", side_effect=capture):
         loss_fn(*args, **kwargs)
     if not captured:
         return None
@@ -186,10 +174,8 @@ def evaluate_checkpoint(checkpoint, features, targets, batch_size, device):
         .to(device)
     )
     feature_names = ("alpha", "mass", "angular")
-    multipliers = {
-        name: tuple(model.mmd_config[name]["bandwidth_multipliers"]) for name in feature_names
-    }
-    accumulated = {name: [[] for _ in multipliers[name]] for name in feature_names}
+    bandwidths = {name: tuple(model.mmd_config[name]["bandwidths"]) for name in feature_names}
+    accumulated = {name: [[] for _ in bandwidths[name]] for name in feature_names}
 
     for start in range(0, len(features), batch_size):
         with torch.no_grad():
@@ -203,22 +189,15 @@ def evaluate_checkpoint(checkpoint, features, targets, batch_size, device):
         for name, captured in captured_features.items():
             if captured is None:
                 continue
-            prediction, truth, condition, kwargs = captured
-            valid_rows = valid_mmd_rows(
-                prediction,
-                truth,
-                condition,
-                local=kwargs["local"],
-            )
+            prediction, truth, kwargs = captured
+            valid_rows = valid_mmd_rows(prediction, truth)
             prediction = prediction[valid_rows]
             truth = truth[valid_rows]
-            condition = condition[valid_rows]
             if prediction.shape[0] == 0:
                 continue
             diagnostics = per_bandwidth_mmd_diagnostics(
                 prediction,
                 truth,
-                condition,
                 **kwargs,
             )
             row_count = prediction.shape[0]
@@ -239,18 +218,18 @@ def evaluate_checkpoint(checkpoint, features, targets, batch_size, device):
         name: [aggregate_bandwidth_diagnostics(batches) for batches in bandwidth_batches]
         for name, bandwidth_batches in accumulated.items()
     }
-    return multipliers, results
+    return bandwidths, results
 
 
 def print_results(all_results):
-    for label, (multipliers, results) in all_results.items():
+    for label, (bandwidths, results) in all_results.items():
         print(label)
         for name in ("alpha", "mass", "angular"):
             diagnostics = results[name]
             pairs = "  ".join(
-                f"{multiplier:g}:mmd2={mmd2:.8g},loss={loss:.8g},"
+                f"{bandwidth:g}:mmd2={mmd2:.8g},loss={loss:.8g},"
                 f"prediction_gradient_rms={gradient_rms:.8g}"
-                for multiplier, (mmd2, loss, gradient_rms) in zip(multipliers[name], diagnostics)
+                for bandwidth, (mmd2, loss, gradient_rms) in zip(bandwidths[name], diagnostics)
             )
             mixed_mmd2 = sum(mmd2 for mmd2, _, _ in diagnostics) / len(diagnostics)
             mixed_loss = mixed_mmd2

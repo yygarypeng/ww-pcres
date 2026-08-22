@@ -39,6 +39,43 @@ def _validate_bandwidth_multipliers(values, name):
     return multipliers
 
 
+def compute_mmd(x, y, *, kernel="imq", bandwidths=(0.1, 1.0, 10.0)):
+    """Global non-negative V-statistic with fixed absolute bandwidths."""
+    bandwidths = _validate_bandwidth_multipliers(bandwidths, "bandwidths")
+    if kernel not in {"imq", "rbf"}:
+        raise ValueError(f"Unsupported kernel: {kernel}")
+
+    x = x.reshape(x.shape[0], -1)
+    y = y.reshape(y.shape[0], -1)
+    if x.shape[0] != y.shape[0]:
+        raise ValueError("x and y must have the same number of paired rows")
+
+    finite = torch.isfinite(x).all(dim=1) & torch.isfinite(y).all(dim=1)
+    x = x[finite]
+    y = y[finite]
+    if x.shape[0] == 0:
+        return (x.sum() + y.sum()) * 0.0
+
+    x2 = x.square().sum(dim=1)
+    y2 = y.square().sum(dim=1)
+    dxx = (x2[:, None] + x2[None, :] - 2.0 * (x @ x.T)).clamp_min(0.0)
+    dyy = (y2[:, None] + y2[None, :] - 2.0 * (y @ y.T)).clamp_min(0.0)
+    dxy = (x2[:, None] + y2[None, :] - 2.0 * (x @ y.T)).clamp_min(0.0)
+
+    def kernel_mean(distance, bandwidth):
+        bandwidth2 = bandwidth**2
+        if kernel == "imq":
+            return (bandwidth2 / (bandwidth2 + distance + TOR)).mean()
+        return torch.exp(-0.5 * distance / (bandwidth2 + TOR)).mean()
+
+    mmd = x.new_zeros(())
+    for bandwidth in bandwidths:
+        mmd = mmd + kernel_mean(dxx, bandwidth)
+        mmd = mmd + kernel_mean(dyy, bandwidth)
+        mmd = mmd - 2.0 * kernel_mean(dxy, bandwidth)
+    return (mmd / len(bandwidths)).clamp_min(0.0)
+
+
 def invariant_mass2(fourvec):
     px, py, pz, E = fourvec[..., 0], fourvec[..., 1], fourvec[..., 2], fourvec[..., 3]
     return E**2 - (px**2 + py**2 + pz**2)
@@ -51,20 +88,18 @@ def standardized_fourvec_huber_loss(y_true, y_pred, component_scales):
     return F.huber_loss(residual, torch.zeros_like(residual))
 
 
-def _valid_kinematic_rows(x_batch, y_true, y_pred, cond, local=True):
-    valid = (
+def _valid_kinematic_rows(x_batch, y_true, y_pred):
+    return (
         torch.isfinite(x_batch[..., :8]).all(dim=-1)
         & torch.isfinite(y_true[..., :8]).all(dim=-1)
         & torch.isfinite(y_pred).all(dim=-1)
     )
-    return valid & torch.isfinite(cond).all(dim=-1) if local else valid
 
 
-def _differentiable_zero(y_true, y_pred, cond):
+def _differentiable_zero(y_true, y_pred):
     return (
         torch.nan_to_num(y_true[..., :8], nan=0.0, posinf=0.0, neginf=0.0).sum()
         + torch.nan_to_num(y_pred, nan=0.0, posinf=0.0, neginf=0.0).sum()
-        + torch.nan_to_num(cond, nan=0.0, posinf=0.0, neginf=0.0).sum()
     ) * 0.0
 
 
@@ -178,7 +213,7 @@ def compute_local_mmd(
     feature_bandwidths=None,
     estimator="u",
 ):
-    """Paired feature MMD, optionally localized by a condition kernel.
+    """Legacy paired MMD retained for historical diagnostics.
 
     The default U-statistic excludes paired diagonal terms and can be negative.
     The V-statistic includes all terms and is nonnegative. Feature bandwidths
@@ -290,19 +325,14 @@ def compute_local_mmd(
 
 
 def alpha_mmd(x_batch, y_true, y_pred, cond, **mmd_kwargs):
-    valid = _valid_kinematic_rows(
-        x_batch,
-        y_true,
-        y_pred,
-        cond,
-        local=mmd_kwargs.get("local", True),
-    ) & torch.isfinite(y_true[..., 8:10]).all(dim=-1)
+    valid = _valid_kinematic_rows(x_batch, y_true, y_pred) & torch.isfinite(y_true[..., 8:10]).all(
+        dim=-1
+    )
     if not valid.any():
-        return _differentiable_zero(y_true, y_pred, cond)
+        return _differentiable_zero(y_true, y_pred)
     x_batch = x_batch[valid]
     y_true = y_true[valid]
     y_pred = y_pred[valid]
-    cond = cond[valid]
 
     w_mass2 = W_MASS_SCALE**2
     slot0_on = torch.abs(y_true[..., 8] ** 2 - w_mass2) < torch.abs(y_true[..., 9] ** 2 - w_mass2)
@@ -314,32 +344,24 @@ def alpha_mmd(x_batch, y_true, y_pred, cond, **mmd_kwargs):
     pred_features, pred_alpha_valid = _alpha_features(x_batch, y_pred, slot0_on)
     alpha_valid = true_alpha_valid & pred_alpha_valid
     if not alpha_valid.any():
-        return _differentiable_zero(y_true, y_pred, cond)
-    return compute_local_mmd(
+        return _differentiable_zero(y_true, y_pred)
+    return compute_mmd(
         pred_features[alpha_valid],
         true_features[alpha_valid],
-        cond[alpha_valid],
         **mmd_kwargs,
     )
 
 
 def mass_mmd(x_batch, y_true, y_pred, cond, center, scale, **mmd_kwargs):
-    valid = _valid_kinematic_rows(
-        x_batch,
-        y_true,
-        y_pred,
-        cond,
-        local=mmd_kwargs.get("local", True),
-    )
+    valid = _valid_kinematic_rows(x_batch, y_true, y_pred)
     if not valid.any():
-        return _differentiable_zero(y_true, y_pred, cond)
+        return _differentiable_zero(y_true, y_pred)
     y_true = y_true[valid]
     y_pred = y_pred[valid]
-    cond = cond[valid]
 
     true_features = _mass_features(y_true[..., :8], center, scale)
     pred_features = _mass_features(y_pred, center, scale)
-    return compute_local_mmd(pred_features, true_features, cond, **mmd_kwargs)
+    return compute_mmd(pred_features, true_features, **mmd_kwargs)
 
 
 def angular_mmd(x_batch, y_true, y_pred, cond, **mmd_kwargs):
@@ -351,10 +373,11 @@ def angular_mmd(x_batch, y_true, y_pred, cond, **mmd_kwargs):
 
     true_booster = Booster(lep, true_w)
     pred_booster = Booster(lep, pred_w)
-    valid = true_booster.valid_rest_frame_mask() & pred_booster.valid_rest_frame_mask()
-
-    true_ang = torch.stack(true_booster.lep_theta_phi_in_w_rest(), dim=-1)[valid]
-    pred_ang = torch.stack(pred_booster.lep_theta_phi_in_w_rest(), dim=-1)[valid]
+    true_valid, true_ang = true_booster.lep_theta_phi_with_validity()
+    pred_valid, pred_ang = pred_booster.lep_theta_phi_with_validity()
+    valid = true_valid & pred_valid
+    true_ang = true_ang[valid]
+    pred_ang = pred_ang[valid]
     if true_ang.shape[0] == 0:
         return (torch.nan_to_num(true_w, nan=0.0, posinf=0.0, neginf=0.0) * 0.0).sum() + (
             torch.nan_to_num(pred_w, nan=0.0, posinf=0.0, neginf=0.0) * 0.0
@@ -363,5 +386,4 @@ def angular_mmd(x_batch, y_true, y_pred, cond, **mmd_kwargs):
     true_ang = angular_mmd_features(true_ang)
     pred_ang = angular_mmd_features(pred_ang)
 
-    cond = cond[valid]
-    return compute_local_mmd(pred_ang, true_ang, cond, **mmd_kwargs)
+    return compute_mmd(pred_ang, true_ang, **mmd_kwargs)

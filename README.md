@@ -82,27 +82,13 @@ Outputs are written under `paths.saved_path`. Training deletes that output direc
 
 Adaptive loss weights, when enabled, are updated once at the end of each training epoch using the first training batch from that epoch. The cosine metrics are logged as `grad_cos/{loss}__total`.
 
-### Local MMD configuration
+### MMD configuration
 
-The local MMD losses use a product of two independently configured kernel mixtures:
+The `alpha_mmd`, charge-ordered `mass_mmd`, and `angular_mmd` losses use a global, non-negative V-statistic. Each loss has a kernel and fixed absolute `bandwidths` under the top-level `mmd` section; see `configs/config.example.yaml` for the supported keys. Adding another bandwidth changes kernel coverage without mechanically rescaling the loss.
 
-- an output-feature kernel for `alpha_mmd`, joint charge-ordered `mass_mmd`, or `angular_mmd`;
-- a condition kernel over standardized `m_ll` and `deta_ll` plus unstandardized `dphi_ll`.
-
-Feature and condition bandwidth lists form a normalized Cartesian-product mixture. Adding another bandwidth therefore changes kernel coverage without mechanically rescaling the loss. The mass loss applies `asinh(m_W^2 / 80.4^2)` and fixed robust statistics fitted on the training truth split. Angular features use `2 * theta / pi - 1` together with `sin(phi)` and `cos(phi)`, producing six features in [-1, 1] while preserving phi periodicity.
-
-Configure the two sides separately under the top-level `mmd` section; see `configs/config.example.yaml` for the supported keys. Unsupported loss names are rejected instead of being ignored.
-
-Set `mmd.local: true` (the default) to multiply each output-feature kernel by the condition kernel over the three high-level features. Set `mmd.local: false` to use global MMD over output features only. Global mode still passes the high-level features into the neural network; it only removes them from MMD conditioning.
+The mass loss applies `asinh(m_W^2 / 80.4^2)` and fixed robust statistics fitted on the training truth split. Angular features use `2 * theta / pi - 1` together with `sin(phi)` and `cos(phi)`, producing six features in [-1, 1] while preserving phi periodicity. High-level features remain inputs to the neural network but are not used as MMD condition kernels.
 
 Set `parameters.angular_mmd_ramp_epochs` to ramp the angular MMD weight over $R$ epochs. At epoch $e$, its effective weight is $w_{\mathrm{angular}}[1 - \cos(\pi \min(e / R, 1))] / 2$, reaching the configured $w_{\mathrm{angular}}$ at epoch $R$; setting $R$ to zero applies the full configured weight immediately. Other loss weights are unaffected. Early stopping starts checking `val_loss` at epoch $R$, so the ramp-up phase cannot stop training prematurely; with $R$ set to zero it checks from epoch 0 as usual.
-
-Set `parameters.angular_mmd_estimator: v` together with
-`parameters.angular_mmd_feature_bandwidths` to use a non-negative angular
-V-statistic with absolute bandwidths. Fit those bandwidths once from truth
-angular features and keep them fixed across training and validation; the
-commented keys in `configs/config.example.yaml` show where to provide them.
-Omitting these keys preserves the legacy batch-fitted U-statistic.
 
 ### Visualization and inference check
 
@@ -131,7 +117,7 @@ The loader's public input contains 21 raw columns, ordered as positive-lepton `(
 
 Only the neural aggregation path converts these raw inputs to 21 features, in this order: positive-lepton `(px, py, pz, log1p(E))`, negative-lepton `(px, py, pz, log1p(E))`, jet 0 `(px, py, pz, log1p(E))`, jet 1 `(px, py, pz, log1p(E))`, MET `(px, py)`, `m_ll`, `deta_ll`, and `dphi_ll`. Non-angular statistics are fitted on the training split only; each jet slot uses only events where that raw jet is present, with mean zero and scale one if no training event contains the slot. The `dphi_ll` feature keeps fixed mean zero and scale one. Padded jets remain in event arrays and are excluded by attention masks.
 
-The MMD condition path is separate from neural aggregation and constructs three condition features directly from raw inputs: `m_ll`, `deta_ll`, and `dphi_ll`. Only `m_ll` and `deta_ll` are standardized; `dphi_ll` remains unchanged by using mean zero and scale one.
+Legacy MMD condition buffers retain statistics for `m_ll`, `deta_ll`, and `dphi_ll` so existing checkpoints remain loadable. Current training losses do not consume these buffers.
 
 The loader also builds 10 targets. Target columns contain each W boson's `(px, py, pz, energy)` in GeV followed by the two truth W masses. Each truth W must be finite and timelike, have a nonnegative stored mass, and agree with $E^2-|p|^2$ within `1e-6 + 1e-6` times the sum-of-squares scale; the combined W pair must also be timelike.
 
