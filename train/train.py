@@ -240,6 +240,37 @@ class RNGStateCallback(Callback):
         self._pending_state = None
 
 
+class ContinuationTreatmentCallback(Callback):
+    _SUPPORTED = {
+        "learning_rate",
+        "angular_mmd_weight",
+        "angular_mmd_estimator",
+        "angular_mmd_feature_bandwidths",
+    }
+
+    def __init__(self, treatment):
+        unknown = set(treatment) - self._SUPPORTED
+        if unknown:
+            raise ValueError(f"unsupported continuation treatment(s): {', '.join(sorted(unknown))}")
+        self.treatment = treatment
+
+    def on_train_start(self, trainer, pl_module):
+        learning_rate = self.treatment.get("learning_rate")
+        if learning_rate is not None:
+            for optimizer in trainer.optimizers:
+                for group in optimizer.param_groups:
+                    group["lr"] = float(learning_rate)
+
+        if "angular_mmd_weight" in self.treatment:
+            pl_module.loss_weights["angular_mmd"] = float(self.treatment["angular_mmd_weight"])
+        if "angular_mmd_estimator" in self.treatment:
+            pl_module.angular_mmd_estimator = self.treatment["angular_mmd_estimator"]
+        if "angular_mmd_feature_bandwidths" in self.treatment:
+            pl_module.angular_mmd_feature_bandwidths = list(
+                self.treatment["angular_mmd_feature_bandwidths"]
+            )
+
+
 class RetentionModelCheckpoint(ModelCheckpoint):
     @property
     def state_key(self):
@@ -253,7 +284,7 @@ class RetentionModelCheckpoint(ModelCheckpoint):
         )
 
 
-def build_training_callbacks(params):
+def build_training_callbacks(params, continuation_treatment=None):
     save_every_epoch = params.get("save_every_epoch", False)
     callbacks = [
         RetentionModelCheckpoint(
@@ -264,16 +295,21 @@ def build_training_callbacks(params):
             every_n_epochs=1,
             filename="reg-{epoch:02d}-{val_loss:.2f}",
         ),
-        DeferredEarlyStopping(
-            start_epoch=params.get("angular_mmd_ramp_epochs", 0),
-            monitor="val_loss",
-            patience=params.get("early_stopping_patience", 32),
-            min_delta=params.get("early_stopping_min_delta", 0.0),
-            mode="min",
-            verbose=False,
-        ),
-        RNGStateCallback(),
     ]
+    if not params.get("disable_early_stopping", False):
+        callbacks.append(
+            DeferredEarlyStopping(
+                start_epoch=params.get("angular_mmd_ramp_epochs", 0),
+                monitor="val_loss",
+                patience=params.get("early_stopping_patience", 32),
+                min_delta=params.get("early_stopping_min_delta", 0.0),
+                mode="min",
+                verbose=False,
+            )
+        )
+    callbacks.append(RNGStateCallback())
+    if continuation_treatment is not None:
+        callbacks.append(ContinuationTreatmentCallback(continuation_treatment))
     return callbacks
 
 
@@ -290,6 +326,10 @@ def run_training(
     arg,
 ):
     params = cfg["parameters"]
+    continuation_treatment = cfg.get("continuation_treatment")
+    model_loss_weights = dict(params["loss_weights"])
+    if continuation_treatment is not None and "angular_mmd_weight" in continuation_treatment:
+        model_loss_weights["angular_mmd"] = continuation_treatment["angular_mmd_weight"]
     std_mean_train, std_scale_train = standardization
     mmd_cond_mean_train, mmd_cond_scale_train = mmd_condition_standardization
     mass_mmd_center, mass_mmd_scale = mass_mmd_standardization
@@ -307,8 +347,12 @@ def run_training(
         dmet_scales=dmet_scales,
         lr=params["learning_rate"],
         weight_decay=params.get("weight_decay", 1e-4),
-        loss_weights=params["loss_weights"],
+        loss_weights=model_loss_weights,
         mmd_config=cfg.get("mmd", {}),
+        angular_mmd_estimator=(continuation_treatment or {}).get("angular_mmd_estimator", "u"),
+        angular_mmd_feature_bandwidths=(continuation_treatment or {}).get(
+            "angular_mmd_feature_bandwidths"
+        ),
         angular_mmd_ramp_epochs=params.get("angular_mmd_ramp_epochs", 0),
         adaptive_loss_weights=params.get("adaptive_loss_weights", False),
         log_loss_gradient_cosines=params.get("log_loss_gradient_cosines", False),
@@ -322,7 +366,7 @@ def run_training(
         decoder_dropout=params.get("decoder_dropout", 0.1),
     )
 
-    callbacks = build_training_callbacks(params)
+    callbacks = build_training_callbacks(params, continuation_treatment)
     ckpt = callbacks[0]
     steps_per_epoch = max(1, len(dm.train_dataloader()))
     saved_path = resolve_repo_path(saved_path).resolve()
