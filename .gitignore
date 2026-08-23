@@ -56,6 +56,7 @@ coverage.xml
 *.npz
 *.onnx
 outputs/
+meta/
 artifacts/
 hww_pcres_regressor*/
 lightning_logs/

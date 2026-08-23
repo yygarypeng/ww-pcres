@@ -230,6 +230,8 @@ class LightningWBoson(L.LightningModule):
         decoder_dropout=0.1,
     ):
         super().__init__()
+
+        # resolve higgs parameters
         higgs_mass_parameters = {
             "higgs_mass_target": float(higgs_mass_target),
             "higgs_mass_scale": float(higgs_mass_scale),
@@ -241,6 +243,8 @@ class LightningWBoson(L.LightningModule):
         higgs_mass_target = higgs_mass_parameters["higgs_mass_target"]
         higgs_mass_scale = higgs_mass_parameters["higgs_mass_scale"]
         higgs_mass_delta = higgs_mass_parameters["higgs_mass_delta"]
+
+        # resolve angular_mmd_ramp_epochs
         if isinstance(angular_mmd_ramp_epochs, bool):
             raise ValueError("angular_mmd_ramp_epochs must be a non-negative integer")
         if isinstance(angular_mmd_ramp_epochs, Integral):
@@ -257,8 +261,13 @@ class LightningWBoson(L.LightningModule):
             if not math.isfinite(ramp_epochs) or ramp_epochs < 0.0 or not ramp_epochs.is_integer():
                 raise ValueError("angular_mmd_ramp_epochs must be a non-negative integer")
             angular_mmd_ramp_epochs = int(ramp_epochs)
+        # resolve mmd_config
         mmd_config = resolve_mmd_config(mmd_config)
+
+        # save model configuration
         self.save_hyperparameters()
+
+        # register buffers for loss scaling (store in stat-dict)
         if w_fourvec_scales is None:
             w_fourvec_scales = torch.ones(4, dtype=torch.float32)
         self.register_buffer(
@@ -285,6 +294,8 @@ class LightningWBoson(L.LightningModule):
                 torch.finfo(torch.float32).eps
             ),
         )
+
+        # load model
         self.model = WBosonRegressor(
             input_dim,
             d_model,
@@ -316,7 +327,7 @@ class LightningWBoson(L.LightningModule):
             name: float(weight) for name, weight in {**defaults, **(loss_weights or {})}.items()
         }
         self.adaptive_loss_weights = bool(adaptive_loss_weights)
-        # log every loss gradient cosine
+        # log every loss gradient cosine (if 0 -> do not log)
         self.adaptive_loss_names = [
             name for name, weight in self.loss_weights.items() if weight != 0.0
         ]
@@ -329,17 +340,14 @@ class LightningWBoson(L.LightningModule):
         self.higgs_mass_delta = higgs_mass_delta
         self.lr = lr
 
-    @classmethod
-    def load_for_inference(cls, checkpoint_path, **kwargs):
-        kwargs["loss_weights"] = {}
-        return cls.load_from_checkpoint(checkpoint_path, **kwargs)
-
     def forward(self, x, return_aux=False):
         return self.model(x, return_aux=return_aux)
 
     def _effective_loss_weights(self):
         if self.angular_mmd_ramp_epochs == 0:
             return self.loss_weights
+
+        # consine ramp for angular_mmd loss weight
         progress = min(max(self.current_epoch / self.angular_mmd_ramp_epochs, 0.0), 1.0)
         multiplier = (1.0 - math.cos(math.pi * progress)) / 2.0
         return {

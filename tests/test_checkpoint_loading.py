@@ -32,37 +32,6 @@ class InferenceCheckpointLoadingTest(unittest.TestCase):
             )
         return inputs
 
-    def test_loads_checkpoint_with_legacy_loss_weights_for_inference(self):
-        model = self.make_model()
-        inputs = self.make_inputs()
-        expected = model(inputs)
-        checkpoint = {
-            "state_dict": model.state_dict(),
-            "hyper_parameters": {
-                **dict(model.hparams),
-                "loss_weights": {"w_mass_mmd": 1.0},
-            },
-            "pytorch-lightning_version": L.__version__,
-        }
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            checkpoint_path = Path(tmpdir) / "legacy.ckpt"
-            torch.save(checkpoint, checkpoint_path)
-
-            with self.assertRaisesRegex(ValueError, "unsupported loss_weights key.*w_mass_mmd"):
-                LightningWBoson.load_from_checkpoint(
-                    checkpoint_path,
-                    weights_only=False,
-                    strict=False,
-                )
-            loaded = LightningWBoson.load_for_inference(
-                checkpoint_path,
-                weights_only=False,
-                strict=False,
-            ).eval()
-
-        torch.testing.assert_close(loaded(inputs), expected)
-
     def test_current_preprocessing_checkpoint_round_trips(self):
         model = self.make_model()
         inputs = self.make_inputs()

@@ -1,7 +1,5 @@
 import argparse
-import math
 import os
-import random
 import shutil
 import sys
 from pathlib import Path
@@ -11,7 +9,7 @@ import numpy as np
 import torch
 import yaml
 from pytorch_lightning import Trainer, seed_everything
-from pytorch_lightning.callbacks import Callback, EarlyStopping, ModelCheckpoint
+from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 from pytorch_lightning.loggers import CSVLogger, WandbLogger
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -53,28 +51,6 @@ def load_config(config_path=DEFAULT_CONFIG):
 
     with open(config_path, "r") as file:
         return yaml.safe_load(file)
-
-
-def apply_cli_overrides(cfg, arg):
-    overrides = (
-        ("seed", "parameters", "seed"),
-        ("epochs", "parameters", "epochs"),
-        ("save_every_epoch", "parameters", "save_every_epoch"),
-        ("max_events_per_category", "data", "max_events_per_category"),
-        ("saved_path", "paths", "saved_path"),
-    )
-    for arg_name, section, key in overrides:
-        value = getattr(arg, arg_name, None)
-        if value is not None:
-            cfg.setdefault(section, {})[key] = value
-    higgs_mass_weight = getattr(arg, "higgs_mass_weight", None)
-    if higgs_mass_weight is not None:
-        if not math.isfinite(higgs_mass_weight) or higgs_mass_weight < 0.0:
-            raise ValueError("higgs_mass_weight must be finite and non-negative")
-        cfg.setdefault("parameters", {}).setdefault("loss_weights", {})["higgs_mass"] = (
-            higgs_mass_weight
-        )
-    return cfg
 
 
 def flatten_config(config, prefix=""):
@@ -170,23 +146,21 @@ def build_datamodule(cfg, data_path):
     )
 
 
-def create_loggers(cfg, model, saved_path, arg, steps_per_epoch):
+def create_loggers(cfg, model, saved_path, use_wandb):
     csv_logger = CSVLogger(save_dir=saved_path, name="logs", version=0)
     prime_csv_metric_header(csv_logger, model)
 
-    if not getattr(arg, "wandb", False):
+    if not use_wandb:
         print("Wandb logging disabled, only using CSVLogger.")
         return [csv_logger], None
 
     wandb_logger = WandbLogger(
-        project=getattr(arg, "wandb_project", None) or "PCRES-regressor",
-        name=getattr(arg, "run_name", None) or Path(saved_path).name,
+        project="PCRES-regressor",
+        name=Path(saved_path).name,
         save_dir=saved_path,
         log_model=True,
     )
     wandb_logger.experiment.config.update(flatten_config(cfg), allow_val_change=True)
-    if getattr(arg, "watch_model", False):
-        wandb_logger.watch(model, log="all", log_freq=steps_per_epoch, log_graph=False)
 
     return [csv_logger, wandb_logger], wandb_logger
 
@@ -204,111 +178,25 @@ class DeferredEarlyStopping(EarlyStopping):
         super()._run_early_stopping_check(trainer)
 
 
-class RNGStateCallback(Callback):
-    def __init__(self):
-        self._pending_state = None
-
-    def state_dict(self):
-        numpy_state = np.random.get_state()
-        return {
-            "python": random.getstate(),
-            "numpy": (
-                numpy_state[0],
-                numpy_state[1].copy(),
-                numpy_state[2],
-                numpy_state[3],
-                numpy_state[4],
-            ),
-            "torch": torch.get_rng_state().clone(),
-            "cuda": [state.clone() for state in torch.cuda.get_rng_state_all()],
-        }
-
-    def load_state_dict(self, state_dict):
-        self._pending_state = state_dict
-
-    def on_train_start(self, trainer, pl_module):
-        if self._pending_state is None:
-            return
-
-        state = self._pending_state
-        random.setstate(state["python"])
-        np.random.set_state(state["numpy"])
-        torch.set_rng_state(state["torch"])
-        torch.cuda.set_rng_state_all(state["cuda"])
-        self._pending_state = None
-
-
-class ContinuationTreatmentCallback(Callback):
-    _SUPPORTED = {
-        "learning_rate",
-        "angular_mmd_weight",
-        "angular_mmd_bandwidths",
-    }
-
-    def __init__(self, treatment):
-        unknown = set(treatment) - self._SUPPORTED
-        if unknown:
-            raise ValueError(f"unsupported continuation treatment(s): {', '.join(sorted(unknown))}")
-        self.treatment = treatment
-
-    def on_train_start(self, trainer, pl_module):
-        learning_rate = self.treatment.get("learning_rate")
-        if learning_rate is not None:
-            learning_rate = float(learning_rate)
-            for optimizer in trainer.optimizers:
-                for group in optimizer.param_groups:
-                    group["lr"] = learning_rate
-            pl_module.lr = learning_rate
-            pl_module.hparams.lr = learning_rate
-
-        if "angular_mmd_weight" in self.treatment:
-            pl_module.loss_weights["angular_mmd"] = float(self.treatment["angular_mmd_weight"])
-        if "angular_mmd_bandwidths" in self.treatment:
-            pl_module.mmd_config["angular"]["bandwidths"] = list(
-                self.treatment["angular_mmd_bandwidths"]
-            )
-
-
-class RetentionModelCheckpoint(ModelCheckpoint):
-    @property
-    def state_key(self):
-        return self._generate_state_key(
-            monitor=self.monitor,
-            mode=self.mode,
-            every_n_train_steps=self._every_n_train_steps,
-            every_n_epochs=self._every_n_epochs,
-            train_time_interval=self._train_time_interval,
-            save_top_k=self.save_top_k,
-        )
-
-
-def build_training_callbacks(params, continuation_treatment=None):
-    save_every_epoch = params.get("save_every_epoch", False)
-    callbacks = [
-        RetentionModelCheckpoint(
+def build_training_callbacks(params):
+    return [
+        ModelCheckpoint(
             monitor="val_loss",
             mode="min",
-            save_top_k=-1 if save_every_epoch else 16,
+            save_top_k=16,
             save_last=True,
             every_n_epochs=1,
             filename="reg-{epoch:02d}-{val_loss:.2f}",
         ),
+        DeferredEarlyStopping(
+            start_epoch=params.get("angular_mmd_ramp_epochs", 0),
+            monitor="val_loss",
+            patience=params.get("early_stopping_patience", 32),
+            min_delta=params.get("early_stopping_min_delta", 0.0),
+            mode="min",
+            verbose=False,
+        ),
     ]
-    if not params.get("disable_early_stopping", False):
-        callbacks.append(
-            DeferredEarlyStopping(
-                start_epoch=params.get("angular_mmd_ramp_epochs", 0),
-                monitor="val_loss",
-                patience=params.get("early_stopping_patience", 32),
-                min_delta=params.get("early_stopping_min_delta", 0.0),
-                mode="min",
-                verbose=False,
-            )
-        )
-    callbacks.append(RNGStateCallback())
-    if continuation_treatment is not None:
-        callbacks.append(ContinuationTreatmentCallback(continuation_treatment))
-    return callbacks
 
 
 def run_training(
@@ -320,13 +208,9 @@ def run_training(
     mass_mmd_standardization,
     dmet_scales,
     saved_path,
-    arg,
+    use_wandb,
 ):
     params = cfg["parameters"]
-    continuation_treatment = cfg.get("continuation_treatment")
-    model_loss_weights = dict(params["loss_weights"])
-    if continuation_treatment is not None and "angular_mmd_weight" in continuation_treatment:
-        model_loss_weights["angular_mmd"] = continuation_treatment["angular_mmd_weight"]
     std_mean_train, std_scale_train = standardization
     mass_mmd_center, mass_mmd_scale = mass_mmd_standardization
     print("Starting training...")
@@ -341,7 +225,7 @@ def run_training(
         dmet_scales=dmet_scales,
         lr=params["learning_rate"],
         weight_decay=params.get("weight_decay", 1e-4),
-        loss_weights=model_loss_weights,
+        loss_weights=params["loss_weights"],
         mmd_config=cfg.get("mmd", {}),
         angular_mmd_ramp_epochs=params.get("angular_mmd_ramp_epochs", 0),
         adaptive_loss_weights=params.get("adaptive_loss_weights", False),
@@ -356,16 +240,12 @@ def run_training(
         decoder_dropout=params.get("decoder_dropout", 0.1),
     )
 
-    callbacks = build_training_callbacks(params, continuation_treatment)
+    callbacks = build_training_callbacks(params)
     ckpt = callbacks[0]
     steps_per_epoch = max(1, len(dm.train_dataloader()))
     saved_path = resolve_repo_path(saved_path).resolve()
-    resume_from = getattr(arg, "resume_from", None)
-    resume_path = resolve_repo_path(resume_from).resolve() if resume_from else None
-    if resume_path is not None and resume_path.is_relative_to(saved_path):
-        raise ValueError("resume_from checkpoint must be outside paths.saved_path")
     clean_training_output(saved_path)
-    loggers, wandb_logger = create_loggers(cfg, model, saved_path, arg, steps_per_epoch)
+    loggers, wandb_logger = create_loggers(cfg, model, saved_path, use_wandb)
 
     trainer = Trainer(
         max_epochs=params["epochs"],
@@ -376,14 +256,7 @@ def run_training(
         log_every_n_steps=steps_per_epoch,
         gradient_clip_val=params.get("gradient_clip_val", 1.0),
     )
-    if resume_path is not None:
-        print(f"Resuming training from checkpoint: {resume_path}")
-    trainer.fit(
-        model,
-        datamodule=dm,
-        ckpt_path=resume_path,
-        weights_only=False,
-    )
+    trainer.fit(model, datamodule=dm)
 
     if dm.test_ds is not None and len(dm.test_ds) > 0:
         print("Running test evaluation with best checkpoint...")
@@ -415,39 +288,11 @@ def parse_args():
         help="Path to YAML config file",
     )
     parser.add_argument("--wandb", "-w", action="store_true", help="Enable W&B logging")
-    parser.add_argument("--saved-path", help="Override paths.saved_path")
-    parser.add_argument("--seed", type=int, help="Override parameters.seed")
-    parser.add_argument("--epochs", type=int, help="Override parameters.epochs")
-    parser.add_argument(
-        "--save-every-epoch",
-        action="store_true",
-        default=None,
-        help="Save every epoch and RNG state for diagnosis runs",
-    )
-    parser.add_argument(
-        "--higgs-mass-weight",
-        type=float,
-        help="Override parameters.loss_weights.higgs_mass",
-    )
-    parser.add_argument(
-        "--max-events-per-category",
-        type=int,
-        help="Override data.max_events_per_category for short ablation runs",
-    )
-    parser.add_argument(
-        "--resume-from",
-        help="Path to a checkpoint to resume training from (weights + optimizer state)",
-    )
     parser.add_argument(
         "--gpu",
         type=int,
         choices=[0, 1],
         help="Which physical GPU to use (sets CUDA_VISIBLE_DEVICES)",
-    )
-    parser.add_argument("--run-name", help="Optional run name for loggers")
-    parser.add_argument("--wandb-project", default="PCRES-regressor", help="W&B project name")
-    parser.add_argument(
-        "--watch-model", action="store_true", help="Log model gradients and parameters"
     )
     return parser.parse_args()
 
@@ -456,8 +301,6 @@ def main(train=True, arg=None, config_path=DEFAULT_CONFIG):
     if arg is not None and hasattr(arg, "config"):
         config_path = arg.config
     cfg = load_config(config_path)
-    if arg is not None:
-        cfg = apply_cli_overrides(cfg, arg)
     params = cfg["parameters"]
 
     if arg is not None and getattr(arg, "gpu", None) is not None:
@@ -501,7 +344,7 @@ def main(train=True, arg=None, config_path=DEFAULT_CONFIG):
         mass_mmd_standardization,
         dmet_scales,
         saved_path,
-        arg,
+        arg.wandb if arg is not None else False,
     )
 
 
