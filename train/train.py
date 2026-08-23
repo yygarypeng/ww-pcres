@@ -71,9 +71,9 @@ def apply_cli_overrides(cfg, arg):
     if higgs_mass_weight is not None:
         if not math.isfinite(higgs_mass_weight) or higgs_mass_weight < 0.0:
             raise ValueError("higgs_mass_weight must be finite and non-negative")
-        cfg.setdefault("parameters", {}).setdefault("loss_weights", {})[
-            "higgs_mass"
-        ] = higgs_mass_weight
+        cfg.setdefault("parameters", {}).setdefault("loss_weights", {})["higgs_mass"] = (
+            higgs_mass_weight
+        )
     return cfg
 
 
@@ -157,7 +157,6 @@ def build_datamodule(cfg, data_path):
     )
     dm.setup()
     standardization = compute_neural_input_stats(X_train)
-    mmd_condition_standardization = data.compute_mmd_condition_stats(X_train)
     w_fourvec_scales = compute_w_fourvec_scales(Y_train)
     mass_mmd_standardization = compute_mass_mmd_standardization(Y_train)
     dmet_scales = compute_dmet_scales(X_train, Y_train)
@@ -165,7 +164,6 @@ def build_datamodule(cfg, data_path):
         dm,
         X_train.shape[1],
         standardization,
-        mmd_condition_standardization,
         w_fourvec_scales,
         mass_mmd_standardization,
         dmet_scales,
@@ -318,7 +316,6 @@ def run_training(
     dm,
     input_dim,
     standardization,
-    mmd_condition_standardization,
     w_fourvec_scales,
     mass_mmd_standardization,
     dmet_scales,
@@ -331,7 +328,6 @@ def run_training(
     if continuation_treatment is not None and "angular_mmd_weight" in continuation_treatment:
         model_loss_weights["angular_mmd"] = continuation_treatment["angular_mmd_weight"]
     std_mean_train, std_scale_train = standardization
-    mmd_cond_mean_train, mmd_cond_scale_train = mmd_condition_standardization
     mass_mmd_center, mass_mmd_scale = mass_mmd_standardization
     print("Starting training...")
     print(f"Input dimension: {input_dim}")
@@ -339,8 +335,6 @@ def run_training(
         input_dim=input_dim,
         std_mean_train=std_mean_train,
         std_scale_train=std_scale_train,
-        mmd_cond_mean_train=mmd_cond_mean_train,
-        mmd_cond_scale_train=mmd_cond_scale_train,
         w_fourvec_scales=w_fourvec_scales,
         mass_mmd_center=mass_mmd_center,
         mass_mmd_scale=mass_mmd_scale,
@@ -489,7 +483,6 @@ def main(train=True, arg=None, config_path=DEFAULT_CONFIG):
         dm,
         input_dim,
         standardization,
-        mmd_condition_standardization,
         w_fourvec_scales,
         mass_mmd_standardization,
         dmet_scales,
@@ -504,7 +497,6 @@ def main(train=True, arg=None, config_path=DEFAULT_CONFIG):
         dm,
         input_dim,
         standardization,
-        mmd_condition_standardization,
         w_fourvec_scales,
         mass_mmd_standardization,
         dmet_scales,

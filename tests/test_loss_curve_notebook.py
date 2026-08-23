@@ -1,9 +1,9 @@
 import matplotlib
 
 matplotlib.use("Agg")
-from matplotlib import pyplot as plt
 import numpy as np
 import pandas as pd
+from matplotlib import pyplot as plt
 
 from notebooks import plottingtool
 from notebooks.plottingtool import (
@@ -74,20 +74,14 @@ def test_partial_loss_weights_inherit_model_defaults():
     }
     df = sparse_metrics(
         epochs=[0],
-        component_values={
-            name: ([1.0], [1.0])
-            for name in expected_weights
-        },
+        component_values={name: ([1.0], [1.0]) for name in expected_weights},
         weights=expected_weights,
     )
     cfg = {"parameters": {"loss_weights": {"dmet": 2.0}}}
 
     data = _prepare_loss_plot_data(df, cfg)
 
-    assert {
-        name: series.iloc[0]
-        for name, series in data["weights"].items()
-    } == expected_weights
+    assert {name: series.iloc[0] for name, series in data["weights"].items()} == expected_weights
     assert data["mismatches"] == []
 
 
@@ -230,10 +224,14 @@ def test_plot_loss_curves_builds_two_slide_subplot_figures(tmp_path, capsys):
     assert "contribution_shares" not in diagnostics
 
     raw_figure, weighted_figure = diagnostics["figures"]
-    assert (raw_figure.axes[0].get_subplotspec().get_gridspec().nrows,
-            raw_figure.axes[0].get_subplotspec().get_gridspec().ncols) == (2, 4)
-    assert (weighted_figure.axes[0].get_subplotspec().get_gridspec().nrows,
-            weighted_figure.axes[0].get_subplotspec().get_gridspec().ncols) == (2, 4)
+    assert (
+        raw_figure.axes[0].get_subplotspec().get_gridspec().nrows,
+        raw_figure.axes[0].get_subplotspec().get_gridspec().ncols,
+    ) == (2, 4)
+    assert (
+        weighted_figure.axes[0].get_subplotspec().get_gridspec().nrows,
+        weighted_figure.axes[0].get_subplotspec().get_gridspec().ncols,
+    ) == (2, 4)
 
     for index, (name, label) in enumerate(LOSS_COMPONENTS):
         raw_axis = raw_figure.axes[index]
@@ -329,9 +327,9 @@ def test_plot_loss_curves_reports_empty_csv(tmp_path, capsys):
 
 def test_plot_loss_curves_reports_when_all_components_are_unavailable(tmp_path, capsys):
     metrics_path = tmp_path / "metrics.csv"
-    pd.DataFrame(
-        {"epoch": [0, 1], "loss": [2.0, 1.0], "val_loss": [3.0, 2.0]}
-    ).to_csv(metrics_path, index=False)
+    pd.DataFrame({"epoch": [0, 1], "loss": [2.0, 1.0], "val_loss": [3.0, 2.0]}).to_csv(
+        metrics_path, index=False
+    )
 
     diagnostics = plot_loss_curves(metrics_path, {"parameters": {}})
 

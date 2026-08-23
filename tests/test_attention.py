@@ -5,8 +5,8 @@ import numpy as np
 import torch
 
 from data.preprocessing import neural_input_features_torch
-from model.model import WBosonRegressor
 from model.layers import WBosonFourVectorLayer
+from model.model import WBosonRegressor
 
 
 class SymmetricFourVectorLayerTest(unittest.TestCase):
@@ -46,21 +46,13 @@ class SymmetricFourVectorLayerTest(unittest.TestCase):
 
 class FlattenedAggregationTest(unittest.TestCase):
     @staticmethod
-    def make_model(
-            input_dim=21,
-            mean=None,
-            scale=None,
-            mmd_cond_mean=None,
-            mmd_cond_scale=None,
-        ):
+    def make_model(input_dim=21, mean=None, scale=None):
         return WBosonRegressor(
             input_dim=input_dim,
             d_model=8,
             num_heads=2,
             std_mean_train=np.zeros(21, dtype=np.float32) if mean is None else mean,
             std_scale_train=np.ones(21, dtype=np.float32) if scale is None else scale,
-            mmd_cond_mean_train=mmd_cond_mean,
-            mmd_cond_scale_train=mmd_cond_scale,
             attention_blocks=1,
             attention_dropout=0.0,
             decoder_dropout=0.0,
@@ -70,9 +62,11 @@ class FlattenedAggregationTest(unittest.TestCase):
     def make_inputs(batch_size=2):
         inputs = torch.randn(batch_size, 21)
         for start in (0, 4, 8, 12):
-            inputs[:, start + 3] = torch.linalg.vector_norm(
-                inputs[:, start:start + 3], dim=1
-            ) + torch.rand(batch_size) + 0.1
+            inputs[:, start + 3] = (
+                torch.linalg.vector_norm(inputs[:, start : start + 3], dim=1)
+                + torch.rand(batch_size)
+                + 0.1
+            )
         return inputs
 
     def test_model_contract_uses_three_hl_features_and_six_tokens(self):
@@ -181,37 +175,3 @@ class FlattenedAggregationTest(unittest.TestCase):
 
         torch.testing.assert_close(missing_after, missing_before)
         self.assertFalse(torch.allclose(present_after, present_before))
-
-    def test_aux_condition_standardizes_nonangular_features_only(self):
-        mean = np.array([10.0, 1.0, 0.0], dtype=np.float32)
-        scale = np.array([2.0, 4.0, 1.0], dtype=np.float32)
-        model = self.make_model(mmd_cond_mean=mean, mmd_cond_scale=scale).eval()
-        x = torch.zeros(2, 21)
-        x[:, 18:21] = torch.tensor([
-            [12.0, 5.0, 0.0],
-            [8.0, -3.0, torch.pi],
-        ])
-
-        with torch.no_grad():
-            _, aux = model(x, return_aux=True)
-
-        raw_condition = torch.stack([
-            x[:, 18],
-            x[:, 19],
-            x[:, 20],
-        ], dim=-1)
-        expected = (raw_condition - torch.from_numpy(mean)) / torch.from_numpy(scale)
-        torch.testing.assert_close(aux["cond"], expected)
-        self.assertEqual(aux["cond"].shape, (2, 3))
-
-    def test_aux_condition_passes_dphi_through_raw(self):
-        model = self.make_model(
-            mmd_cond_mean=np.zeros(3, dtype=np.float32),
-            mmd_cond_scale=np.ones(3, dtype=np.float32),
-        )
-        x = torch.zeros(2, 21)
-        x[:, 20] = torch.tensor([-torch.pi + 1.0e-4, torch.pi - 1.0e-4])
-
-        condition = model._mmd_condition(x)
-
-        torch.testing.assert_close(condition[:, 2], x[:, 20])

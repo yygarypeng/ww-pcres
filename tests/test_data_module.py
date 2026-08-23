@@ -6,7 +6,6 @@ import torch
 
 from data.data_module import WBosonDataModule
 
-
 X = np.zeros((4, 3), dtype=np.float64)
 Y = np.zeros((4, 2), dtype=np.float64)
 

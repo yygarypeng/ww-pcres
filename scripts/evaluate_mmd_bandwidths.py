@@ -233,9 +233,7 @@ def print_results(all_results):
             )
             mixed_mmd2 = sum(mmd2 for mmd2, _, _ in diagnostics) / len(diagnostics)
             mixed_loss = mixed_mmd2
-            print(
-                f"  {name:<7} {pairs}  mixed_mmd2={mixed_mmd2:.8g}," f"mixed_loss={mixed_loss:.8g}"
-            )
+            print(f"  {name:<7} {pairs}  mixed_mmd2={mixed_mmd2:.8g},mixed_loss={mixed_loss:.8g}")
 
 
 def parse_args():

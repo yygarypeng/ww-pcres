@@ -3,9 +3,8 @@ import torch
 from sklearn.preprocessing import StandardScaler
 
 BASE_INPUT_DIM = 18  # w/o high-level features
-RAW_INPUT_DIM = 21  # with high-level features
+RAW_INPUT_DIM = 21  # w/ high-level features
 NEURAL_INPUT_DIM = 21
-INPUT_PREPROCESSING_VERSION = 3
 
 
 def _require_raw_input_shape(features):

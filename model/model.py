@@ -8,7 +8,6 @@ from torch.nn.utils import parameters_to_vector
 
 from data.preprocessing import (
     BASE_INPUT_DIM,
-    INPUT_PREPROCESSING_VERSION,
     RAW_INPUT_DIM,
     neural_input_features_torch,
 )
@@ -41,18 +40,6 @@ DEFAULT_MMD_CONFIG = {
 
 def resolve_mmd_config(config=None):
     config = {} if config is None else dict(config)
-    if (
-        "local" in config
-        or "condition" in config
-        or any("bandwidth_multipliers" in config.get(section, {}) for section in DEFAULT_MMD_CONFIG)
-    ):
-        config.pop("local", None)
-        config.pop("condition", None)
-        for section in DEFAULT_MMD_CONFIG:
-            supplied = dict(config.get(section, {}))
-            if "bandwidth_multipliers" in supplied:
-                supplied["bandwidths"] = supplied.pop("bandwidth_multipliers")
-            config[section] = supplied
     unknown_sections = set(config) - set(DEFAULT_MMD_CONFIG)
     if unknown_sections:
         names = ", ".join(sorted(unknown_sections))
@@ -85,8 +72,6 @@ class WBosonRegressor(nn.Module):
         num_heads,
         std_mean_train,
         std_scale_train,
-        mmd_cond_mean_train=None,
-        mmd_cond_scale_train=None,
         attention_blocks=4,
         attention_dropout=0.1,
         decoder_dropout=0.1,
@@ -107,22 +92,8 @@ class WBosonRegressor(nn.Module):
         # do the normalization (need to use large batch size for stable stats)
         self.input_dim = input_dim
         self.norm = Standardization(std_mean_train, std_scale_train)
-        if (mmd_cond_mean_train is None) != (mmd_cond_scale_train is None):
-            raise ValueError("MMD condition mean and scale must be provided together")
         self.base_input_dim = BASE_INPUT_DIM  # w/o high-level features
         self.hl_input_dim = input_dim - BASE_INPUT_DIM
-        if mmd_cond_mean_train is None:
-            mmd_cond_mean_train = torch.zeros(self.hl_input_dim, dtype=torch.float32)
-            mmd_cond_scale_train = torch.ones(self.hl_input_dim, dtype=torch.float32)
-        if (
-            len(mmd_cond_mean_train) != self.hl_input_dim
-            or len(mmd_cond_scale_train) != self.hl_input_dim
-        ):
-            raise ValueError(
-                f"MMD condition mean and scale must each contain {self.hl_input_dim} values; "
-                "retraining required for incompatible checkpoints"
-            )
-        self.cond_norm = Standardization(mmd_cond_mean_train, mmd_cond_scale_train)
 
         # Object-specific embeddings avoid forcing charge/order symmetry too early.
         self.lep0_embed = nn.Linear(4, d_model)
@@ -212,21 +183,6 @@ class WBosonRegressor(nn.Module):
         context = context.masked_fill(key_mask.unsqueeze(-1), 0.0)
         return context.reshape(batch_size, -1)
 
-    def _mmd_condition(self, x):
-        if self.hl_input_dim == 0:
-            return torch.empty(x.shape[0], 0, dtype=x.dtype, device=x.device)
-
-        condition = torch.stack(
-            [
-                x[..., 18],
-                x[..., 19],
-                x[..., 20],
-            ],
-            dim=-1,
-        )
-        standardized = self.cond_norm(condition)
-        return torch.cat([standardized[..., :2], condition[..., 2:]], dim=-1)
-
     def forward(self, x, return_aux=False):
         lep0, lep1 = x[..., :4], x[..., 4:8]
         met = x[..., 16:18]
@@ -241,7 +197,6 @@ class WBosonRegressor(nn.Module):
 
         if return_aux:
             return y_pred, {
-                "cond": self._mmd_condition(x),
                 "dmet": dmet_params,
                 "nu_params": nu_params,
             }
@@ -256,8 +211,6 @@ class LightningWBoson(L.LightningModule):
         num_heads,
         std_mean_train,
         std_scale_train,
-        mmd_cond_mean_train=None,
-        mmd_cond_scale_train=None,
         w_fourvec_scales=None,
         dmet_scales=None,
         mass_mmd_center=0.0,
@@ -266,25 +219,17 @@ class LightningWBoson(L.LightningModule):
         weight_decay=1e-4,
         loss_weights=None,
         mmd_config=None,
-        angular_mmd_estimator="u",
-        angular_mmd_feature_bandwidths=None,
         angular_mmd_ramp_epochs=0,
         adaptive_loss_weights=False,
         log_loss_gradient_cosines=False,
         higgs_mass_target=125.0,
         higgs_mass_scale=10.0,
         higgs_mass_delta=2.0,
-        input_preprocessing_version=INPUT_PREPROCESSING_VERSION,
         attention_blocks=4,
         attention_dropout=0.1,
         decoder_dropout=0.1,
     ):
         super().__init__()
-        if input_preprocessing_version != INPUT_PREPROCESSING_VERSION:
-            raise ValueError(
-                f"input preprocessing version must be {INPUT_PREPROCESSING_VERSION}; "
-                "retraining required for incompatible checkpoints"
-            )
         higgs_mass_parameters = {
             "higgs_mass_target": float(higgs_mass_target),
             "higgs_mass_scale": float(higgs_mass_scale),
@@ -313,17 +258,7 @@ class LightningWBoson(L.LightningModule):
                 raise ValueError("angular_mmd_ramp_epochs must be a non-negative integer")
             angular_mmd_ramp_epochs = int(ramp_epochs)
         mmd_config = resolve_mmd_config(mmd_config)
-        if angular_mmd_feature_bandwidths is not None:
-            legacy_bandwidths = [float(value) for value in angular_mmd_feature_bandwidths]
-            if not legacy_bandwidths or not all(
-                math.isfinite(value) and value > 0.0 for value in legacy_bandwidths
-            ):
-                raise ValueError("angular_mmd_feature_bandwidths must be finite and positive")
-            mmd_config["angular"]["bandwidths"] = legacy_bandwidths
-        # Deprecated angular arguments remain accepted so older checkpoints load.
-        self.save_hyperparameters(
-            ignore=["angular_mmd_estimator", "angular_mmd_feature_bandwidths"]
-        )
+        self.save_hyperparameters()
         if w_fourvec_scales is None:
             w_fourvec_scales = torch.ones(4, dtype=torch.float32)
         self.register_buffer(
@@ -356,8 +291,6 @@ class LightningWBoson(L.LightningModule):
             num_heads,
             std_mean_train,
             std_scale_train,
-            mmd_cond_mean_train=mmd_cond_mean_train,
-            mmd_cond_scale_train=mmd_cond_scale_train,
             attention_blocks=attention_blocks,
             attention_dropout=attention_dropout,
             decoder_dropout=decoder_dropout,
@@ -400,30 +333,6 @@ class LightningWBoson(L.LightningModule):
     def load_for_inference(cls, checkpoint_path, **kwargs):
         kwargs["loss_weights"] = {}
         return cls.load_from_checkpoint(checkpoint_path, **kwargs)
-
-    def on_load_checkpoint(self, checkpoint):
-        hparams = checkpoint.get("hyper_parameters", {})
-        state = checkpoint.get("state_dict", {})
-        version = hparams.get("input_preprocessing_version")
-        expected_shapes = {
-            "model.norm.mean": (self.model.input_dim,),
-            "model.norm.std": (self.model.input_dim,),
-            "model.cond_norm.mean": (self.model.hl_input_dim,),
-            "model.cond_norm.std": (self.model.hl_input_dim,),
-        }
-        if self.model.hl_embed is not None:
-            expected_shapes["model.hl_embed.weight"] = (
-                self.model.hl_embed.out_features,
-                self.model.hl_input_dim,
-            )
-        invalid_shape = any(
-            name not in state or tuple(state[name].shape) != expected
-            for name, expected in expected_shapes.items()
-        )
-        if version != INPUT_PREPROCESSING_VERSION or invalid_shape:
-            raise RuntimeError(
-                "checkpoint uses an incompatible input preprocessing schema; retraining required"
-            )
 
     def forward(self, x, return_aux=False):
         return self.model(x, return_aux=return_aux)
@@ -502,7 +411,7 @@ class LightningWBoson(L.LightningModule):
 
     def _compute_batch_losses(self, x, y):
         y_pred, aux = self(x, return_aux=True)
-        return self._compute_losses(x, y, y_pred, aux["cond"], aux)
+        return self._compute_losses(x, y, y_pred, None, aux)
 
     def _weighted_total_loss(self, losses, weights=None):
         weights = self.loss_weights if weights is None else weights

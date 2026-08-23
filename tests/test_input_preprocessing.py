@@ -4,7 +4,6 @@ import torch
 
 from data import (
     BASE_INPUT_DIM,
-    INPUT_PREPROCESSING_VERSION,
     NEURAL_INPUT_DIM,
     RAW_INPUT_DIM,
 )
@@ -22,23 +21,29 @@ def valid_raw_rows(dtype=np.float32):
     rows[:, 7] = [3.0, 4.0]
     rows[0, 8:12] = [5.0, 6.0, 7.0, 8.0]
     rows[1, 12:16] = [9.0, 10.0, 11.0, 12.0]
-    rows[:, 16:21] = [[13.0, 14.0, 15.0, 16.0, 0.5],
-                      [17.0, 18.0, 19.0, 20.0, -1.0]]
+    rows[:, 16:21] = [[13.0, 14.0, 15.0, 16.0, 0.5], [17.0, 18.0, 19.0, 20.0, -1.0]]
     return rows
 
 
 def expected_neural_features(raw):
-    return np.concatenate([
-        raw[:, :3], np.log1p(raw[:, 3:4]),
-        raw[:, 4:7], np.log1p(raw[:, 7:8]),
-        raw[:, 8:11], np.log1p(raw[:, 11:12]),
-        raw[:, 12:15], np.log1p(raw[:, 15:16]),
-        raw[:, 16:21],
-    ], axis=1)
+    return np.concatenate(
+        [
+            raw[:, :3],
+            np.log1p(raw[:, 3:4]),
+            raw[:, 4:7],
+            np.log1p(raw[:, 7:8]),
+            raw[:, 8:11],
+            np.log1p(raw[:, 11:12]),
+            raw[:, 12:15],
+            np.log1p(raw[:, 15:16]),
+            raw[:, 16:21],
+        ],
+        axis=1,
+    )
 
 
 def test_preprocessing_schema_constants_are_exported():
-    assert (RAW_INPUT_DIM, NEURAL_INPUT_DIM, INPUT_PREPROCESSING_VERSION) == (21, 21, 3)
+    assert (RAW_INPUT_DIM, NEURAL_INPUT_DIM) == (21, 21)
 
 
 def test_numpy_transform_has_exact_order_and_does_not_mutate_input():

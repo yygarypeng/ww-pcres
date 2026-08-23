@@ -1,6 +1,5 @@
 from .preprocessing import (
     BASE_INPUT_DIM,
-    INPUT_PREPROCESSING_VERSION,
     NEURAL_INPUT_DIM,
     RAW_INPUT_DIM,
     compute_neural_input_stats,
@@ -11,7 +10,6 @@ from .preprocessing import (
 
 __all__ = [
     "BASE_INPUT_DIM",
-    "INPUT_PREPROCESSING_VERSION",
     "NEURAL_INPUT_DIM",
     "RAW_INPUT_DIM",
     "compute_neural_input_stats",

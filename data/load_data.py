@@ -2,7 +2,7 @@ import h5py
 import numpy as np
 from sklearn.preprocessing import StandardScaler
 
-from data.preprocessing import BASE_INPUT_DIM, RAW_INPUT_DIM, valid_input_energy_rows
+from data.preprocessing import valid_input_energy_rows
 from physics import eta
 
 
@@ -47,41 +47,6 @@ def split_categories(data_cfg, split):
         return selected_categories
 
     return [f"ggF_{split}"]
-
-
-def mmd_condition_features(features):
-    features = np.asarray(features)
-    if features.shape[-1] == BASE_INPUT_DIM:
-        return np.empty((features.shape[0], 0), dtype=features.dtype)
-    if features.shape[-1] != RAW_INPUT_DIM:
-        raise ValueError(
-            f"MMD conditioning requires exactly {BASE_INPUT_DIM} or {RAW_INPUT_DIM} features, "
-            f"got {features.shape[-1]}"
-        )
-
-    m_ll = features[..., 18:19]
-    deta_ll = features[..., 19:20]
-    dphi_ll = features[..., 20:21]
-    return np.concatenate(
-        [
-            m_ll,
-            deta_ll,
-            dphi_ll,
-        ],
-        axis=-1,
-    )
-
-
-def compute_mmd_condition_stats(train_obj):
-    condition = mmd_condition_features(train_obj)
-    if condition.shape[1] == 0:
-        return np.zeros(0, dtype=np.float32), np.ones(0, dtype=np.float32)
-    scaler = StandardScaler().fit(condition[:, :2])
-    mean = np.zeros(condition.shape[1], dtype=scaler.mean_.dtype)
-    scale = np.ones(condition.shape[1], dtype=scaler.scale_.dtype)
-    mean[:2] = scaler.mean_
-    scale[:2] = scaler.scale_
-    return mean, scale
 
 
 def compute_standardization_stats(train_obj, target_obj=None, train_indices=None):
