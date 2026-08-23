@@ -5,90 +5,28 @@ import torch.nn.functional as F
 
 from physics.torchBoost import Booster
 
-######################
-# Global constants
-######################
+####################
+# Global constants #
+####################
 
 TOR = 1e-16
 W_MASS_SCALE = 80.4
 H_MASS_SCALE = 125.0
 
 
-###############
-# Utilities
-###############
-
-
-def _positive_median_pairwise_distance(values):
-    if values.shape[0] < 2:
-        return values.new_tensor(1.0)
-
-    distances = torch.pdist(values, p=2)
-    distances = distances[torch.isfinite(distances) & (distances > 0.0)]
-    if distances.numel() == 0:
-        return values.new_tensor(1.0)
-    return torch.median(distances)
-
-
-def _validate_bandwidth_multipliers(values, name):
-    multipliers = tuple(float(value) for value in values)
-    if not multipliers:
-        raise ValueError(f"{name} must contain at least one value")
-    if not all(math.isfinite(value) and value > 0.0 for value in multipliers):
-        raise ValueError(f"{name} values must be finite and positive")
-    return multipliers
-
-
-def compute_mmd(x, y, *, kernel="imq", bandwidths=(0.1, 1.0, 10.0)):
-    """Global non-negative V-statistic with fixed absolute bandwidths."""
-    bandwidths = _validate_bandwidth_multipliers(bandwidths, "bandwidths")
-    if kernel not in {"imq", "rbf"}:
-        raise ValueError(f"Unsupported kernel: {kernel}")
-
-    x = x.reshape(x.shape[0], -1)
-    y = y.reshape(y.shape[0], -1)
-    if x.shape[0] != y.shape[0]:
-        raise ValueError("x and y must have the same number of paired rows")
-
-    finite = torch.isfinite(x).all(dim=1) & torch.isfinite(y).all(dim=1)
-    x = x[finite]
-    y = y[finite]
-    if x.shape[0] == 0:
-        return (x.sum() + y.sum()) * 0.0
-
-    x2 = x.square().sum(dim=1)
-    y2 = y.square().sum(dim=1)
-    dxx = (x2[:, None] + x2[None, :] - 2.0 * (x @ x.T)).clamp_min(0.0)
-    dyy = (y2[:, None] + y2[None, :] - 2.0 * (y @ y.T)).clamp_min(0.0)
-    dxy = (x2[:, None] + y2[None, :] - 2.0 * (x @ y.T)).clamp_min(0.0)
-
-    def kernel_mean(distance, bandwidth):
-        bandwidth2 = bandwidth**2
-        if kernel == "imq":
-            return (bandwidth2 / (bandwidth2 + distance + TOR)).mean()
-        return torch.exp(-0.5 * distance / (bandwidth2 + TOR)).mean()
-
-    mmd = x.new_zeros(())
-    for bandwidth in bandwidths:
-        mmd = mmd + kernel_mean(dxx, bandwidth)
-        mmd = mmd + kernel_mean(dyy, bandwidth)
-        mmd = mmd - 2.0 * kernel_mean(dxy, bandwidth)
-    return (mmd / len(bandwidths)).clamp_min(0.0)
+#############
+# Utilities #
+#############
 
 
 def invariant_mass2(fourvec):
     px, py, pz, E = fourvec[..., 0], fourvec[..., 1], fourvec[..., 2], fourvec[..., 3]
+
     return E**2 - (px**2 + py**2 + pz**2)
 
 
-def standardized_fourvec_huber_loss(y_true, y_pred, component_scales):
-    true_fourvecs = y_true[..., :8].reshape(*y_true.shape[:-1], 2, 4)
-    pred_fourvecs = y_pred.reshape(*y_pred.shape[:-1], 2, 4)
-    residual = (pred_fourvecs - true_fourvecs) / component_scales
-    return F.huber_loss(residual, torch.zeros_like(residual))
-
-
 def _valid_kinematic_rows(x_batch, y_true, y_pred):
+
     return (
         torch.isfinite(x_batch[..., :8]).all(dim=-1)
         & torch.isfinite(y_true[..., :8]).all(dim=-1)
@@ -97,16 +35,23 @@ def _valid_kinematic_rows(x_batch, y_true, y_pred):
 
 
 def _differentiable_zero(y_true, y_pred):
+
     return (
         torch.nan_to_num(y_true[..., :8], nan=0.0, posinf=0.0, neginf=0.0).sum()
         + torch.nan_to_num(y_pred, nan=0.0, posinf=0.0, neginf=0.0).sum()
     ) * 0.0
 
 
+########################
+# Feature construction #
+########################
+
+
 def _alpha_features(x_batch, w_fourvecs, slot0_on):
     lep0, lep1 = x_batch[..., :4], x_batch[..., 4:8]
     nu0 = w_fourvecs[..., :4] - lep0
     nu1 = w_fourvecs[..., 4:8] - lep1
+
     nu_on = torch.where(slot0_on.unsqueeze(-1), nu0, nu1)
     nu_off = torch.where(slot0_on.unsqueeze(-1), nu1, nu0)
     lep_on = torch.where(slot0_on.unsqueeze(-1), lep0, lep1)
@@ -128,18 +73,20 @@ def _alpha_features(x_batch, w_fourvecs, slot0_on):
     )
     selected_momentum = torch.where(on_mass2 > off_mass2, p_on, p_off)
     safe_total = torch.where(valid, total, torch.ones_like(total))
+
     return (2.0 * selected_momentum / safe_total - 1.0).unsqueeze(-1), valid
 
 
 def _mass_features(w_fourvecs, center, scale):
     w_pos, w_neg = w_fourvecs[..., :4], w_fourvecs[..., 4:8]
+
     mass2 = torch.stack([invariant_mass2(w_pos), invariant_mass2(w_neg)], dim=-1)
     transformed = torch.asinh(mass2 / W_MASS_SCALE**2)
+
     return (transformed - center) / scale
 
 
 def angular_mmd_features(angles):
-    """Encode (theta+, phi+, theta-, phi-) in charge order for angular MMD."""
     theta_pos = angles[..., 0]
     phi_pos = angles[..., 1]
     theta_neg = angles[..., 2]
@@ -158,9 +105,81 @@ def angular_mmd_features(angles):
     )
 
 
+def _positive_median_pairwise_distance(values):
+    if values.shape[0] < 2:
+        return values.new_tensor(1.0)
+
+    distances = torch.pdist(values, p=2)
+    distances = distances[torch.isfinite(distances) & (distances > 0.0)]
+
+    if distances.numel() == 0:
+        return values.new_tensor(1.0)
+
+    return torch.median(distances)
+
+
+def _validate_bandwidth_multipliers(values, name):
+    multipliers = tuple(float(value) for value in values)
+
+    if not multipliers:
+        raise ValueError(f"{name} must contain at least one value")
+    if not all(math.isfinite(value) and value > 0.0 for value in multipliers):
+        raise ValueError(f"{name} values must be finite and positive")
+
+    return multipliers
+
+
+def compute_mmd(x, y, *, kernel="imq", bandwidths=(0.1, 1.0, 10.0)):
+    bandwidths = _validate_bandwidth_multipliers(bandwidths, "bandwidths")
+    if kernel not in {"imq", "rbf"}:
+        raise ValueError(f"Unsupported kernel: {kernel}")
+
+    x = x.reshape(x.shape[0], -1)
+    y = y.reshape(y.shape[0], -1)
+    if x.shape[0] != y.shape[0]:
+        raise ValueError("x and y must have the same number of paired rows")
+
+    finite = torch.isfinite(x).all(dim=1) & torch.isfinite(y).all(dim=1)
+    x = x[finite]
+    y = y[finite]
+
+    if x.shape[0] == 0:
+        return (x.sum() + y.sum()) * 0.0
+
+    x2 = x.square().sum(dim=1)
+    y2 = y.square().sum(dim=1)
+    dxx = (x2[:, None] + x2[None, :] - 2.0 * (x @ x.T)).clamp_min(0.0)
+    dyy = (y2[:, None] + y2[None, :] - 2.0 * (y @ y.T)).clamp_min(0.0)
+    dxy = (x2[:, None] + y2[None, :] - 2.0 * (x @ y.T)).clamp_min(0.0)
+
+    def kernel_mean(distance, bandwidth):
+        bandwidth2 = bandwidth**2
+
+        if kernel == "imq":
+            return (bandwidth2 / (bandwidth2 + distance + TOR)).mean()
+        return torch.exp(-0.5 * distance / (bandwidth2 + TOR)).mean()
+
+    mmd = x.new_zeros(())
+    for bandwidth in bandwidths:
+        mmd = mmd + kernel_mean(dxx, bandwidth)
+        mmd = mmd + kernel_mean(dyy, bandwidth)
+        mmd = mmd - 2.0 * kernel_mean(dxy, bandwidth)
+
+    return (mmd / len(bandwidths)).clamp_min(0.0)
+
+
 ####################
 # Loss functions
 ####################
+
+
+def standardized_fourvec_huber_loss(y_true, y_pred, component_scales):
+    true_fourvecs = y_true[..., :8].reshape(*y_true.shape[:-1], 2, 4)
+    pred_fourvecs = y_pred.reshape(*y_pred.shape[:-1], 2, 4)
+
+    residual = (pred_fourvecs - true_fourvecs) / component_scales
+
+    return F.huber_loss(residual, torch.zeros_like(residual))
 
 
 def w_mass_huber_loss(y_true, y_pred):
@@ -172,6 +191,7 @@ def w_mass_huber_loss(y_true, y_pred):
 
     w_lst_true = torch.stack([w0_true_mass**2, w1_true_mass**2], dim=-1) / W_MASS_SCALE**2
     w_lst_pred = torch.stack([w0_mass2, w1_mass2], dim=-1) / W_MASS_SCALE**2
+
     return F.huber_loss(w_lst_pred, w_lst_true)
 
 
@@ -182,22 +202,29 @@ def higgs_mass_loss(
     delta=2.0,
 ):
     w0_4, w1_4 = y_pred[..., :4], y_pred[..., 4:8]
+
     higgs_mass2 = invariant_mass2(w0_4 + w1_4)
     residual = (higgs_mass2 - target_mass**2) / (2.0 * target_mass * scale)
+
     return F.l1_loss(residual, torch.zeros_like(residual))
 
 
 def dmet_loss(x_batch, y_true, dmet, component_scales):
     true_w0 = y_true[..., :4]
     true_w1 = y_true[..., 4:8]
-
     true_nu0 = true_w0 - x_batch[..., :4]
     true_nu1 = true_w1 - x_batch[..., 4:8]
     true_dinu_pxpy = true_nu0[..., :2] + true_nu1[..., :2]
     dmet_target = x_batch[..., 16:18] - true_dinu_pxpy
+
     residual = (dmet - dmet_target) / component_scales
 
     return F.huber_loss(residual, torch.zeros_like(residual))
+
+
+####################
+# Local MMD (WIP) #
+####################
 
 
 def compute_local_mmd(
@@ -213,8 +240,7 @@ def compute_local_mmd(
     feature_bandwidths=None,
     estimator="u",
 ):
-    """Legacy paired MMD retained for historical diagnostics.
-
+    """
     The default U-statistic excludes paired diagonal terms and can be negative.
     The V-statistic includes all terms and is nonnegative. Feature bandwidths
     may be fixed absolutely or inferred from y using the multiplier defaults.

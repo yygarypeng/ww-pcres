@@ -486,7 +486,7 @@ class LightningModelLossTest(unittest.TestCase):
         torch.testing.assert_close(total, sum(raw_values.values()))
 
     def test_rejects_unsupported_loss_weight_keys(self):
-        for key in ("w_mass_mmd", "kinematic_loss_mmd_typo"):
+        for key in ("kinematic_loss_mmd_typo",):
             with self.subTest(key=key):
                 with self.assertRaisesRegex(ValueError, f"unsupported loss_weights key.*{key}"):
                     LightningWBoson(

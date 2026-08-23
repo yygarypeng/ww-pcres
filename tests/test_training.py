@@ -1,66 +1,21 @@
-import random
 import unittest
 import unittest.mock
-from argparse import Namespace
 from types import SimpleNamespace
 
 import numpy as np
-import torch
 from pytorch_lightning.callbacks import EarlyStopping
 from pytorch_lightning.trainer.states import TrainerFn
 
 from train import train as train_module
 from train.train import (
     DeferredEarlyStopping,
-    apply_cli_overrides,
     build_training_callbacks,
     parse_args,
     prime_csv_metric_header,
 )
 
 
-class TrainingOverrideTest(unittest.TestCase):
-    def test_parser_accepts_higgs_mass_weight(self):
-        with unittest.mock.patch("sys.argv", ["train.py", "--higgs-mass-weight", "4.5"]):
-            args = parse_args()
-
-        self.assertEqual(args.higgs_mass_weight, 4.5)
-
-    def test_parser_and_override_enable_save_every_epoch(self):
-        config = {"parameters": {"save_every_epoch": False}}
-        with unittest.mock.patch("sys.argv", ["train.py", "--save-every-epoch"]):
-            args = parse_args()
-
-        updated = apply_cli_overrides(config, args)
-
-        self.assertTrue(updated["parameters"]["save_every_epoch"])
-
-    def test_higgs_mass_weight_override_changes_only_higgs_weight(self):
-        config = {
-            "parameters": {
-                "loss_weights": {"huber": 300.0, "higgs_mass": 3.0},
-            }
-        }
-
-        updated = apply_cli_overrides(config, Namespace(higgs_mass_weight=0.0))
-
-        self.assertEqual(updated["parameters"]["loss_weights"]["higgs_mass"], 0.0)
-        self.assertEqual(updated["parameters"]["loss_weights"]["huber"], 300.0)
-
-    def test_absent_higgs_mass_weight_preserves_yaml_value(self):
-        config = {"parameters": {"loss_weights": {"higgs_mass": 3.0}}}
-
-        updated = apply_cli_overrides(config, Namespace(higgs_mass_weight=None))
-
-        self.assertEqual(updated["parameters"]["loss_weights"]["higgs_mass"], 3.0)
-
-    def test_rejects_invalid_higgs_mass_weight_override(self):
-        for value in (-1.0, float("nan"), float("inf"), float("-inf")):
-            with self.subTest(value=value):
-                config = {"parameters": {"loss_weights": {"higgs_mass": 3.0}}}
-                with self.assertRaisesRegex(ValueError, "higgs_mass_weight"):
-                    apply_cli_overrides(config, Namespace(higgs_mass_weight=value))
-
+class TrainingTest(unittest.TestCase):
     def test_run_training_routes_higgs_mass_parameters(self):
         params = {
             "batch_size": 2,
@@ -85,7 +40,7 @@ class TrainingOverrideTest(unittest.TestCase):
             ),
             unittest.mock.patch.object(train_module, "clean_training_output"),
             unittest.mock.patch.object(train_module, "create_loggers", return_value=([], None)),
-            unittest.mock.patch.object(train_module, "Trainer"),
+            unittest.mock.patch.object(train_module, "Trainer") as trainer_class,
         ):
             train_module.run_training(
                 cfg,
@@ -96,12 +51,15 @@ class TrainingOverrideTest(unittest.TestCase):
                 (0.0, 1.0),
                 np.ones(2),
                 "unused-output",
-                SimpleNamespace(resume_from=None),
+                False,
             )
 
         self.assertEqual(model_class.call_args.kwargs["higgs_mass_target"], 126.0)
         self.assertEqual(model_class.call_args.kwargs["higgs_mass_scale"], 9.0)
         self.assertEqual(model_class.call_args.kwargs["higgs_mass_delta"], 1.5)
+        trainer_class.return_value.fit.assert_called_once_with(
+            model_class.return_value, datamodule=datamodule
+        )
 
     def test_run_training_routes_angular_mmd_ramp_epochs(self):
         params = {
@@ -136,7 +94,7 @@ class TrainingOverrideTest(unittest.TestCase):
                 (0.0, 1.0),
                 np.ones(2),
                 "unused-output",
-                SimpleNamespace(resume_from=None),
+                False,
             )
 
         self.assertEqual(model_class.call_args.kwargs["angular_mmd_ramp_epochs"], 80)
@@ -178,51 +136,16 @@ class TrainingOverrideTest(unittest.TestCase):
                 (0.0, 1.0),
                 np.ones(2),
                 "unused-output",
-                SimpleNamespace(resume_from=None),
+                False,
             )
 
         self.assertEqual(model_class.call_args.kwargs["mmd_config"], mmd_config)
 
-    def test_applies_training_overrides(self):
-        config = {
-            "parameters": {"seed": 114},
-            "paths": {"saved_path": "outputs/default"},
-        }
-        args = Namespace(
-            saved_path="outputs/query-115",
-            seed=115,
-            epochs=12,
-            max_events_per_category=5000,
-        )
-
-        updated = apply_cli_overrides(config, args)
-
-        self.assertEqual(updated["parameters"]["seed"], 115)
-        self.assertEqual(updated["parameters"]["epochs"], 12)
-        self.assertEqual(updated["data"]["max_events_per_category"], 5000)
-        self.assertEqual(updated["paths"]["saved_path"], "outputs/query-115")
-
-    def test_none_overrides_preserve_configuration(self):
-        config = {
-            "parameters": {"seed": 114},
-            "paths": {"saved_path": "outputs/default"},
-        }
-        args = Namespace(
-            saved_path=None,
-            seed=None,
-            epochs=None,
-            max_events_per_category=None,
-        )
-
-        updated = apply_cli_overrides(config, args)
-
-        self.assertEqual(updated, config)
-
-    def test_parser_exposes_no_pooling_mode(self):
+    def test_parser_exposes_only_launch_options(self):
         with unittest.mock.patch("sys.argv", ["train.py"]):
             args = parse_args()
 
-        self.assertFalse(hasattr(args, "pooling_mode"))
+        self.assertEqual(set(vars(args)), {"config", "wandb", "gpu"})
 
     def test_csv_header_primes_configured_gradient_cosines(self):
         writer = SimpleNamespace(metrics_keys=[])
@@ -303,158 +226,6 @@ class DeferredEarlyStoppingTest(unittest.TestCase):
         checkpoint = callbacks[0]
         self.assertEqual(checkpoint.save_top_k, 16)
         self.assertTrue(checkpoint.save_last)
-        self.assertEqual(len(callbacks), 3)
-        self.assertIsInstance(callbacks[2], train_module.RNGStateCallback)
-
-    def test_diagnosis_checkpointing_saves_every_epoch_and_last(self):
-        callbacks = build_training_callbacks({"save_every_epoch": True})
-
-        checkpoint = callbacks[0]
-        self.assertEqual(checkpoint.save_top_k, -1)
-        self.assertEqual(checkpoint.every_n_epochs, 1)
-        self.assertTrue(checkpoint.save_last)
-        self.assertTrue(
-            any(isinstance(callback, train_module.RNGStateCallback) for callback in callbacks)
-        )
-
-    def test_checkpoint_state_identity_differs_by_retention_mode(self):
-        top_16_checkpoint = build_training_callbacks({})[0]
-        all_epoch_checkpoint = build_training_callbacks({"save_every_epoch": True})[0]
-
-        self.assertNotEqual(top_16_checkpoint.state_key, all_epoch_checkpoint.state_key)
-
-
-class RNGStateCallbackTest(unittest.TestCase):
-    def test_restores_python_numpy_torch_cpu_and_all_cuda_rng_states(self):
-        callback = train_module.RNGStateCallback()
-        random.seed(101)
-        np.random.seed(202)
-        torch.manual_seed(303)
-        if torch.cuda.is_available():
-            torch.cuda.manual_seed_all(404)
-        state = callback.state_dict()
-
-        expected_python = random.random()
-        expected_numpy = np.random.random()
-        expected_torch = torch.rand(4)
-        expected_cuda_states = [rng_state.clone() for rng_state in state["cuda"]]
-
-        random.seed(501)
-        np.random.seed(502)
-        torch.manual_seed(503)
-        if torch.cuda.is_available():
-            torch.cuda.manual_seed_all(504)
-
-        callback.load_state_dict(state)
-        self.assertNotEqual(random.random(), expected_python)
-        callback.on_train_start(None, None)
-
-        self.assertEqual(random.random(), expected_python)
-        self.assertEqual(np.random.random(), expected_numpy)
-        torch.testing.assert_close(torch.rand(4), expected_torch, rtol=0, atol=0)
-        self.assertEqual(len(torch.cuda.get_rng_state_all()), len(expected_cuda_states))
-        for actual, expected in zip(torch.cuda.get_rng_state_all(), expected_cuda_states):
-            torch.testing.assert_close(actual, expected, rtol=0, atol=0)
-
-    def test_restores_only_once_at_training_start(self):
-        callback = train_module.RNGStateCallback()
-        random.seed(601)
-        state = callback.state_dict()
-        callback.load_state_dict(state)
-        callback.on_train_start(None, None)
-
-        first = random.random()
-        callback.on_train_start(None, None)
-        second = random.random()
-
-        self.assertNotEqual(first, second)
-
-
-class ResumeTrainingTest(unittest.TestCase):
-    def _run_training(
-        self, *, saved_path, resume_from, clean_output, create_loggers, trainer_class
-    ):
-        params = {
-            "batch_size": 2,
-            "epochs": 1,
-            "learning_rate": 1.0e-4,
-            "loss_weights": {"huber": 1.0},
-            "d_model": 8,
-            "n_heads": 2,
-        }
-        cfg = {"parameters": params}
-        datamodule = SimpleNamespace(train_dataloader=lambda: [object()], test_ds=None)
-
-        with (
-            unittest.mock.patch.object(train_module, "LightningWBoson") as model_class,
-            unittest.mock.patch.object(
-                train_module,
-                "build_training_callbacks",
-                return_value=[SimpleNamespace()],
-            ),
-            unittest.mock.patch.object(train_module, "clean_training_output", clean_output),
-            unittest.mock.patch.object(train_module, "create_loggers", create_loggers),
-            unittest.mock.patch.object(train_module, "Trainer", trainer_class),
-        ):
-            train_module.run_training(
-                cfg,
-                datamodule,
-                21,
-                (np.zeros(21), np.ones(21)),
-                np.ones(3),
-                (0.0, 1.0),
-                np.ones(2),
-                saved_path,
-                SimpleNamespace(resume_from=resume_from),
-            )
-
-        return model_class, datamodule
-
-    def test_resume_rejects_checkpoint_inside_destination_tree(self):
-        clean_output = unittest.mock.Mock()
-        create_loggers = unittest.mock.Mock(return_value=([], None))
-        trainer_class = unittest.mock.Mock()
-
-        with self.assertRaisesRegex(ValueError, "outside.*saved_path"):
-            self._run_training(
-                saved_path=train_module.resolve_repo_path("outputs/continuation"),
-                resume_from="outputs/continuation/checkpoints/epoch=17.ckpt",
-                clean_output=clean_output,
-                create_loggers=create_loggers,
-                trainer_class=trainer_class,
-            )
-
-        clean_output.assert_not_called()
-        create_loggers.assert_not_called()
-        trainer_class.assert_not_called()
-
-    def test_separate_destination_is_cleaned_before_loggers_on_full_resume(self):
-        calls = []
-        clean_output = unittest.mock.Mock(side_effect=lambda path: calls.append("clean"))
-        create_loggers = unittest.mock.Mock(
-            side_effect=lambda *args: calls.append("loggers") or ([], None)
-        )
-        trainer_class = unittest.mock.Mock()
-        saved_path = train_module.resolve_repo_path("outputs/continuation")
-        resume_from = "outputs/baseline/checkpoints/epoch=17.ckpt"
-
-        model_class, datamodule = self._run_training(
-            saved_path=saved_path,
-            resume_from=resume_from,
-            clean_output=clean_output,
-            create_loggers=create_loggers,
-            trainer_class=trainer_class,
-        )
-
-        model_class.load_from_checkpoint.assert_not_called()
-        clean_output.assert_called_once_with(saved_path)
-        self.assertEqual(calls, ["clean", "loggers"])
-        trainer_class.return_value.fit.assert_called_once_with(
-            model_class.return_value,
-            datamodule=datamodule,
-            ckpt_path=train_module.resolve_repo_path(resume_from),
-            weights_only=False,
-        )
 
 
 class TrainingScaleTest(unittest.TestCase):
