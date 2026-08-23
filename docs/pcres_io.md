@@ -6,7 +6,7 @@
 
 Run `python scripts/save_pcres_io.py --config <config-path>` to evaluate the latest compatible checkpoint under `paths.saved_path` on the configured pre-split test categories. The script writes `pcres_io.npz` and diagnostic plots under `paths.saved_path`. The archive contains the test split only; its row count depends on the selected categories, available events, and `max_events_per_category` setting.
 
-The current input-preprocessing schema version is 3. Checkpoints created with earlier schemas are incompatible and fail with a retraining-required message; partial weight migration is not supported. Do not overwrite existing checkpoints, ONNX files, or run outputs. A fresh training run deletes its configured run directory, so retraining must use a new `paths.saved_path`.
+Checkpoints must match the current model constructor and state-dictionary shapes. Migration across incompatible preprocessing or model architectures is not supported. Do not overwrite existing checkpoints, ONNX files, or run outputs. A fresh training run deletes its configured run directory, so retraining must use a new `paths.saved_path`.
 
 ## Contents
 

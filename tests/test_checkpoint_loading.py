@@ -27,9 +27,9 @@ class InferenceCheckpointLoadingTest(unittest.TestCase):
     def make_inputs():
         inputs = torch.randn(2, 21)
         for start in (0, 4, 8, 12):
-            inputs[:, start + 3] = torch.linalg.vector_norm(
-                inputs[:, start:start + 3], dim=1
-            ) + torch.rand(2) + 0.1
+            inputs[:, start + 3] = (
+                torch.linalg.vector_norm(inputs[:, start : start + 3], dim=1) + torch.rand(2) + 0.1
+            )
         return inputs
 
     def test_loads_checkpoint_with_legacy_loss_weights_for_inference(self):
@@ -118,8 +118,6 @@ class InferenceCheckpointLoadingTest(unittest.TestCase):
             num_heads=2,
             std_mean_train=np.zeros(18, dtype=np.float32),
             std_scale_train=np.ones(18, dtype=np.float32),
-            mmd_cond_mean_train=np.zeros(0, dtype=np.float32),
-            mmd_cond_scale_train=np.ones(0, dtype=np.float32),
             attention_blocks=1,
             attention_dropout=0.0,
             decoder_dropout=0.0,
@@ -127,9 +125,7 @@ class InferenceCheckpointLoadingTest(unittest.TestCase):
         inputs = torch.randn(2, 18)
         for start in (0, 4, 8, 12):
             inputs[:, start + 3] = (
-                torch.linalg.vector_norm(inputs[:, start : start + 3], dim=1)
-                + torch.rand(2)
-                + 0.1
+                torch.linalg.vector_norm(inputs[:, start : start + 3], dim=1) + torch.rand(2) + 0.1
             )
         expected = model(inputs)
         checkpoint = {
@@ -149,101 +145,7 @@ class InferenceCheckpointLoadingTest(unittest.TestCase):
         torch.testing.assert_close(loaded(inputs), expected)
         self.assertIsNone(loaded.model.hl_embed)
 
-    def test_rejects_checkpoint_missing_preprocessing_version(self):
-        model = self.make_model()
-        checkpoint = {
-            "state_dict": model.state_dict(),
-            "hyper_parameters": dict(model.hparams),
-            "pytorch-lightning_version": L.__version__,
-        }
-        checkpoint["hyper_parameters"].pop("input_preprocessing_version", None)
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            checkpoint_path = Path(tmpdir) / "unversioned.ckpt"
-            torch.save(checkpoint, checkpoint_path)
-            with self.assertRaisesRegex(RuntimeError, "retraining required"):
-                LightningWBoson.load_from_checkpoint(checkpoint_path, weights_only=False)
-
-    def test_rejects_checkpoint_with_obsolete_preprocessing_version(self):
-        model = self.make_model()
-        checkpoint = {
-            "state_dict": model.state_dict(),
-            "hyper_parameters": dict(model.hparams),
-            "pytorch-lightning_version": L.__version__,
-        }
-        checkpoint["hyper_parameters"]["input_preprocessing_version"] = 0
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            checkpoint_path = Path(tmpdir) / "obsolete-version.ckpt"
-            torch.save(checkpoint, checkpoint_path)
-            with self.assertRaisesRegex(ValueError, "retraining required"):
-                LightningWBoson.load_from_checkpoint(checkpoint_path, weights_only=False)
-
-    def test_rejects_checkpoint_with_legacy_raw_input_width(self):
-        model = self.make_model()
-        checkpoint = {
-            "state_dict": model.state_dict(),
-            "hyper_parameters": dict(model.hparams),
-            "pytorch-lightning_version": L.__version__,
-        }
-        checkpoint["hyper_parameters"]["input_dim"] = 22
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            checkpoint_path = Path(tmpdir) / "legacy-input-width.ckpt"
-            torch.save(checkpoint, checkpoint_path)
-            with self.assertRaisesRegex(ValueError, "retraining required"):
-                LightningWBoson.load_from_checkpoint(checkpoint_path, weights_only=False)
-
-    def test_rejects_legacy_normalization_shapes(self):
-        model = self.make_model()
-        checkpoint = {
-            "state_dict": model.state_dict(),
-            "hyper_parameters": dict(model.hparams),
-            "pytorch-lightning_version": L.__version__,
-        }
-        checkpoint["state_dict"]["model.norm.mean"] = torch.zeros(24)
-        checkpoint["state_dict"]["model.norm.std"] = torch.ones(24)
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            checkpoint_path = Path(tmpdir) / "legacy-shapes.ckpt"
-            torch.save(checkpoint, checkpoint_path)
-            with self.assertRaisesRegex(RuntimeError, "retraining required"):
-                LightningWBoson.load_from_checkpoint(checkpoint_path, weights_only=False)
-
-    def test_rejects_legacy_four_input_hl_embedding(self):
-        model = self.make_model()
-        checkpoint = {
-            "state_dict": model.state_dict(),
-            "hyper_parameters": dict(model.hparams),
-            "pytorch-lightning_version": L.__version__,
-        }
-        checkpoint["state_dict"]["model.hl_embed.weight"] = torch.zeros(8, 4)
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            checkpoint_path = Path(tmpdir) / "legacy-hl-embedding.ckpt"
-            torch.save(checkpoint, checkpoint_path)
-            with self.assertRaisesRegex(RuntimeError, "retraining required"):
-                LightningWBoson.load_from_checkpoint(checkpoint_path, weights_only=False)
-
-    def test_rejects_legacy_four_value_condition_buffers(self):
-        model = self.make_model()
-        checkpoint = {
-            "state_dict": model.state_dict(),
-            "hyper_parameters": dict(model.hparams),
-            "pytorch-lightning_version": L.__version__,
-        }
-        checkpoint["state_dict"]["model.cond_norm.mean"] = torch.zeros(4)
-        checkpoint["state_dict"]["model.cond_norm.std"] = torch.ones(4)
-        checkpoint["hyper_parameters"]["mmd_cond_mean_train"] = np.zeros(4)
-        checkpoint["hyper_parameters"]["mmd_cond_scale_train"] = np.ones(4)
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            checkpoint_path = Path(tmpdir) / "legacy-condition.ckpt"
-            torch.save(checkpoint, checkpoint_path)
-            with self.assertRaisesRegex(ValueError, "retraining required"):
-                LightningWBoson.load_from_checkpoint(checkpoint_path, weights_only=False)
-
-    def test_rejects_checkpoint_with_legacy_normalization_hyperparameters(self):
+    def test_rejects_checkpoint_with_invalid_normalization_statistics(self):
         model = self.make_model()
         checkpoint = {
             "state_dict": model.state_dict(),
@@ -254,9 +156,25 @@ class InferenceCheckpointLoadingTest(unittest.TestCase):
         checkpoint["hyper_parameters"]["std_scale_train"] = np.ones(24, dtype=np.float32)
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            checkpoint_path = Path(tmpdir) / "legacy-statistics.ckpt"
+            checkpoint_path = Path(tmpdir) / "invalid-statistics.ckpt"
             torch.save(checkpoint, checkpoint_path)
-            with self.assertRaisesRegex(ValueError, "retraining required"):
+            with self.assertRaisesRegex(ValueError, "normalization statistics must each contain"):
+                LightningWBoson.load_from_checkpoint(checkpoint_path, weights_only=False)
+
+    def test_rejects_checkpoint_with_unsupported_input_width(self):
+        model = self.make_model()
+        checkpoint = {
+            "state_dict": model.state_dict(),
+            "hyper_parameters": dict(model.hparams),
+            "pytorch-lightning_version": L.__version__,
+        }
+        checkpoint["hyper_parameters"]["input_dim"] = 22
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            checkpoint_path = Path(tmpdir) / "unsupported-input-width.ckpt"
+            torch.save(checkpoint, checkpoint_path)
+            # Input dim check still active - should fail with ValueError
+            with self.assertRaisesRegex(ValueError, "raw input contract requires input_dim"):
                 LightningWBoson.load_from_checkpoint(checkpoint_path, weights_only=False)
 
 

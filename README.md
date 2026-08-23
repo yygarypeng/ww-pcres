@@ -72,10 +72,16 @@ With Weights & Biases:
 python train/train.py --config configs/config.yaml --wandb
 ```
 
-The launcher uses the same entry point:
+The launcher uses the same entry point and writes to `record.log` by default:
 
 ```bash
 ./train/run_train.sh
+```
+
+Set `TRAIN_LOG_PATH` to keep a run's log separate:
+
+```bash
+TRAIN_LOG_PATH=/tmp/pcres-train.log ./train/run_train.sh
 ```
 
 Outputs are written under `paths.saved_path`. Training deletes that output directory before a fresh run, after data and model setup have succeeded.
@@ -117,11 +123,9 @@ The loader's public input contains 21 raw columns, ordered as positive-lepton `(
 
 Only the neural aggregation path converts these raw inputs to 21 features, in this order: positive-lepton `(px, py, pz, log1p(E))`, negative-lepton `(px, py, pz, log1p(E))`, jet 0 `(px, py, pz, log1p(E))`, jet 1 `(px, py, pz, log1p(E))`, MET `(px, py)`, `m_ll`, `deta_ll`, and `dphi_ll`. Non-angular statistics are fitted on the training split only; each jet slot uses only events where that raw jet is present, with mean zero and scale one if no training event contains the slot. The `dphi_ll` feature keeps fixed mean zero and scale one. Padded jets remain in event arrays and are excluded by attention masks.
 
-Legacy MMD condition buffers retain statistics for `m_ll`, `deta_ll`, and `dphi_ll` so existing checkpoints remain loadable. Current training losses do not consume these buffers.
-
 The loader also builds 10 targets. Target columns contain each W boson's `(px, py, pz, energy)` in GeV followed by the two truth W masses. Each truth W must be finite and timelike, have a nonnegative stored mass, and agree with $E^2-|p|^2$ within `1e-6 + 1e-6` times the sum-of-squares scale; the combined W pair must also be timelike.
 
-The current input-preprocessing schema version is 3. Checkpoints from earlier preprocessing schemas, including schema-version-2 checkpoints created before the current decoder and regression-head architecture, are incompatible and require retraining; partial weight migration is not supported. Preserve existing checkpoints, ONNX files, and run outputs. Because a fresh training run deletes its configured run directory, set `paths.saved_path` to a new directory before retraining.
+Checkpoints must match the current model constructor and state-dictionary shapes. Checkpoint migration across incompatible preprocessing or model architectures is not supported. Preserve existing checkpoints, ONNX files, and run outputs. Because a fresh training run deletes its configured run directory, set `paths.saved_path` to a new directory before retraining.
 
 ## ONNX
 

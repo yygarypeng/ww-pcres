@@ -7,10 +7,10 @@ import matplotlib
 
 matplotlib.use("Agg")
 
-from matplotlib import pyplot as plt
-from matplotlib.colors import LogNorm
 import numpy as np
 import pytest
+from matplotlib import pyplot as plt
+from matplotlib.colors import LogNorm
 
 from notebooks import plottingtool
 from notebooks.plottingtool import plot_1d_hist, plot_angular_1d_grid, plot_angular_2d_grid

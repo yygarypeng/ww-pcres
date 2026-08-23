@@ -114,7 +114,10 @@ class HiggsConstraintEvaluationTest(unittest.TestCase):
         )
         self.assertAlmostEqual(
             result["prediction_gradient_rms"],
-            ((small["prediction_gradient_rms"] ** 2 + 3 * large["prediction_gradient_rms"] ** 2) / 4)
+            (
+                (small["prediction_gradient_rms"] ** 2 + 3 * large["prediction_gradient_rms"] ** 2)
+                / 4
+            )
             ** 0.5,
         )
 

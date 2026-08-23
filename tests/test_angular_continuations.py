@@ -182,8 +182,6 @@ class AngularMmdContinuationRoutingTest(unittest.TestCase):
             num_heads=2,
             std_mean_train=np.zeros(21, dtype=np.float32),
             std_scale_train=np.ones(21, dtype=np.float32),
-            mmd_cond_mean_train=np.zeros(3, dtype=np.float32),
-            mmd_cond_scale_train=np.ones(3, dtype=np.float32),
             mmd_config={"angular": {"bandwidths": [0.5, 1.0, 2.0, 4.0]}},
             attention_blocks=1,
             attention_dropout=0.0,

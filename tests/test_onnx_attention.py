@@ -22,11 +22,121 @@ replace_multihead_attention_for_opset11 = converter.replace_multihead_attention_
 def valid_raw_inputs():
     inputs = torch.tensor(
         [
-            [1.0, 2.0, 3.0, 5.0, -1.0, 1.0, 2.0, 4.0, 1.0, 1.0, 1.0, 3.0, -1.0, 2.0, 1.0, 4.0, 2.0, -3.0, 0.5, 1.5, 0.2],
-            [2.0, 1.0, -1.0, 4.0, 1.0, -2.0, 1.0, 4.0, 0.0, 0.0, 0.0, 0.0, 1.0, -1.0, 2.0, 4.0, -1.0, 2.0, 1.0, 0.5, -0.7],
-            [-1.0, 2.0, 1.0, 4.0, 2.0, 1.0, -2.0, 4.0, 1.0, 2.0, -1.0, 4.0, 0.0, 0.0, 0.0, 0.0, 3.0, 1.0, 0.2, 2.0, 2.4],
-            [1.0, -1.0, 2.0, 4.0, -2.0, 2.0, 1.0, 4.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -2.0, -1.0, 1.2, 0.8, -1.5],
-            [1.0, 2.0, 1.0, 4.0, -1.0, 1.0, 2.0, 4.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, -1.0, 3.0, 2.0, -1.0, 0.6, 1.2, 0.4],
+            [
+                1.0,
+                2.0,
+                3.0,
+                5.0,
+                -1.0,
+                1.0,
+                2.0,
+                4.0,
+                1.0,
+                1.0,
+                1.0,
+                3.0,
+                -1.0,
+                2.0,
+                1.0,
+                4.0,
+                2.0,
+                -3.0,
+                0.5,
+                1.5,
+                0.2,
+            ],
+            [
+                2.0,
+                1.0,
+                -1.0,
+                4.0,
+                1.0,
+                -2.0,
+                1.0,
+                4.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+                -1.0,
+                2.0,
+                4.0,
+                -1.0,
+                2.0,
+                1.0,
+                0.5,
+                -0.7,
+            ],
+            [
+                -1.0,
+                2.0,
+                1.0,
+                4.0,
+                2.0,
+                1.0,
+                -2.0,
+                4.0,
+                1.0,
+                2.0,
+                -1.0,
+                4.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                3.0,
+                1.0,
+                0.2,
+                2.0,
+                2.4,
+            ],
+            [
+                1.0,
+                -1.0,
+                2.0,
+                4.0,
+                -2.0,
+                2.0,
+                1.0,
+                4.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                -2.0,
+                -1.0,
+                1.2,
+                0.8,
+                -1.5,
+            ],
+            [
+                1.0,
+                2.0,
+                1.0,
+                4.0,
+                -1.0,
+                1.0,
+                2.0,
+                4.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+                1.0,
+                -1.0,
+                3.0,
+                2.0,
+                -1.0,
+                0.6,
+                1.2,
+                0.4,
+            ],
         ],
         dtype=torch.float32,
     )
@@ -41,7 +151,7 @@ class Opset11MultiheadAttentionTest(unittest.TestCase):
         self.assertTrue(torch.all(inputs[:, [3, 7]] > 0.0))
         for row, missing_slots in enumerate(((), (0,), (1,), (0, 1))):
             for slot, start in enumerate((8, 12)):
-                jet = inputs[row, start:start + 4]
+                jet = inputs[row, start : start + 4]
                 if slot in missing_slots:
                     torch.testing.assert_close(jet, torch.zeros(4))
                 else:
@@ -62,9 +172,7 @@ class Opset11MultiheadAttentionTest(unittest.TestCase):
             ]
         )
 
-        expected = source(
-            inputs, inputs, inputs, key_padding_mask=mask, need_weights=False
-        )[0]
+        expected = source(inputs, inputs, inputs, key_padding_mask=mask, need_weights=False)[0]
         actual, weights = replacement(
             inputs, inputs, inputs, key_padding_mask=mask, need_weights=False
         )
@@ -82,8 +190,9 @@ class Opset11MultiheadAttentionTest(unittest.TestCase):
             replacement(query, context, context, need_weights=False)
 
     def test_small_regressor_exports_and_runs_with_dynamic_batch(self):
-        import onnx
         import onnxruntime
+
+        import onnx
 
         torch.manual_seed(5)
         input_dim = 21
@@ -101,10 +210,11 @@ class Opset11MultiheadAttentionTest(unittest.TestCase):
 
         export_model = copy.deepcopy(native_model)
         replace_multihead_attention_for_opset11(export_model)
-        self.assertTrue(all(
-            isinstance(block.mha, Opset11MultiheadAttention)
-            for block in export_model.sa_blocks
-        ))
+        self.assertTrue(
+            all(
+                isinstance(block.mha, Opset11MultiheadAttention) for block in export_model.sa_blocks
+            )
+        )
         self.assertFalse(hasattr(export_model, "event_pool"))
         self.assertEqual(export_model.num_tokens, 6)
 

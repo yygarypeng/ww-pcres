@@ -350,7 +350,7 @@ def plot_2d_hist(
     ax.set_xlabel(f"{xlabel} [{unit}]")
     ax.set_ylabel(f"{ylabel} [{unit}]")
     ax.set_title(f"{name}" + f" (RMSE: {_rmse(pred, truth):.2f})", loc="right")
-    print(f"Rel err < 20%: {100*np.sum(cor_mask)/len(truth):.2f} %")
+    print(f"Rel err < 20%: {100 * np.sum(cor_mask) / len(truth):.2f} %")
 
     txt = hep.atlas.label(ATLAS_LABEL_TEXT, data=True, loc=2, rlabel="", ax=ax)
     txt[0].set_color(color)
