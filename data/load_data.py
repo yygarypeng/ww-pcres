@@ -3,7 +3,6 @@ import numpy as np
 from sklearn.preprocessing import StandardScaler
 
 from data.preprocessing import valid_input_energy_rows
-from physics import eta
 
 
 def select_categories(available_categories, categories=None):
@@ -136,16 +135,12 @@ def load_particles_from_h5(filename, categories=None, max_events=None):
     return result
 
 
-def load_data(
-    data_path,
-    categories=None,
-    max_events_per_category=None,
-):
-
+def _load_filtered_arrays(data_path, categories, max_events):
+    """Load + row-filter raw train/target arrays without fitting scalers."""
     data = load_particles_from_h5(
         data_path,
         categories=categories,
-        max_events=max_events_per_category,
+        max_events=max_events,
     )
 
     def col(a):
@@ -171,13 +166,6 @@ def load_data(
         lep_neg_py = category_data["neg_lep"]["py"]
         lep_neg_pz = category_data["neg_lep"]["pz"]
         lep_neg_energy = category_data["neg_lep"]["energy"]
-
-        lep_pos_pt = category_data["pos_lep"]["pt"]  # noqa: F841
-        lep_neg_pt = category_data["neg_lep"]["pt"]  # noqa: F841
-        dilep_px = lep_pos_px + lep_neg_px
-        dilep_py = lep_pos_py + lep_neg_py
-        dilep_pz = lep_pos_pz + lep_neg_pz
-        dilep_eta = eta(dilep_px, dilep_py, dilep_pz)  # noqa: F841
 
         met_px = category_data["met"]["px"]
         met_py = category_data["met"]["py"]
@@ -264,13 +252,18 @@ def load_data(
         "rows with non-finite values, invalid input energies, or invalid truth W kinematics",
     )
 
-    (std_mean_train, std_scale_train), (std_mean_target, std_scale_target) = (
-        compute_standardization_stats(
-            train_obj,
-            target_obj,
-        )
-    )
+    return train_obj, target_obj
 
+
+def load_data(
+    data_path,
+    categories=None,
+    max_events_per_category=None,
+):
+    train_obj, target_obj = _load_filtered_arrays(data_path, categories, max_events_per_category)
+    (std_mean_train, std_scale_train), (std_mean_target, std_scale_target) = (
+        compute_standardization_stats(train_obj, target_obj)
+    )
     return (
         train_obj,
         target_obj,
@@ -294,14 +287,8 @@ def load_presplit_data(data_path, data_cfg=None):
     print("Test categories:", ", ".join(test_categories))
 
     max_events = data_cfg.get("max_events_per_category")
-    X_train, Y_train, _, _ = load_data(
-        data_path, categories=train_categories, max_events_per_category=max_events
-    )
-    X_val, Y_val, _, _ = load_data(
-        data_path, categories=val_categories, max_events_per_category=max_events
-    )
-    X_test, Y_test, _, _ = load_data(
-        data_path, categories=test_categories, max_events_per_category=max_events
-    )
+    X_train, Y_train = _load_filtered_arrays(data_path, train_categories, max_events)
+    X_val, Y_val = _load_filtered_arrays(data_path, val_categories, max_events)
+    X_test, Y_test = _load_filtered_arrays(data_path, test_categories, max_events)
 
     return X_train, Y_train, X_val, Y_val, X_test, Y_test

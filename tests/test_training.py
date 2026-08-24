@@ -220,12 +220,13 @@ class DeferredEarlyStoppingTest(unittest.TestCase):
 
         self.assertEqual(callbacks[1].start_epoch, 0)
 
-    def test_default_checkpointing_keeps_top_16_and_last(self):
+    def test_checkpoint_save_top_k_defaults_and_config_override(self):
         callbacks = build_training_callbacks({})
+        self.assertEqual(callbacks[0].save_top_k, 16)
 
-        checkpoint = callbacks[0]
-        self.assertEqual(checkpoint.save_top_k, 16)
-        self.assertTrue(checkpoint.save_last)
+        overridden = build_training_callbacks({"checkpoint_save_top_k": 3})
+        self.assertEqual(overridden[0].save_top_k, 3)
+        self.assertTrue(overridden[0].save_last)
 
 
 class TrainingScaleTest(unittest.TestCase):
