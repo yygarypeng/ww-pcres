@@ -665,6 +665,112 @@ class LightningModelLossTest(unittest.TestCase):
         self.assertTrue(all(set(kwargs) == {"kernel", "bandwidths"} for _, kwargs in captured))
 
 
+class SharedValidMaskTest(unittest.TestCase):
+    @staticmethod
+    def _small_batch_with_invalid_rows():
+        batch = 6
+        x = torch.zeros(batch, 21)
+        x[:, 3] = 10.0
+        x[:, 7] = 20.0
+        w0 = torch.tensor([30.0, 5.0, 40.0, 100.0])
+        w1 = torch.tensor([-20.0, 15.0, -30.0, 90.0])
+        y_pred = torch.cat([w0, w1]).repeat(batch, 1)
+        y_true = torch.cat(
+            [torch.cat([w0 + 1.0, w1]).repeat(batch, 1), torch.full((batch, 2), 80.4)], dim=-1
+        )
+        x[0, 0] = float("nan")
+        y_true[1, 4] = float("inf")
+        y_pred[2, 0] = float("nan")
+        y_true[3, 9] = float("nan")  # only alpha_mmd's extra finiteness check drops this row
+        return x, y_true, y_pred
+
+    def _model(self):
+        return LightningWBoson(
+            input_dim=21,
+            d_model=8,
+            num_heads=2,
+            std_mean_train=np.zeros(21, dtype=np.float32),
+            std_scale_train=np.ones(21, dtype=np.float32),
+            loss_weights={
+                "huber": 0.0,
+                "higgs_mass": 0.0,
+                "w_mass_huber": 0.0,
+                "alpha_mmd": 1.0,
+                "mass_mmd": 1.0,
+                "angular_mmd": 0.0,
+                "dmet": 0.0,
+            },
+        )
+
+    def _compute_losses_independent_masks(self, model, x, y_true, y_pred):
+        losses = {
+            "alpha_mmd": loss_module.alpha_mmd(x, y_true, y_pred, None, **model._mmd_kwargs("alpha")),
+            "mass_mmd": loss_module.mass_mmd(
+                x,
+                y_true,
+                y_pred,
+                None,
+                model.mass_mmd_center,
+                model.mass_mmd_scale,
+                **model._mmd_kwargs("mass"),
+            ),
+        }
+        return sum(losses.values()), losses
+
+    def test_shared_valid_mask_matches_independent_computation(self):
+        model = self._model()
+        x, y_true, y_pred = self._small_batch_with_invalid_rows()
+
+        total_a, losses_a = model._compute_losses(x, y_true, y_pred, None)
+        total_b, losses_b = self._compute_losses_independent_masks(model, x, y_true, y_pred)
+
+        for name in ("alpha_mmd", "mass_mmd"):
+            assert torch.allclose(losses_a[name], losses_b[name], atol=1e-7)
+        assert torch.allclose(total_a, total_b, atol=1e-7)
+
+    def test_valid_mask_is_passed_outside_mmd_kwargs(self):
+        model = self._model()
+        x, y_true, y_pred = self._small_batch_with_invalid_rows()
+        calls = {}
+
+        def capture(name):
+            def wrapper(*args, **kwargs):
+                calls[name] = kwargs
+                return torch.tensor(0.5)
+
+            return wrapper
+
+        with (
+            patch("model.model.alpha_mmd", side_effect=capture("alpha_mmd")),
+            patch("model.model.mass_mmd", side_effect=capture("mass_mmd")),
+        ):
+            model._compute_losses(x, y_true, y_pred, None)
+
+        for name in ("alpha_mmd", "mass_mmd"):
+            self.assertIn("valid_mask", calls[name])
+            self.assertIsInstance(calls[name]["valid_mask"], torch.Tensor)
+            self.assertEqual(set(calls[name]) - {"valid_mask"}, {"kernel", "bandwidths"})
+
+    def test_valid_mask_excludes_only_kinematically_invalid_rows(self):
+        model = self._model()
+        x, y_true, y_pred = self._small_batch_with_invalid_rows()
+        captured = {}
+
+        def capture_mmd(pred_features, true_features, **kwargs):
+            captured.setdefault("rows", []).append(pred_features.shape[0])
+            return pred_features.sum() * 0.0
+
+        with (
+            patch.object(model.model.w_layer, "forward", return_value=y_pred),
+            patch("model.losses.compute_mmd", side_effect=capture_mmd),
+        ):
+            model._compute_batch_losses(x, y_true)
+
+        # Rows 0-2 are kinematically invalid and row 3 additionally fails the
+        # alpha-specific mass finiteness check.
+        self.assertEqual(captured["rows"], [2, 3])
+
+
 class NoHighLevelFeaturesTest(unittest.TestCase):
     def _make_model(self, **kwargs):
         return LightningWBoson(

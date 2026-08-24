@@ -347,10 +347,10 @@ def compute_local_mmd(
     return h[off_diagonal].mean()
 
 
-def alpha_mmd(x_batch, y_true, y_pred, cond, **mmd_kwargs):
-    valid = _valid_kinematic_rows(x_batch, y_true, y_pred) & torch.isfinite(y_true[..., 8:10]).all(
-        dim=-1
-    )
+def alpha_mmd(x_batch, y_true, y_pred, cond, valid_mask=None, **mmd_kwargs):
+    if valid_mask is None:
+        valid_mask = _valid_kinematic_rows(x_batch, y_true, y_pred)
+    valid = valid_mask & torch.isfinite(y_true[..., 8:10]).all(dim=-1)
     if not valid.any():
         return _differentiable_zero(y_true, y_pred)
     x_batch = x_batch[valid]
@@ -375,12 +375,13 @@ def alpha_mmd(x_batch, y_true, y_pred, cond, **mmd_kwargs):
     )
 
 
-def mass_mmd(x_batch, y_true, y_pred, cond, center, scale, **mmd_kwargs):
-    valid = _valid_kinematic_rows(x_batch, y_true, y_pred)
-    if not valid.any():
+def mass_mmd(x_batch, y_true, y_pred, cond, center, scale, valid_mask=None, **mmd_kwargs):
+    if valid_mask is None:
+        valid_mask = _valid_kinematic_rows(x_batch, y_true, y_pred)
+    if not valid_mask.any():
         return _differentiable_zero(y_true, y_pred)
-    y_true = y_true[valid]
-    y_pred = y_pred[valid]
+    y_true = y_true[valid_mask]
+    y_pred = y_pred[valid_mask]
 
     true_features = _mass_features(y_true[..., :8], center, scale)
     pred_features = _mass_features(y_pred, center, scale)
