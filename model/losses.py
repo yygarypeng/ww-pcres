@@ -397,9 +397,10 @@ def angular_mmd(x_batch, y_true, y_pred, cond, **mmd_kwargs):
     true_w = torch.cat([true_w0, true_w1], dim=-1)
     pred_w = torch.cat([pred_w0, pred_w1], dim=-1)
 
-    true_booster = Booster(lep, true_w)
+    with torch.no_grad():
+        true_booster = Booster(lep, true_w)
+        true_valid, true_ang = true_booster.lep_theta_phi_with_validity()
     pred_booster = Booster(lep, pred_w)
-    true_valid, true_ang = true_booster.lep_theta_phi_with_validity()
     pred_valid, pred_ang = pred_booster.lep_theta_phi_with_validity()
     valid = true_valid & pred_valid
     true_ang = true_ang[valid]
