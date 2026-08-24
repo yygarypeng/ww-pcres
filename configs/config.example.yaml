@@ -6,6 +6,7 @@ parameters:
   weight_decay: 1.0e-4
   early_stopping_patience: 32
   early_stopping_min_delta: 0.0
+  checkpoint_save_top_k: 3
   angular_mmd_ramp_epochs: 80
   gradient_clip_val: 1.0
   adaptive_loss_weights: false

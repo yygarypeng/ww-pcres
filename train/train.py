@@ -183,7 +183,7 @@ def build_training_callbacks(params):
         ModelCheckpoint(
             monitor="val_loss",
             mode="min",
-            save_top_k=16,
+            save_top_k=int(params.get("checkpoint_save_top_k", 16)),
             save_last=True,
             every_n_epochs=1,
             filename="reg-{epoch:02d}-{val_loss:.2f}",
