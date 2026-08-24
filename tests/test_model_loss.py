@@ -168,14 +168,49 @@ def _reference_angles(lep, wboson):
     return valid, angles
 
 
+def _pathological_rows():
+    """Deterministic rows that the validity mask must reject."""
+
+    def w_row(w0_px, w0_py, w0_pz, w0_e):
+        w1_e = math.sqrt(80.379**2 + 100.0)
+        return torch.tensor([[w0_px, w0_py, w0_pz, w0_e, 0.0, 0.0, 0.0, w1_e]])
+
+    def lep_row(lep0_e, lep1_e=5.0):
+        return torch.tensor([[0.0, 0.0, 0.0, lep0_e, 0.0, 0.0, 0.0, lep1_e]])
+
+    extra_lep = torch.cat(
+        [
+            lep_row(float("nan")),  # NaN lepton energy
+            lep_row(5.0),
+            lep_row(5.0),
+        ]
+    )
+    extra_wboson = torch.cat(
+        [
+            w_row(0.0, 0.0, 10.0, math.sqrt(80.379**2 + 100.0)),  # massive W's
+            w_row(0.0, 0.0, 10000.0, 10000.0),  # lightlike W: mass2 == 0 exactly
+            w_row(0.0, 0.0, 0.0, -90.379),  # negative W energy
+        ]
+    )
+    return extra_lep, extra_wboson
+
+
 class BoosterAngleRegressionTest(unittest.TestCase):
     def test_booster_angles_unchanged_after_dedupe(self):
         torch.manual_seed(0)
-        lep, wboson = _mock_inputs(batch=256)
-        wboson = wboson.clamp(min=0.1)  # ensure massive W's
+        lep, wboson = _mock_inputs(batch=256)  # massive, finite W's by construction
+        extra_lep, extra_wboson = _pathological_rows()
+        lep = torch.cat([lep, extra_lep], dim=0)
+        wboson = torch.cat([wboson, extra_wboson], dim=0)
+
         b = Booster(lep, wboson)
         valid, angles = b.lep_theta_phi_with_validity()
         ref_valid, ref_angles = _reference_angles(lep, wboson)
+
+        assert valid.shape == (259,)
+        assert valid[:256].all(), "mock rows should remain valid"
+        assert not valid[256:].any(), "pathological rows must be flagged invalid"
+        assert not valid.all()
         assert torch.equal(valid, ref_valid)
         assert torch.allclose(angles[ref_valid], ref_angles[ref_valid], atol=1e-6)
 
