@@ -130,10 +130,7 @@ def _validate_bandwidth_multipliers(values, name):
 
 
 def compute_mmd(x, y, *, kernel="imq", bandwidths=(0.1, 1.0, 10.0)):
-    bandwidths = _validate_bandwidth_multipliers(bandwidths, "bandwidths")
-    if kernel not in {"imq", "rbf"}:
-        raise ValueError(f"Unsupported kernel: {kernel}")
-
+    """Config is validated upstream (resolve_mmd_config); direct callers validate their own inputs."""
     x = x.reshape(x.shape[0], -1)
     y = y.reshape(y.shape[0], -1)
     if x.shape[0] != y.shape[0]:
