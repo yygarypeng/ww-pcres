@@ -13,6 +13,7 @@ from data.preprocessing import (
 )
 from model.layers import ResidualBlock, SelfAttentionBlock, Standardization, WBosonFourVectorLayer
 from model.losses import (
+    _valid_kinematic_rows,
     alpha_mmd,
     angular_mmd,
     dmet_loss,
@@ -383,12 +384,18 @@ class LightningWBoson(L.LightningModule):
             )
         if self._loss_enabled("w_mass_huber", weights):
             losses["w_mass_huber"] = w_mass_huber_loss(y, y_pred)
+        kinematic_valid = (
+            _valid_kinematic_rows(x, y, y_pred)
+            if (self._loss_enabled("alpha_mmd", weights) or self._loss_enabled("mass_mmd", weights))
+            else None
+        )
         if self._loss_enabled("alpha_mmd", weights):
             losses["alpha_mmd"] = alpha_mmd(
                 x,
                 y,
                 y_pred,
                 cond,
+                valid_mask=kinematic_valid,
                 **self._mmd_kwargs("alpha"),
             )
         if self._loss_enabled("mass_mmd", weights):
@@ -399,6 +406,7 @@ class LightningWBoson(L.LightningModule):
                 cond,
                 self.mass_mmd_center,
                 self.mass_mmd_scale,
+                valid_mask=kinematic_valid,
                 **self._mmd_kwargs("mass"),
             )
         if self._loss_enabled("angular_mmd", weights):
