@@ -11,7 +11,7 @@ import torch.nn.functional as F
 from model import LightningWBoson
 from model import losses as loss_module
 from model.losses import dmet_loss, standardized_fourvec_huber_loss
-from physics.torchBoost import Booster
+from physics.torchBoost import Booster, _mock_inputs, safe_acos, safe_atan2
 from train import train as train_module
 from train.train import compute_mass_mmd_standardization, compute_w_fourvec_scales
 
@@ -58,6 +58,126 @@ class BoosterSharedAngularStateTest(unittest.TestCase):
         torch.testing.assert_close(actual_angles, expected_angles)
         actual_angles[actual_valid].sum().backward()
         self.assertTrue(torch.isfinite(w_bosons.grad).all())
+
+
+def _reference_angles(lep, wboson):
+    """Frozen copy of the Booster angle pipeline used as a regression reference."""
+
+    def eps_of(x):
+        return max(1e-12, torch.finfo(x.dtype).eps)
+
+    def norm(x, keepdim=True):
+        return torch.linalg.vector_norm(x, dim=-1, keepdim=keepdim).clamp_min(eps_of(x))
+
+    def mass2(p4):
+        return p4[..., 3] ** 2 - torch.sum(p4[..., 0:3] ** 2, dim=-1)
+
+    def has_rest_frame(p4):
+        return torch.isfinite(p4).all(dim=-1) & (p4[..., 3] > 0.0) & (mass2(p4) > eps_of(p4))
+
+    def boost(p4, beta):
+        p3 = p4[..., 0:3]
+        e = p4[..., 3:4]
+        eps = eps_of(p4)
+        beta = torch.nan_to_num(beta, nan=0.0, posinf=0.0, neginf=0.0)
+        beta2 = torch.sum(beta * beta, dim=-1, keepdim=True)
+        valid_beta = beta2 < 1.0
+        beta = torch.where(valid_beta, beta, torch.zeros_like(beta))
+        beta2 = torch.where(valid_beta, beta2, torch.zeros_like(beta2))
+        gamma = torch.rsqrt((1.0 - beta2).clamp_min(eps))
+        beta_dot_p = torch.sum(beta * p3, dim=-1, keepdim=True)
+        gamma2 = torch.where(beta2 > eps, (gamma - 1.0) / beta2, 0.5 * torch.ones_like(beta2))
+        boosted_p3 = p3 + gamma2 * beta_dot_p * beta + gamma * e * beta
+        boosted_e = gamma * (e + beta_dot_p)
+        return torch.cat([boosted_p3, boosted_e], dim=-1)
+
+    def boost_to_rest(p4, reference):
+        valid = has_rest_frame(reference).unsqueeze(-1)
+        energy = torch.where(valid, reference[..., 3:4], torch.ones_like(reference[..., 3:4]))
+        beta = torch.where(
+            valid, reference[..., 0:3] / energy, torch.zeros_like(reference[..., 0:3])
+        )
+        return boost(p4, -beta)
+
+    def basis(w_axis):
+        k = w_axis[..., 0:3] / norm(w_axis[..., 0:3])
+        beam = torch.zeros_like(k)
+        beam[..., 2] = 1.0
+        y = torch.sum(beam * k, dim=-1, keepdim=True)
+        transverse = torch.sqrt((1.0 - y * y).clamp_min(0.0) + eps_of(w_axis))
+        r = (beam - y * k) / transverse
+        n = torch.cross(beam, k, dim=-1) / transverse
+        return n, r, k
+
+    def project(p4, n, r, k):
+        p3 = p4[..., 0:3]
+        p3_projected = torch.stack(
+            [
+                torch.sum(p3 * n, dim=-1),
+                torch.sum(p3 * r, dim=-1),
+                torch.sum(p3 * k, dim=-1),
+            ],
+            dim=-1,
+        )
+        return torch.cat([p3_projected, p4[..., 3:4]], dim=-1)
+
+    def theta(p4):
+        p = norm(p4[..., 0:3], keepdim=False)
+        cos_theta = torch.clamp(p4[..., 2] / p, -1.0, 1.0)
+        return safe_acos(cos_theta)
+
+    def phi(p4):
+        return safe_atan2(p4[..., 1], p4[..., 0])
+
+    w0 = wboson[..., :4]
+    lep0 = lep[..., :4]
+    w1 = wboson[..., 4:8]
+    lep1 = lep[..., 4:8]
+    higgs = w0 + w1
+    w0_h = boost_to_rest(w0, higgs)
+    lep0_h = boost_to_rest(lep0, higgs)
+    w1_h = boost_to_rest(w1, higgs)
+    lep1_h = boost_to_rest(lep1, higgs)
+
+    w1_axis = w1_h[..., 0:3]
+    eps = eps_of(w1_h)
+    axis_norm = torch.linalg.vector_norm(w1_axis, dim=-1)
+    transverse_fraction = torch.linalg.vector_norm(w1_axis[..., 0:2], dim=-1) / axis_norm.clamp_min(
+        eps
+    )
+
+    valid = (
+        torch.isfinite(lep0).all(dim=-1)
+        & torch.isfinite(lep1).all(dim=-1)
+        & has_rest_frame(higgs)
+        & has_rest_frame(w0)
+        & has_rest_frame(w1)
+        & torch.isfinite(w1_axis).all(dim=-1)
+        & (axis_norm > eps)
+        & (transverse_fraction > eps**0.5)
+    )
+
+    n, r, k = basis(w1_h)
+    lep0_w = boost_to_rest(lep0_h, w0_h)
+    lep1_w = boost_to_rest(lep1_h, w1_h)
+    lep0_rest = project(lep0_w, n, r, k)
+    lep1_rest = project(lep1_w, n, r, k)
+    angles = torch.stack(
+        [theta(lep0_rest), phi(lep0_rest), theta(lep1_rest), phi(lep1_rest)], dim=-1
+    )
+    return valid, angles
+
+
+class BoosterAngleRegressionTest(unittest.TestCase):
+    def test_booster_angles_unchanged_after_dedupe(self):
+        torch.manual_seed(0)
+        lep, wboson = _mock_inputs(batch=256)
+        wboson = wboson.clamp(min=0.1)  # ensure massive W's
+        b = Booster(lep, wboson)
+        valid, angles = b.lep_theta_phi_with_validity()
+        ref_valid, ref_angles = _reference_angles(lep, wboson)
+        assert torch.equal(valid, ref_valid)
+        assert torch.allclose(angles[ref_valid], ref_angles[ref_valid], atol=1e-6)
 
 
 class StandardizedFourVectorHuberTest(unittest.TestCase):

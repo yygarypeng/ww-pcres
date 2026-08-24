@@ -93,10 +93,19 @@ class Booster(nn.Module):
         )
 
     def valid_rest_frame_mask(self, particles=None):
-        state = self._rest_frame_state(particles)
-        return self._valid_rest_frame_mask(state[0], state[1], state[4])
+        if particles is None:
+            particles = self.particles
+        higgs_ok, w0_ok, w1_ok = self._rest_frame_flags(particles)
+        _, _, _, _, w1_h, _ = self._rest_frame_state(particles, higgs_ok=higgs_ok)
+        return self._valid_rest_frame_mask(particles, higgs_ok, w0_ok, w1_ok, w1_h)
 
-    def _rest_frame_state(self, particles=None):
+    def _rest_frame_flags(self, particles):
+        w0 = particles[..., 0:4]
+        w1 = particles[..., 8:12]
+        higgs_ok = self._has_rest_frame(w0 + w1)
+        return higgs_ok, self._has_rest_frame(w0), self._has_rest_frame(w1)
+
+    def _rest_frame_state(self, particles=None, higgs_ok=None):
         if particles is None:
             particles = self.particles
 
@@ -105,16 +114,16 @@ class Booster(nn.Module):
         w1 = particles[..., 8:12]
         lep1 = particles[..., 12:16]
         higgs = w0 + w1
-        w0_h = self._boost_to_rest(w0, higgs)
-        lep0_h = self._boost_to_rest(lep0, higgs)
-        w1_h = self._boost_to_rest(w1, higgs)
-        lep1_h = self._boost_to_rest(lep1, higgs)
+        if higgs_ok is None:
+            higgs_ok = self._has_rest_frame(higgs)
+        w0_h = self._boost_to_rest(w0, higgs, higgs_ok)
+        lep0_h = self._boost_to_rest(lep0, higgs, higgs_ok)
+        w1_h = self._boost_to_rest(w1, higgs, higgs_ok)
+        lep1_h = self._boost_to_rest(lep1, higgs, higgs_ok)
         return particles, higgs, w0_h, lep0_h, w1_h, lep1_h
 
-    def _valid_rest_frame_mask(self, particles, higgs, w1_h):
-        w0 = particles[..., 0:4]
+    def _valid_rest_frame_mask(self, particles, higgs_ok, w0_ok, w1_ok, w1_h):
         lep0 = particles[..., 4:8]
-        w1 = particles[..., 8:12]
         lep1 = particles[..., 12:16]
         w1_axis = w1_h[..., 0:3]
         eps = self._eps(w1_h)
@@ -126,9 +135,9 @@ class Booster(nn.Module):
         return (
             torch.isfinite(lep0).all(dim=-1)
             & torch.isfinite(lep1).all(dim=-1)
-            & self._has_rest_frame(higgs)
-            & self._has_rest_frame(w0)
-            & self._has_rest_frame(w1)
+            & higgs_ok
+            & w0_ok
+            & w1_ok
             & torch.isfinite(w1_axis).all(dim=-1)
             & (axis_norm > eps)
             & (transverse_fraction > eps**0.5)
@@ -161,8 +170,10 @@ class Booster(nn.Module):
         boosted_e = gamma * (e + beta_dot_p)
         return torch.cat([boosted_p3, boosted_e], dim=-1)
 
-    def _boost_to_rest(self, p4, reference):
-        valid = self._has_rest_frame(reference).unsqueeze(-1)
+    def _boost_to_rest(self, p4, reference, reference_is_valid=None):
+        valid = (
+            self._has_rest_frame(reference) if reference_is_valid is None else reference_is_valid
+        ).unsqueeze(-1)
         energy = torch.where(valid, reference[..., 3:4], torch.ones_like(reference[..., 3:4]))
         beta = torch.where(
             valid, reference[..., 0:3] / energy, torch.zeros_like(reference[..., 0:3])
@@ -231,13 +242,13 @@ class Booster(nn.Module):
 
         return self._lep_4_from_rest_frame_state(w0_h, lep0_h, w1_h, lep1_h)
 
-    def _lep_4_from_rest_frame_state(self, w0_h, lep0_h, w1_h, lep1_h):
+    def _lep_4_from_rest_frame_state(self, w0_h, lep0_h, w1_h, lep1_h, w0_ok=None, w1_ok=None):
 
         # k is along W1 in the Higgs rest frame, beam direction is +z.
         n, r, k = self._basis(w1_h)
 
-        lep0_w = self._boost_to_rest(lep0_h, w0_h)
-        lep1_w = self._boost_to_rest(lep1_h, w1_h)
+        lep0_w = self._boost_to_rest(lep0_h, w0_h, w0_ok)
+        lep1_w = self._boost_to_rest(lep1_h, w1_h, w1_ok)
 
         return (
             self._project(lep0_w, n, r, k),
@@ -245,9 +256,12 @@ class Booster(nn.Module):
         )
 
     def lep_theta_phi_with_validity(self, particles=None):
-        state = self._rest_frame_state(particles)
-        valid = self._valid_rest_frame_mask(state[0], state[1], state[4])
-        lep0, lep1 = self._lep_4_from_rest_frame_state(*state[2:])
+        if particles is None:
+            particles = self.particles
+        higgs_ok, w0_ok, w1_ok = self._rest_frame_flags(particles)
+        state = self._rest_frame_state(particles, higgs_ok=higgs_ok)
+        valid = self._valid_rest_frame_mask(state[0], higgs_ok, w0_ok, w1_ok, state[4])
+        lep0, lep1 = self._lep_4_from_rest_frame_state(*state[2:], w0_ok=w0_ok, w1_ok=w1_ok)
         angles = torch.stack(
             [self._theta(lep0), self._phi(lep0), self._theta(lep1), self._phi(lep1)],
             dim=-1,
