@@ -5,28 +5,22 @@ import torch.nn.functional as F
 
 from physics.torchBoost import Booster
 
-####################
-# Global constants #
-####################
-
 TOR = 1e-16
 W_MASS_SCALE = 80.4
 H_MASS_SCALE = 125.0
+H_MASS2_FLOOR = 1e-2
 
-
-#############
-# Utilities #
-#############
+##################
+# Shared helpers #
+##################
 
 
 def invariant_mass2(fourvec):
     px, py, pz, E = fourvec[..., 0], fourvec[..., 1], fourvec[..., 2], fourvec[..., 3]
-
     return E**2 - (px**2 + py**2 + pz**2)
 
 
 def _valid_kinematic_rows(x_batch, y_true, y_pred):
-
     return (
         torch.isfinite(x_batch[..., :8]).all(dim=-1)
         & torch.isfinite(y_true[..., :8]).all(dim=-1)
@@ -34,56 +28,15 @@ def _valid_kinematic_rows(x_batch, y_true, y_pred):
     )
 
 
-def _differentiable_zero(y_true, y_pred):
-
-    return (
-        torch.nan_to_num(y_true[..., :8], nan=0.0, posinf=0.0, neginf=0.0).sum()
-        + torch.nan_to_num(y_pred, nan=0.0, posinf=0.0, neginf=0.0).sum()
-    ) * 0.0
+def _sanitized_rows(tensor, keep):
+    """Zero invalid rows before differentiable operations to prevent NaN gradients."""
+    return torch.where(keep.unsqueeze(-1), tensor, torch.zeros_like(tensor))
 
 
-########################
-# Feature construction #
-########################
-
-
-def _alpha_features(x_batch, w_fourvecs, slot0_on):
-    lep0, lep1 = x_batch[..., :4], x_batch[..., 4:8]
-    nu0 = w_fourvecs[..., :4] - lep0
-    nu1 = w_fourvecs[..., 4:8] - lep1
-
-    nu_on = torch.where(slot0_on.unsqueeze(-1), nu0, nu1)
-    nu_off = torch.where(slot0_on.unsqueeze(-1), nu1, nu0)
-    lep_on = torch.where(slot0_on.unsqueeze(-1), lep0, lep1)
-    lep_off = torch.where(slot0_on.unsqueeze(-1), lep1, lep0)
-
-    dinu = nu_on + nu_off
-    on_mass2 = invariant_mass2(lep_on + dinu)
-    off_mass2 = invariant_mass2(lep_off + dinu)
-    p_on = torch.linalg.vector_norm(nu_on[..., :3], dim=-1)
-    p_off = torch.linalg.vector_norm(nu_off[..., :3], dim=-1)
-    total = p_on + p_off
-    valid = (
-        torch.isfinite(on_mass2)
-        & torch.isfinite(off_mass2)
-        & (on_mass2 >= 0.0)
-        & (off_mass2 >= 0.0)
-        & torch.isfinite(total)
-        & (total > TOR)
-    )
-    selected_momentum = torch.where(on_mass2 > off_mass2, p_on, p_off)
-    safe_total = torch.where(valid, total, torch.ones_like(total))
-
-    return (2.0 * selected_momentum / safe_total - 1.0).unsqueeze(-1), valid
-
-
-def _mass_features(w_fourvecs, center, scale):
+def _mass_features(w_fourvecs):
     w_pos, w_neg = w_fourvecs[..., :4], w_fourvecs[..., 4:8]
-
     mass2 = torch.stack([invariant_mass2(w_pos), invariant_mass2(w_neg)], dim=-1)
-    transformed = torch.asinh(mass2 / W_MASS_SCALE**2)
-
-    return (transformed - center) / scale
+    return torch.asinh(mass2 / W_MASS_SCALE**2)
 
 
 def angular_mmd_features(angles):
@@ -129,54 +82,66 @@ def _validate_bandwidth_multipliers(values, name):
     return multipliers
 
 
-def compute_mmd(x, y, *, kernel="imq", bandwidths=(0.1, 1.0, 10.0)):
-    """Config is validated upstream (resolve_mmd_config); direct callers validate their own inputs."""
+##############
+# Global MMD #
+##############
+
+
+def compute_mmd(x, y, *, kernel="imq", bandwidths=(0.1, 1.0, 10.0), valid_mask=None):
+    """Compute fixed-bandwidth V-statistic MMD without changing the batch shape."""
     x = x.reshape(x.shape[0], -1)
     y = y.reshape(y.shape[0], -1)
     if x.shape[0] != y.shape[0]:
         raise ValueError("x and y must have the same number of paired rows")
+    if valid_mask is not None and valid_mask.shape[0] != x.shape[0]:
+        raise ValueError("valid_mask must have one entry per paired row")
 
     finite = torch.isfinite(x).all(dim=1) & torch.isfinite(y).all(dim=1)
-    x = x[finite]
-    y = y[finite]
+    if valid_mask is not None:
+        finite = finite & valid_mask
+    row_weight = finite.to(x.dtype).unsqueeze(-1)
+    pair_weight = row_weight * row_weight.T
+    pair_total = pair_weight.sum().clamp_min(1.0)
 
-    if x.shape[0] == 0:
-        return (x.sum() + y.sum()) * 0.0
+    # Weighting alone cannot prevent NaNs from entering pairwise distances.
+    x = torch.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0) * row_weight
+    y = torch.nan_to_num(y, nan=0.0, posinf=0.0, neginf=0.0) * row_weight
 
     x2 = x.square().sum(dim=1)
     y2 = y.square().sum(dim=1)
     dxx = (x2[:, None] + x2[None, :] - 2.0 * (x @ x.T)).clamp_min(0.0)
-    dyy = (y2[:, None] + y2[None, :] - 2.0 * (y @ y.T)).clamp_min(0.0)
     dxy = (x2[:, None] + y2[None, :] - 2.0 * (x @ y.T)).clamp_min(0.0)
+    with torch.no_grad():
+        dyy = (y2[:, None] + y2[None, :] - 2.0 * (y @ y.T)).clamp_min(0.0)
 
     def kernel_mean(distance, bandwidth):
         bandwidth2 = bandwidth**2
 
         if kernel == "imq":
-            return (bandwidth2 / (bandwidth2 + distance + TOR)).mean()
-        return torch.exp(-0.5 * distance / (bandwidth2 + TOR)).mean()
+            values = bandwidth2 / (bandwidth2 + distance + TOR)
+        else:
+            values = torch.exp(-0.5 * distance / (bandwidth2 + TOR))
+        return (values * pair_weight).sum() / pair_total
 
     mmd = x.new_zeros(())
     for bandwidth in bandwidths:
-        mmd = mmd + kernel_mean(dxx, bandwidth)
-        mmd = mmd + kernel_mean(dyy, bandwidth)
+        # Keep the constant y-y value while excluding it from the autograd graph.
+        with torch.no_grad():
+            dyy_term = kernel_mean(dyy, bandwidth)
+        mmd = mmd + kernel_mean(dxx, bandwidth) + dyy_term
         mmd = mmd - 2.0 * kernel_mean(dxy, bandwidth)
 
     return (mmd / len(bandwidths)).clamp_min(0.0)
 
 
 ####################
-# Loss functions
+# Pointwise losses #
 ####################
 
 
-def standardized_fourvec_huber_loss(y_true, y_pred, component_scales):
-    true_fourvecs = y_true[..., :8].reshape(*y_true.shape[:-1], 2, 4)
-    pred_fourvecs = y_pred.reshape(*y_pred.shape[:-1], 2, 4)
-
-    residual = (pred_fourvecs - true_fourvecs) / component_scales
-
-    return F.huber_loss(residual, torch.zeros_like(residual))
+def fourvec_huber_loss(y_true, y_pred):
+    """Mean Huber loss on raw W components in GeV, with delta=1 GeV."""
+    return F.huber_loss(y_pred, y_true[..., :8])
 
 
 def w_mass_huber_loss(y_true, y_pred):
@@ -192,21 +157,22 @@ def w_mass_huber_loss(y_true, y_pred):
     return F.huber_loss(w_lst_pred, w_lst_true)
 
 
-def higgs_mass_loss(
-    y_pred,
-    target_mass=H_MASS_SCALE,
-    scale=10.0,
-    delta=2.0,
-):
+def higgs_mass_loss(y_pred, target_mass=H_MASS_SCALE):
+    """Mean Huber loss on signed Higgs mass in GeV, with delta=1 GeV."""
     w0_4, w1_4 = y_pred[..., :4], y_pred[..., 4:8]
 
     higgs_mass2 = invariant_mass2(w0_4 + w1_4)
-    residual = (higgs_mass2 - target_mass**2) / (2.0 * target_mass * scale)
+    abs_mass2 = higgs_mass2.abs()
+    higgs_mass = torch.where(
+        abs_mass2 < H_MASS2_FLOOR,
+        higgs_mass2 / math.sqrt(H_MASS2_FLOOR),
+        higgs_mass2.sign() * torch.sqrt(abs_mass2.clamp_min(H_MASS2_FLOOR)),
+    )
+    return F.huber_loss(higgs_mass, torch.full_like(higgs_mass, target_mass))
 
-    return F.l1_loss(residual, torch.zeros_like(residual))
 
-
-def dmet_loss(x_batch, y_true, dmet, component_scales):
+def dmet_loss(x_batch, y_true, dmet):
+    """Mean Huber loss on raw MET corrections in GeV, with delta=1 GeV."""
     true_w0 = y_true[..., :4]
     true_w1 = y_true[..., 4:8]
     true_nu0 = true_w0 - x_batch[..., :4]
@@ -214,14 +180,91 @@ def dmet_loss(x_batch, y_true, dmet, component_scales):
     true_dinu_pxpy = true_nu0[..., :2] + true_nu1[..., :2]
     dmet_target = x_batch[..., 16:18] - true_dinu_pxpy
 
-    residual = (dmet - dmet_target) / component_scales
-
-    return F.huber_loss(residual, torch.zeros_like(residual))
+    return F.huber_loss(dmet, dmet_target)
 
 
-####################
+def alpha_mmd(x_batch, y_true, y_pred, valid_mask=None, **mmd_kwargs):
+    if valid_mask is None:
+        valid_mask = _valid_kinematic_rows(x_batch, y_true, y_pred)
+
+    lep = _sanitized_rows(x_batch[..., :8], valid_mask)
+    w_true = _sanitized_rows(y_true[..., :8], valid_mask)
+    w_pred = _sanitized_rows(y_pred, valid_mask)
+
+    lep_pos = lep[..., :4]
+    lep_neg = lep[..., 4:8]
+
+    nu_pos_true = w_true[..., :4] - lep_pos
+    nu_neg_true = w_true[..., 4:8] - lep_neg
+    nu_pos_pred = w_pred[..., :4] - lep_pos
+    nu_neg_pred = w_pred[..., 4:8] - lep_neg
+
+    p_pos_true = torch.linalg.vector_norm(nu_pos_true[..., :3], dim=-1)
+    p_neg_true = torch.linalg.vector_norm(nu_neg_true[..., :3], dim=-1)
+    p_pos_pred = torch.linalg.vector_norm(nu_pos_pred[..., :3], dim=-1)
+    p_neg_pred = torch.linalg.vector_norm(nu_neg_pred[..., :3], dim=-1)
+
+    total_true = p_pos_true + p_neg_true
+    total_pred = p_pos_pred + p_neg_pred
+
+    alpha_valid = (
+        valid_mask
+        & torch.isfinite(total_true)
+        & torch.isfinite(total_pred)
+        & (total_true > TOR)
+        & (total_pred > TOR)
+    )
+    # Rows that carry no weight still go through the division, so keep their
+    # denominators finite instead of selecting the surviving rows out.
+    safe_total_true = torch.where(alpha_valid, total_true, torch.ones_like(total_true))
+    safe_total_pred = torch.where(alpha_valid, total_pred, torch.ones_like(total_pred))
+
+    true_alpha = (p_pos_true / safe_total_true).unsqueeze(-1)
+    pred_alpha = (p_pos_pred / safe_total_pred).unsqueeze(-1)
+
+    return compute_mmd(
+        2.0 * pred_alpha - 1.0,
+        2.0 * true_alpha - 1.0,
+        valid_mask=alpha_valid,
+        **mmd_kwargs,
+    )
+
+
+def mass_mmd(x_batch, y_true, y_pred, valid_mask=None, **mmd_kwargs):
+    if valid_mask is None:
+        valid_mask = _valid_kinematic_rows(x_batch, y_true, y_pred)
+
+    true_features = _mass_features(_sanitized_rows(y_true[..., :8], valid_mask))
+    pred_features = _mass_features(_sanitized_rows(y_pred, valid_mask))
+    return compute_mmd(pred_features, true_features, valid_mask=valid_mask, **mmd_kwargs)
+
+
+def angular_mmd(x_batch, y_true, y_pred, **mmd_kwargs):
+    """Compute MMD over lepton angles in the W rest frames."""
+    lep = x_batch[..., :8]
+    with torch.no_grad():
+        truth_valid, truth_angles = Booster(lep, y_true[..., :8]).lep_theta_phi_with_validity()
+        truth_features = angular_mmd_features(truth_angles)
+
+    # The boost chain is only NaN-safe for finite inputs, and its gradient runs
+    # before the weighting in compute_mmd, so clean the rows up front.
+    finite = torch.isfinite(lep).all(dim=-1) & torch.isfinite(y_pred).all(dim=-1)
+    pred_valid, pred_angles = Booster(
+        _sanitized_rows(lep, finite),
+        _sanitized_rows(y_pred, finite),
+    ).lep_theta_phi_with_validity()
+
+    return compute_mmd(
+        angular_mmd_features(pred_angles),
+        truth_features,
+        valid_mask=finite & truth_valid & pred_valid,
+        **mmd_kwargs,
+    )
+
+
+###################
 # Local MMD (WIP) #
-####################
+###################
 
 
 def compute_local_mmd(
@@ -237,11 +280,7 @@ def compute_local_mmd(
     feature_bandwidths=None,
     estimator="u",
 ):
-    """
-    The default U-statistic excludes paired diagonal terms and can be negative.
-    The V-statistic includes all terms and is nonnegative. Feature bandwidths
-    may be fixed absolutely or inferred from y using the multiplier defaults.
-    """
+    """Compute optionally conditional MMD with configurable U/V estimators."""
     if not isinstance(local, bool):
         raise ValueError("local must be a boolean")
     if estimator not in ("u", "v"):
@@ -270,12 +309,12 @@ def compute_local_mmd(
         raise ValueError("x, y, and cond must have the same number of paired rows")
 
     # Filter paired rows before constructing any pairwise kernel matrix.
-    finit_mask = torch.isfinite(x).all(dim=1) & torch.isfinite(y).all(dim=1)
+    finite_mask = torch.isfinite(x).all(dim=1) & torch.isfinite(y).all(dim=1)
     if local:
-        finit_mask = finit_mask & torch.isfinite(cond).all(dim=1)
-    x = x[finit_mask]
-    y = y[finit_mask]
-    cond = cond[finit_mask]
+        finite_mask = finite_mask & torch.isfinite(cond).all(dim=1)
+    x = x[finite_mask]
+    y = y[finite_mask]
+    cond = cond[finite_mask]
 
     if x.shape[0] == 0 or (estimator == "u" and x.shape[0] < 2):
         return (
@@ -294,7 +333,7 @@ def compute_local_mmd(
                 value * condition_scale for value in condition_bandwidth_multipliers
             ]
 
-    def _matrix(x, y):
+    def pairwise_squared_distances(x, y):
         xx, yy, xy = torch.mm(x, x.t()), torch.mm(y, y.t()), torch.mm(x, y.t())
         rx = xx.diag().unsqueeze(0).expand_as(xx)
         ry = yy.diag().unsqueeze(0).expand_as(yy)
@@ -307,7 +346,7 @@ def compute_local_mmd(
 
         return dxx, dyy, dxy
 
-    dxx, dyy, dxy = _matrix(x, y)
+    dxx, dyy, dxy = pairwise_squared_distances(x, y)
 
     def rbf_kernel(a, d):
         return torch.exp(-0.5 * d / (a**2 + TOR))
@@ -328,87 +367,18 @@ def compute_local_mmd(
             dim=0,
         ).mean(dim=0)
 
-    XX = mixed_kernel(feature_kernel, feature_bandwidths, dxx)
-    YY = mixed_kernel(feature_kernel, feature_bandwidths, dyy)
-    XY = mixed_kernel(feature_kernel, feature_bandwidths, dxy)
+    kernel_xx = mixed_kernel(feature_kernel, feature_bandwidths, dxx)
+    kernel_yy = mixed_kernel(feature_kernel, feature_bandwidths, dyy)
+    kernel_xy = mixed_kernel(feature_kernel, feature_bandwidths, dxy)
     if local:
-        # The product of these normalized mixtures equals the mean over the
-        # Cartesian product of all feature and condition bandwidths.
-        cond_dxx, _, _ = _matrix(cond, cond)
+        cond_dxx, _, _ = pairwise_squared_distances(cond, cond)
         cond_matrix = mixed_kernel(condition_kernel, condition_bandwidths, cond_dxx)
-        XX = XX * cond_matrix
-        YY = YY * cond_matrix
-        XY = XY * cond_matrix
+        kernel_xx = kernel_xx * cond_matrix
+        kernel_yy = kernel_yy * cond_matrix
+        kernel_xy = kernel_xy * cond_matrix
 
-    h = XX + YY - XY - XY.T
+    h = kernel_xx + kernel_yy - kernel_xy - kernel_xy.T
     if estimator == "v":
         return h.mean().clamp_min(0.0)
     off_diagonal = ~torch.eye(h.shape[0], dtype=torch.bool, device=h.device)
     return h[off_diagonal].mean()
-
-
-def alpha_mmd(x_batch, y_true, y_pred, cond, valid_mask=None, **mmd_kwargs):
-    if valid_mask is None:
-        valid_mask = _valid_kinematic_rows(x_batch, y_true, y_pred)
-    valid = valid_mask & torch.isfinite(y_true[..., 8:10]).all(dim=-1)
-    if not valid.any():
-        return _differentiable_zero(y_true, y_pred)
-    x_batch = x_batch[valid]
-    y_true = y_true[valid]
-    y_pred = y_pred[valid]
-
-    w_mass2 = W_MASS_SCALE**2
-    slot0_on = torch.abs(y_true[..., 8] ** 2 - w_mass2) < torch.abs(y_true[..., 9] ** 2 - w_mass2)
-    true_features, true_alpha_valid = _alpha_features(
-        x_batch,
-        y_true[..., :8],
-        slot0_on,
-    )
-    pred_features, pred_alpha_valid = _alpha_features(x_batch, y_pred, slot0_on)
-    alpha_valid = true_alpha_valid & pred_alpha_valid
-    if not alpha_valid.any():
-        return _differentiable_zero(y_true, y_pred)
-    return compute_mmd(
-        pred_features[alpha_valid],
-        true_features[alpha_valid],
-        **mmd_kwargs,
-    )
-
-
-def mass_mmd(x_batch, y_true, y_pred, cond, center, scale, valid_mask=None, **mmd_kwargs):
-    if valid_mask is None:
-        valid_mask = _valid_kinematic_rows(x_batch, y_true, y_pred)
-    if not valid_mask.any():
-        return _differentiable_zero(y_true, y_pred)
-    y_true = y_true[valid_mask]
-    y_pred = y_pred[valid_mask]
-
-    true_features = _mass_features(y_true[..., :8], center, scale)
-    pred_features = _mass_features(y_pred, center, scale)
-    return compute_mmd(pred_features, true_features, **mmd_kwargs)
-
-
-def angular_mmd(x_batch, y_true, y_pred, cond, **mmd_kwargs):
-    lep = x_batch[..., :8]
-    true_w0, true_w1 = y_true[..., :4], y_true[..., 4:8]
-    pred_w0, pred_w1 = y_pred[..., :4], y_pred[..., 4:8]
-    true_w = torch.cat([true_w0, true_w1], dim=-1)
-    pred_w = torch.cat([pred_w0, pred_w1], dim=-1)
-
-    with torch.no_grad():
-        true_booster = Booster(lep, true_w)
-        true_valid, true_ang = true_booster.lep_theta_phi_with_validity()
-    pred_booster = Booster(lep, pred_w)
-    pred_valid, pred_ang = pred_booster.lep_theta_phi_with_validity()
-    valid = true_valid & pred_valid
-    true_ang = true_ang[valid]
-    pred_ang = pred_ang[valid]
-    if true_ang.shape[0] == 0:
-        return (torch.nan_to_num(true_w, nan=0.0, posinf=0.0, neginf=0.0) * 0.0).sum() + (
-            torch.nan_to_num(pred_w, nan=0.0, posinf=0.0, neginf=0.0) * 0.0
-        ).sum()
-
-    true_ang = angular_mmd_features(true_ang)
-    pred_ang = angular_mmd_features(pred_ang)
-
-    return compute_mmd(pred_ang, true_ang, **mmd_kwargs)

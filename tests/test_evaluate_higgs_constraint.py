@@ -29,8 +29,6 @@ class HiggsConstraintEvaluationTest(unittest.TestCase):
         metrics = higgs_batch_metrics(
             predictions,
             target_mass=125.0,
-            scale=10.0,
-            delta=2.0,
             weight=3.0,
         )
 
@@ -46,8 +44,6 @@ class HiggsConstraintEvaluationTest(unittest.TestCase):
         metrics = higgs_batch_metrics(
             predictions,
             target_mass=125.0,
-            scale=10.0,
-            delta=2.0,
             weight=2.5,
         )
         result = aggregate_metrics([metrics])
@@ -78,8 +74,6 @@ class HiggsConstraintEvaluationTest(unittest.TestCase):
                 higgs_batch_metrics(
                     predictions,
                     target_mass=125.0,
-                    scale=10.0,
-                    delta=2.0,
                     weight=1.0,
                 )
             ]
@@ -93,15 +87,11 @@ class HiggsConstraintEvaluationTest(unittest.TestCase):
         small = higgs_batch_metrics(
             higgs_predictions([125.0]),
             target_mass=125.0,
-            scale=10.0,
-            delta=2.0,
             weight=4.0,
         )
         large = higgs_batch_metrics(
             higgs_predictions([145.0, 145.0, 145.0]),
             target_mass=125.0,
-            scale=10.0,
-            delta=2.0,
             weight=4.0,
         )
 
@@ -123,7 +113,7 @@ class HiggsConstraintEvaluationTest(unittest.TestCase):
 
     def test_gradient_rms_is_invariant_to_batch_partitioning(self):
         predictions = higgs_predictions([95.0, 115.0, 130.0, 170.0])
-        kwargs = {"target_mass": 125.0, "scale": 10.0, "delta": 2.0, "weight": 3.0}
+        kwargs = {"target_mass": 125.0, "weight": 3.0}
 
         single_batch = aggregate_metrics([higgs_batch_metrics(predictions, **kwargs)])
         partitioned = aggregate_metrics(

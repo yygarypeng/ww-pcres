@@ -22,7 +22,7 @@ parameters:
   prefetch_factor: 4
   loss_weights:
     huber: 1.0
-    higgs_mass: 1.0
+    higgs_mass: 0.0004
     alpha_mmd: 1.0
     mass_mmd: 1.0
     w_mass_huber: 0.001

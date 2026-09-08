@@ -448,7 +448,6 @@ class _GradientModel(nn.Module):
     def __init__(self):
         super().__init__()
         self.slot_scale = nn.Parameter(torch.tensor([0.2, 0.4]))
-        self.w_fourvec_scales = torch.ones(4)
         self.loss_weights = {"huber": 50.0, "sum": -2.0, "disabled": 0.0}
         self.seen_features = None
         self.forward_calls = 0
@@ -464,18 +463,17 @@ class _GradientModel(nn.Module):
             dim=1,
         )
         if return_aux:
-            return prediction, {"cond": features.new_empty((len(features), 0))}
+            return prediction, {"dmet": features.new_zeros((len(features), 2))}
         return prediction
 
     def _compute_batch_losses(self, features, targets):
         prediction, auxiliary = self(features, return_aux=True)
-        return self._compute_losses(features, targets, prediction, auxiliary["cond"], auxiliary)
+        return self._compute_losses(features, targets, prediction, auxiliary)
 
-    def _compute_losses(self, features, targets, prediction, condition, auxiliary=None):
-        del condition, auxiliary
+    def _compute_losses(self, features, targets, prediction, auxiliary=None):
+        del auxiliary
         self.seen_features = features.detach().clone()
-        residual = prediction - targets[:, :8]
-        huber = torch.nn.functional.huber_loss(residual, torch.zeros_like(residual))
+        huber = torch.nn.functional.huber_loss(prediction, targets[:, :8])
         losses = {"huber": huber, "sum": self.slot_scale.sum()}
         return 50.0 * huber - 2.0 * losses["sum"], losses
 
@@ -510,7 +508,7 @@ def test_gradient_rows_use_persisted_batch_and_report_weighted_reference_cosines
     assert by_name["huber"]["effective_weight"] == 50.0
     assert by_name["huber_wplus"]["effective_weight"] == 25.0
     assert by_name["huber_wminus"]["effective_weight"] == 25.0
-    assert by_name["huber"]["weighted_gradient_l2"] == pytest.approx(5 * np.sqrt(5))
+    assert by_name["huber"]["weighted_gradient_l2"] == pytest.approx(np.sqrt(5.0**2 + 10.0**2))
     assert by_name["sum"]["weighted_gradient_l2"] == pytest.approx(2 * np.sqrt(2))
     assert by_name["huber_wplus"]["weighted_gradient_l2"] == pytest.approx(5.0)
     assert by_name["huber_wminus"]["weighted_gradient_l2"] == pytest.approx(10.0)

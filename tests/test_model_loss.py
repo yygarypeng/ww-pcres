@@ -2,18 +2,15 @@ import math
 import unittest
 from fractions import Fraction
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 import numpy as np
 import torch
-import torch.nn.functional as F
 
 from model import LightningWBoson
 from model import losses as loss_module
-from model.losses import dmet_loss, standardized_fourvec_huber_loss
+from model.losses import dmet_loss, fourvec_huber_loss
 from physics.torchBoost import Booster, _mock_inputs, safe_acos, safe_atan2
-from train import train as train_module
-from train.train import compute_mass_mmd_standardization, compute_w_fourvec_scales
 
 
 class FixedVMMDTest(unittest.TestCase):
@@ -215,88 +212,26 @@ class BoosterAngleRegressionTest(unittest.TestCase):
         assert torch.allclose(angles[ref_valid], ref_angles[ref_valid], atol=1e-6)
 
 
-class StandardizedFourVectorHuberTest(unittest.TestCase):
-    def test_compute_scales_pools_w_slots_by_component(self):
-        targets = np.array(
-            [
-                [1.0, 10.0, 100.0, 1000.0, 3.0, 30.0, 300.0, 3000.0, 0.0, 0.0],
-                [5.0, 50.0, 500.0, 5000.0, 7.0, 70.0, 700.0, 7000.0, 0.0, 0.0],
-            ],
-            dtype=np.float32,
-        )
-
-        scales = compute_w_fourvec_scales(targets)
-
-        expected = np.std(targets[:, :8].reshape(-1, 4), axis=0)
-        np.testing.assert_allclose(scales, expected)
-
-    def test_compute_scales_clamps_constant_components(self):
-        targets = np.ones((3, 10), dtype=np.float32)
-
-        scales = compute_w_fourvec_scales(targets)
-
-        self.assertTrue(np.all(scales > 0.0))
-
+class FourVectorHuberTest(unittest.TestCase):
     def test_loss_uses_raw_energy_for_both_slots(self):
         truth = torch.tensor([[0.0, 0.0, 0.0, 3.0, 0.0, 0.0, 0.0, 7.0, 0.0, 0.0]])
         prediction = torch.tensor([[1.0, 2.0, 3.0, 7.0, 1.0, 2.0, 3.0, 15.0]])
-        scales = torch.ones(4)
+        loss = fourvec_huber_loss(truth, prediction)
 
-        loss = standardized_fourvec_huber_loss(truth, prediction, scales)
-
-        standardized_residual = torch.tensor([[[1.0, 2.0, 3.0, 4.0], [1.0, 2.0, 3.0, 8.0]]])
-        expected = F.huber_loss(standardized_residual, torch.zeros_like(standardized_residual))
+        expected = torch.tensor(20.0 / 8.0)
         torch.testing.assert_close(loss, expected)
 
     def test_loss_is_finite_for_zero_energy(self):
         truth = torch.zeros((1, 10))
         prediction = torch.zeros((1, 8))
 
-        loss = standardized_fourvec_huber_loss(truth, prediction, torch.ones(4))
+        loss = fourvec_huber_loss(truth, prediction)
 
         self.assertTrue(torch.isfinite(loss))
 
-    def test_scales_are_saved_in_model_state(self):
-        scales = np.array([2.0, 3.0, 4.0, 5.0], dtype=np.float32)
-        model = LightningWBoson(
-            input_dim=21,
-            d_model=8,
-            num_heads=2,
-            std_mean_train=np.zeros(21, dtype=np.float32),
-            std_scale_train=np.ones(21, dtype=np.float32),
-            w_fourvec_scales=scales,
-        )
 
-        torch.testing.assert_close(model.w_fourvec_scales, torch.from_numpy(scales))
-        torch.testing.assert_close(model.state_dict()["w_fourvec_scales"], torch.from_numpy(scales))
-
-
-class StandardizedDmetHuberTest(unittest.TestCase):
-    def test_compute_scales_uses_training_dmet_components(self):
-        features = np.zeros((3, 21), dtype=np.float32)
-        targets = np.zeros((3, 10), dtype=np.float32)
-        nu0_t = np.array([[2.0, -1.0], [4.0, -2.0], [6.0, -3.0]], dtype=np.float32)
-        nu1_t = np.array([[-3.0, 5.0], [-6.0, 10.0], [-9.0, 15.0]], dtype=np.float32)
-        expected_dmet = np.array([[1.0, 10.0], [3.0, 30.0], [5.0, 50.0]], dtype=np.float32)
-        features[:, :2] = [[1.0, 2.0], [2.0, 3.0], [3.0, 4.0]]
-        features[:, 4:6] = [[-1.0, 3.0], [-2.0, 4.0], [-3.0, 5.0]]
-        targets[:, :2] = features[:, :2] + nu0_t
-        targets[:, 4:6] = features[:, 4:6] + nu1_t
-        features[:, 16:18] = expected_dmet + nu0_t + nu1_t
-
-        scales = train_module.compute_dmet_scales(features, targets)
-
-        np.testing.assert_allclose(scales, np.std(expected_dmet, axis=0))
-
-    def test_compute_scales_clamps_constant_components(self):
-        features = np.zeros((3, 21), dtype=np.float32)
-        targets = np.zeros((3, 10), dtype=np.float32)
-
-        scales = train_module.compute_dmet_scales(features, targets)
-
-        self.assertTrue(np.all(scales > 0.0))
-
-    def test_loss_standardizes_each_dmet_component(self):
+class DmetHuberTest(unittest.TestCase):
+    def test_loss_uses_raw_dmet_components(self):
         features = torch.zeros((1, 21))
         features[:, :2] = torch.tensor([[1.0, 2.0]])
         features[:, 4:6] = torch.tensor([[-3.0, 4.0]])
@@ -305,55 +240,10 @@ class StandardizedDmetHuberTest(unittest.TestCase):
         targets[:, :2] = torch.tensor([[6.0, 9.0]])
         targets[:, 4:6] = torch.tensor([[8.0, 2.0]])
         prediction = torch.tensor([[6.0, 31.0]])
-        scales = torch.tensor([2.0, 3.0])
+        loss = dmet_loss(features, targets, prediction)
 
-        loss = dmet_loss(features, targets, prediction, scales)
-
-        residual = torch.tensor([[1.0, 2.0]])
-        expected = F.huber_loss(residual, torch.zeros_like(residual))
+        expected = torch.tensor(3.5)
         torch.testing.assert_close(loss, expected)
-
-    def test_model_loss_uses_registered_scales(self):
-        model = LightningWBoson(
-            input_dim=21,
-            d_model=8,
-            num_heads=2,
-            std_mean_train=np.zeros(21, dtype=np.float32),
-            std_scale_train=np.ones(21, dtype=np.float32),
-            dmet_scales=np.array([2.0, 3.0], dtype=np.float32),
-            loss_weights={"huber": 0.0, "dmet": 1.0},
-        )
-        features = torch.zeros((1, 21))
-        features[:, 16:18] = torch.tensor([[4.0, 5.0]])
-        targets = torch.zeros((1, 10))
-        prediction = torch.tensor([[6.0, 11.0]])
-
-        total, losses = model._compute_losses(
-            features,
-            targets,
-            torch.zeros((1, 8)),
-            torch.empty((1, 0)),
-            {"dmet": prediction},
-        )
-
-        residual = torch.tensor([[1.0, 2.0]])
-        expected = F.huber_loss(residual, torch.zeros_like(residual))
-        torch.testing.assert_close(losses["dmet"], expected)
-        torch.testing.assert_close(total, expected)
-
-    def test_scales_are_saved_in_model_state(self):
-        scales = np.array([2.0, 3.0], dtype=np.float32)
-        model = LightningWBoson(
-            input_dim=21,
-            d_model=8,
-            num_heads=2,
-            std_mean_train=np.zeros(21, dtype=np.float32),
-            std_scale_train=np.ones(21, dtype=np.float32),
-            dmet_scales=scales,
-        )
-
-        torch.testing.assert_close(model.dmet_scales, torch.from_numpy(scales))
-        torch.testing.assert_close(model.state_dict()["dmet_scales"], torch.from_numpy(scales))
 
 
 class HiggsMassLossTest(unittest.TestCase):
@@ -364,39 +254,65 @@ class HiggsMassLossTest(unittest.TestCase):
         pred[:, 3] = pred[:, 7] = 0.5 * m_h
         return torch.from_numpy(pred)
 
-    def test_zero_loss_on_target_mass_squared(self):
+    def test_zero_loss_on_target_mass(self):
         pred = self._predictions([125.0])
 
         loss = loss_module.higgs_mass_loss(pred)
 
         torch.testing.assert_close(loss, torch.tensor(0.0))
 
-    def test_near_shell_mass_squared_residual_uses_configured_scale(self):
-        target = 125.0
-        scale = 10.0
-        standardized_residual = 0.5
-        mass2 = target**2 + standardized_residual * 2.0 * target * scale
-        pred = self._predictions([np.sqrt(mass2)])
+    def test_is_quadratic_near_target(self):
+        pred = self._predictions([125.5]).requires_grad_(True)
 
-        loss = loss_module.higgs_mass_loss(pred, target_mass=target, scale=scale)
+        loss = loss_module.higgs_mass_loss(pred)
+        loss.backward()
 
-        torch.testing.assert_close(loss, torch.tensor(standardized_residual))
+        torch.testing.assert_close(loss, torch.tensor(0.125))
+        torch.testing.assert_close(pred.grad[0, [3, 7]], torch.tensor([0.5, 0.5]))
 
-    def test_l1_loss_uses_standardized_residual(self):
-        target = 100.0
-        scale = 5.0
-        residuals = torch.tensor([1.0, 3.0])
-        mass2 = target**2 + residuals * 2.0 * target * scale
-        pred = self._predictions(torch.sqrt(mass2).numpy())
+    def test_large_mass_errors_have_linear_penalties_and_bounded_mass_gradients(self):
+        pred = self._predictions([130.0, 165.0]).requires_grad_(True)
 
-        loss = loss_module.higgs_mass_loss(
-            pred,
-            target_mass=target,
-            scale=scale,
+        loss = loss_module.higgs_mass_loss(pred)
+        loss.backward()
+
+        torch.testing.assert_close(loss, torch.tensor((4.5 + 39.5) / 2.0))
+        # Both rest-frame masses have the same gradient despite different errors.
+        torch.testing.assert_close(pred.grad[:, [3, 7]], torch.full((2, 2), 0.5))
+
+    def test_gradient_pushes_mass_toward_target_from_both_sides(self):
+        pred = self._predictions([120.0, 130.0]).requires_grad_(True)
+
+        loss_module.higgs_mass_loss(pred).backward()
+
+        torch.testing.assert_close(
+            pred.grad[:, [3, 7]], torch.tensor([[-0.5, -0.5], [0.5, 0.5]])
         )
 
-        expected = F.l1_loss(residuals, torch.zeros_like(residuals))
-        torch.testing.assert_close(loss, expected)
+    def test_spacelike_mass_stays_below_target(self):
+        """A spacelike pair must not be folded onto the timelike side."""
+        spacelike = torch.tensor([[0.0, 0.0, 100.0, 1.0, 0.0, 0.0, 100.0, 1.0]])
+        target = 125.0
+
+        loss = loss_module.higgs_mass_loss(spacelike, target_mass=target)
+
+        mass2 = loss_module.invariant_mass2(spacelike[..., :4] + spacelike[..., 4:8])
+        self.assertLess(mass2.item(), 0.0)
+        signed_mass = -np.sqrt(abs(mass2.item()))
+        expected = abs(signed_mass - target) - 0.5
+        torch.testing.assert_close(loss, torch.tensor(expected, dtype=torch.float32))
+
+    def test_mass_floor_bounds_gradient_near_the_light_cone(self):
+        """m^2 -> 0 must not blow d|m|/dm^2 up the way a bare sqrt would."""
+        near_cone = torch.tensor([[0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0, 1.001]])
+        near_cone.requires_grad_(True)
+
+        loss = loss_module.higgs_mass_loss(near_cone)
+        loss.backward()
+
+        mass2 = loss_module.invariant_mass2(near_cone[..., :4] + near_cone[..., 4:8])
+        self.assertLess(abs(mass2.item()), loss_module.H_MASS2_FLOOR)
+        self.assertTrue(torch.isfinite(near_cone.grad).all())
 
     def test_spacelike_sum_has_finite_nonzero_corrective_gradients(self):
         pred = torch.tensor(
@@ -423,39 +339,12 @@ class LightningModelLossTest(unittest.TestCase):
             **kwargs,
         )
 
-    def test_rejects_invalid_higgs_mass_parameters(self):
-        invalid_values = (0.0, -1.0, float("nan"), float("inf"), float("-inf"))
-        for name in ("higgs_mass_target", "higgs_mass_scale", "higgs_mass_delta"):
-            for value in invalid_values:
-                with self.subTest(name=name, value=value):
-                    with self.assertRaisesRegex(ValueError, name):
-                        self._basic_model(**{name: value})
-
-    def test_higgs_mass_parameters_are_routed_to_loss(self):
-        model = self._basic_model(
-            loss_weights={"huber": 0.0, "higgs_mass": 1.0},
-            higgs_mass_target=130.0,
-            higgs_mass_scale=7.5,
-            higgs_mass_delta=1.25,
-        )
-        expected = torch.tensor(3.0)
-
-        with patch("model.model.higgs_mass_loss", return_value=expected) as higgs_loss:
-            total, losses = model._compute_losses(
-                torch.zeros((1, 21)),
-                torch.zeros((1, 10)),
-                torch.zeros((1, 8)),
-                torch.zeros((1, 4)),
-            )
-
-        higgs_loss.assert_called_once_with(
-            unittest.mock.ANY,
-            target_mass=130.0,
-            scale=7.5,
-            delta=1.25,
-        )
-        torch.testing.assert_close(losses["higgs_mass"], expected)
-        torch.testing.assert_close(total, expected)
+    def test_higgs_mass_target_is_fixed(self):
+        unsupported_values = (0.0, 124.0, 126.0, float("nan"), float("inf"))
+        for value in unsupported_values:
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(ValueError, "fixed at 125"):
+                    self._basic_model(higgs_mass_target=value)
 
     def _ramp_model(self, angular_mmd_ramp_epochs=80):
         return LightningWBoson(
@@ -632,7 +521,6 @@ class LightningModelLossTest(unittest.TestCase):
                 torch.zeros((1, 21)),
                 torch.zeros((1, 10)),
                 torch.zeros((1, 8)),
-                torch.zeros((1, 4)),
             )
 
         self.assertIs(losses["alpha_mmd"], raw_values["alpha_mmd"])
@@ -652,52 +540,6 @@ class LightningModelLossTest(unittest.TestCase):
                         std_scale_train=np.ones(21, dtype=np.float32),
                         loss_weights={key: 1.0},
                     )
-
-    def test_all_mmd_losses_use_global_fixed_estimator(self):
-        model = LightningWBoson(
-            input_dim=21,
-            d_model=8,
-            num_heads=2,
-            std_mean_train=np.zeros(21, dtype=np.float32),
-            std_scale_train=np.ones(21, dtype=np.float32),
-            loss_weights={
-                "huber": 0.0,
-                "alpha_mmd": 1.0,
-                "mass_mmd": 1.0,
-                "angular_mmd": 1.0,
-            },
-            attention_blocks=1,
-            attention_dropout=0.0,
-            decoder_dropout=0.0,
-        ).eval()
-        x = torch.zeros(4, 21)
-        x[:, 18:21] = torch.tensor(
-            [
-                [10.0, -1.0, -0.4],
-                [20.0, -0.5, -0.2],
-                [30.0, 0.5, 0.2],
-                [40.0, 1.0, 0.4],
-            ]
-        )
-        w0 = torch.tensor([30.0, 5.0, 40.0, 100.0])
-        w1 = torch.tensor([-20.0, 15.0, -30.0, 90.0])
-        prediction = torch.cat([w0, w1]).repeat(4, 1)
-        target_w = torch.cat([w0 + torch.tensor([1.0, 0.0, 0.0, 0.0]), w1]).repeat(4, 1)
-        target = torch.cat([target_w, torch.zeros(4, 2)], dim=-1)
-        captured = []
-
-        def capture_mmd(pred_features, true_features, **kwargs):
-            captured.append((pred_features.shape[-1], kwargs))
-            return pred_features.sum() * 0.0
-
-        with patch.object(model.model.w_layer, "forward", return_value=prediction) as w_layer:
-            with patch("model.losses.compute_mmd", side_effect=capture_mmd) as mmd:
-                model._compute_batch_losses(x, target)
-
-        self.assertEqual(w_layer.call_count, 1)
-        self.assertEqual(mmd.call_count, 3)
-        self.assertEqual([feature_count for feature_count, _ in captured], [1, 2, 6])
-        self.assertTrue(all(set(kwargs) == {"kernel", "bandwidths"} for _, kwargs in captured))
 
 
 class SharedValidMaskTest(unittest.TestCase):
@@ -737,32 +579,6 @@ class SharedValidMaskTest(unittest.TestCase):
             },
         )
 
-    def _compute_losses_independent_masks(self, model, x, y_true, y_pred):
-        losses = {
-            "alpha_mmd": loss_module.alpha_mmd(x, y_true, y_pred, None, **model._mmd_kwargs("alpha")),
-            "mass_mmd": loss_module.mass_mmd(
-                x,
-                y_true,
-                y_pred,
-                None,
-                model.mass_mmd_center,
-                model.mass_mmd_scale,
-                **model._mmd_kwargs("mass"),
-            ),
-        }
-        return sum(losses.values()), losses
-
-    def test_shared_valid_mask_matches_independent_computation(self):
-        model = self._model()
-        x, y_true, y_pred = self._small_batch_with_invalid_rows()
-
-        total_a, losses_a = model._compute_losses(x, y_true, y_pred, None)
-        total_b, losses_b = self._compute_losses_independent_masks(model, x, y_true, y_pred)
-
-        for name in ("alpha_mmd", "mass_mmd"):
-            assert torch.allclose(losses_a[name], losses_b[name], atol=1e-7)
-        assert torch.allclose(total_a, total_b, atol=1e-7)
-
     def test_valid_mask_is_passed_outside_mmd_kwargs(self):
         model = self._model()
         x, y_true, y_pred = self._small_batch_with_invalid_rows()
@@ -779,31 +595,12 @@ class SharedValidMaskTest(unittest.TestCase):
             patch("model.model.alpha_mmd", side_effect=capture("alpha_mmd")),
             patch("model.model.mass_mmd", side_effect=capture("mass_mmd")),
         ):
-            model._compute_losses(x, y_true, y_pred, None)
+            model._compute_losses(x, y_true, y_pred)
 
         for name in ("alpha_mmd", "mass_mmd"):
             self.assertIn("valid_mask", calls[name])
             self.assertIsInstance(calls[name]["valid_mask"], torch.Tensor)
             self.assertEqual(set(calls[name]) - {"valid_mask"}, {"kernel", "bandwidths"})
-
-    def test_valid_mask_excludes_only_kinematically_invalid_rows(self):
-        model = self._model()
-        x, y_true, y_pred = self._small_batch_with_invalid_rows()
-        captured = {}
-
-        def capture_mmd(pred_features, true_features, **kwargs):
-            captured.setdefault("rows", []).append(pred_features.shape[0])
-            return pred_features.sum() * 0.0
-
-        with (
-            patch.object(model.model.w_layer, "forward", return_value=y_pred),
-            patch("model.losses.compute_mmd", side_effect=capture_mmd),
-        ):
-            model._compute_batch_losses(x, y_true)
-
-        # Rows 0-2 are kinematically invalid and row 3 additionally fails the
-        # alpha-specific mass finiteness check.
-        self.assertEqual(captured["rows"], [2, 3])
 
 
 class NoHighLevelFeaturesTest(unittest.TestCase):
@@ -841,35 +638,6 @@ class NoHighLevelFeaturesTest(unittest.TestCase):
         self.assertEqual(model.model.hl_input_dim, 0)
         self.assertEqual(model.model.num_tokens, 5)
 
-    def test_mmd_losses_run_unconditioned_without_condition_features(self):
-        model = self._make_model(
-            loss_weights={
-                "huber": 0.0,
-                "alpha_mmd": 1.0,
-                "mass_mmd": 1.0,
-                "angular_mmd": 1.0,
-            },
-        ).eval()
-        x = torch.zeros(4, 18)
-        w0 = torch.tensor([30.0, 5.0, 40.0, 100.0])
-        w1 = torch.tensor([-20.0, 15.0, -30.0, 90.0])
-        prediction = torch.cat([w0, w1]).repeat(4, 1)
-        target_w = torch.cat([w0 + torch.tensor([1.0, 0.0, 0.0, 0.0]), w1]).repeat(4, 1)
-        target = torch.cat([target_w, torch.zeros(4, 2)], dim=-1)
-        captured = []
-
-        def capture_mmd(pred_features, true_features, **kwargs):
-            captured.append((pred_features.shape, kwargs))
-            return pred_features.sum() * 0.0
-
-        with patch.object(model.model.w_layer, "forward", return_value=prediction):
-            with patch("model.losses.compute_mmd", side_effect=capture_mmd):
-                total, losses = model._compute_batch_losses(x, target)
-
-        self.assertEqual(len(captured), 3)
-        self.assertTrue(all(set(kwargs) == {"kernel", "bandwidths"} for _, kwargs in captured))
-        self.assertTrue(torch.isfinite(total))
-
     def test_rejects_unsupported_input_width(self):
         with self.assertRaisesRegex(ValueError, "input_dim"):
             LightningWBoson(
@@ -879,218 +647,6 @@ class NoHighLevelFeaturesTest(unittest.TestCase):
                 std_mean_train=np.zeros(20, dtype=np.float32),
                 std_scale_train=np.ones(20, dtype=np.float32),
             )
-
-
-class AlphaMMDTest(unittest.TestCase):
-    def test_matches_visualization_alpha_with_truth_on_shell_ordering(self):
-        x = torch.zeros((2, 21))
-        x[:, 3] = 10.0
-        x[:, 7] = 20.0
-
-        y_true = torch.zeros((2, 10))
-        y_true[0, :4] = torch.tensor([3.0, 0.0, 0.0, 15.0])
-        y_true[0, 4:8] = torch.tensor([0.0, 1.0, 0.0, 22.0])
-        y_true[0, 8:10] = torch.tensor([80.379, 40.0])
-        y_true[1, :4] = torch.tensor([1.0, 0.0, 0.0, 15.0])
-        y_true[1, 4:8] = torch.tensor([0.0, 3.0, 0.0, 22.0])
-        y_true[1, 8:10] = torch.tensor([40.0, 80.379])
-
-        y_pred = torch.zeros((2, 8))
-        y_pred[:, :4] = torch.tensor([1.0, 0.0, 0.0, 15.0])
-        y_pred[:, 4:8] = torch.tensor([0.0, 3.0, 0.0, 22.0])
-        condition = torch.randn(2, 4)
-        captured = {}
-
-        def capture_mmd(pred_features, true_features, **kwargs):
-            captured["pred"] = pred_features
-            captured["true"] = true_features
-            return pred_features.sum() * 0.0
-
-        with patch("model.losses.compute_mmd", side_effect=capture_mmd):
-            loss_module.alpha_mmd(x, y_true, y_pred, condition)
-
-        # Event 0 is slot-0-on, but the larger composite mass uses the
-        # off-shell neutrino. Event 1 is slot-1-on and uses its on-shell one.
-        expected_true = torch.tensor([[-0.5], [0.5]])
-        expected_pred = torch.tensor([[0.5], [0.5]])
-        torch.testing.assert_close(captured["true"], expected_true)
-        torch.testing.assert_close(captured["pred"], expected_pred)
-
-    def test_zero_total_neutrino_momentum_is_excluded(self):
-        x = torch.zeros((2, 21))
-        x[:, 3] = 10.0
-        x[:, 7] = 20.0
-        y_true = torch.cat(
-            [x[:, :8], torch.tensor([[80.379, 40.0], [80.379, 40.0]])],
-            dim=-1,
-        )
-        y_pred = x[:, :8].clone()
-        y_true[1, 0] = 1.0
-        y_pred[1, 0] = 1.0
-        condition = torch.arange(8, dtype=torch.float32).reshape(2, 4)
-        captured = {}
-
-        def capture_mmd(pred_features, true_features, **kwargs):
-            captured["pred"] = pred_features
-            captured["true"] = true_features
-            return pred_features.sum() * 0.0
-
-        with patch("model.losses.compute_mmd", side_effect=capture_mmd):
-            loss_module.alpha_mmd(x, y_true, y_pred, condition)
-
-        self.assertEqual(captured["true"].shape[0], 1)
-        self.assertEqual(captured["pred"].shape[0], 1)
-
-    def test_invalid_composite_mass_squared_is_excluded(self):
-        x = torch.zeros((2, 21))
-        x[:, 3] = 10.0
-        x[:, 7] = 20.0
-        y_true = torch.cat(
-            [x[:, :8], torch.tensor([[80.379, 40.0], [80.379, 40.0]])],
-            dim=-1,
-        )
-        y_pred = x[:, :8].clone()
-        y_true[:, 0] = 1.0
-        y_pred[:, 0] = 1.0
-        y_pred[0, 0] = 100.0
-        condition = torch.arange(8, dtype=torch.float32).reshape(2, 4)
-        captured = {}
-
-        def capture_mmd(pred_features, true_features, **kwargs):
-            captured["rows"] = pred_features.shape[0]
-            return pred_features.sum() * 0.0
-
-        with patch("model.losses.compute_mmd", side_effect=capture_mmd):
-            loss_module.alpha_mmd(x, y_true, y_pred, condition)
-
-        self.assertEqual(captured["rows"], 1)
-
-    def test_positive_sub_epsilon_total_preserves_alpha_ratio(self):
-        tiny = torch.finfo(torch.float32).eps / 16.0
-        x = torch.zeros((1, 21))
-        y_true = torch.zeros((1, 10))
-        y_true[0, 0] = tiny
-        y_true[0, 4] = 3.0 * tiny
-        y_true[0, 3] = 1.0
-        y_true[0, 7] = 1.0
-        captured = {}
-
-        def capture_mmd(pred_features, true_features, **kwargs):
-            captured["true"] = true_features
-            return pred_features.sum() * 0.0
-
-        with patch("model.losses.compute_mmd", side_effect=capture_mmd):
-            loss_module.alpha_mmd(x, y_true, y_true[:, :8], torch.zeros((1, 4)))
-
-        torch.testing.assert_close(captured["true"][:, 0], torch.tensor([-0.5]))
-
-    def test_nonfinite_condition_does_not_filter_global_mmd_rows(self):
-        x = torch.zeros((3, 21))
-        x[:, 3] = 10.0
-        x[:, 7] = 20.0
-        y_true = torch.cat(
-            [x[:, :8].clone(), torch.tensor([[80.379, 40.0]]).repeat(3, 1)],
-            dim=-1,
-        )
-        y_true[:, 0] = 1.0
-        y_pred = y_true[:, :8].clone()
-        y_pred[1, 0] = float("nan")
-        condition = torch.arange(12, dtype=torch.float32).reshape(3, 4)
-        condition[2, 0] = float("nan")
-        captured = {}
-
-        def capture_mmd(pred_features, true_features, **kwargs):
-            captured["rows"] = pred_features.shape[0]
-            return pred_features.sum() * 0.0
-
-        with patch("model.losses.compute_mmd", side_effect=capture_mmd):
-            loss_module.alpha_mmd(x, y_true, y_pred, condition)
-
-        self.assertEqual(captured["rows"], 2)
-
-    def test_valid_and_exact_zero_totals_have_finite_gradients(self):
-        x = torch.zeros((2, 21))
-        y_true = torch.zeros((2, 10))
-        y_pred = torch.zeros((2, 8))
-        y_pred[0, 0] = 1.0
-        y_pred[0, 4] = 3.0
-        y_pred.requires_grad_()
-
-        with patch("model.losses.compute_mmd", side_effect=lambda pred, true, **kwargs: pred.sum()):
-            loss = loss_module.alpha_mmd(x, y_true, y_pred, torch.zeros((2, 4)))
-        loss.backward()
-
-        self.assertTrue(torch.isfinite(y_pred.grad).all())
-
-    def test_all_nonfinite_rows_return_differentiable_zero(self):
-        y_pred = torch.full((2, 8), float("nan"), requires_grad=True)
-
-        loss = loss_module.alpha_mmd(
-            torch.zeros((2, 21)),
-            torch.zeros((2, 10)),
-            y_pred,
-            torch.zeros((2, 4)),
-        )
-
-        torch.testing.assert_close(loss, torch.tensor(0.0))
-        loss.backward()
-        self.assertTrue(torch.isfinite(y_pred.grad).all())
-
-
-class MassMMDTest(unittest.TestCase):
-    def test_uses_charge_ordered_asinh_mass2_with_shared_training_scale(self):
-        x = torch.zeros((1, 21))
-        y_true = torch.tensor([[0.0, 0.0, 0.0, 80.4, 0.0, 0.0, 0.0, 40.2, 80.4, 40.2]])
-        y_pred = torch.tensor([[0.0, 0.0, 0.0, 40.2, 0.0, 0.0, 0.0, 80.4]])
-        captured = {}
-
-        def capture_mmd(pred_features, true_features, **kwargs):
-            captured["pred"] = pred_features
-            captured["true"] = true_features
-            return pred_features.sum() * 0.0
-
-        center = torch.tensor(0.2)
-        scale = torch.tensor(0.5)
-        with patch("model.losses.compute_mmd", side_effect=capture_mmd):
-            loss_module.mass_mmd(
-                x,
-                y_true,
-                y_pred,
-                torch.zeros((1, 4)),
-                center,
-                scale,
-            )
-
-        expected_true = (torch.asinh(torch.tensor([[1.0, 0.25]])) - center) / scale
-        expected_pred = (torch.asinh(torch.tensor([[0.25, 1.0]])) - center) / scale
-        torch.testing.assert_close(captured["true"], expected_true)
-        torch.testing.assert_close(captured["pred"], expected_pred)
-
-    def test_training_standardization_pools_both_mass_slots(self):
-        targets = np.zeros((2, 10), dtype=np.float32)
-        targets[:, 8:10] = np.array([[20.0, 40.0], [60.0, 80.0]], dtype=np.float32)
-
-        center, scale = compute_mass_mmd_standardization(targets)
-
-        transformed = np.arcsinh((targets[:, 8:10].reshape(-1) / loss_module.W_MASS_SCALE) ** 2)
-        expected_center = np.median(transformed)
-        q25, q75 = np.percentile(transformed, [25.0, 75.0])
-        np.testing.assert_allclose(center, expected_center)
-        np.testing.assert_allclose(scale, (q75 - q25) / 1.349)
-
-    def test_standardization_is_saved_in_model_state(self):
-        model = LightningWBoson(
-            input_dim=21,
-            d_model=8,
-            num_heads=2,
-            std_mean_train=np.zeros(21, dtype=np.float32),
-            std_scale_train=np.ones(21, dtype=np.float32),
-            mass_mmd_center=0.25,
-            mass_mmd_scale=0.75,
-        )
-
-        torch.testing.assert_close(model.state_dict()["mass_mmd_center"], torch.tensor(0.25))
-        torch.testing.assert_close(model.state_dict()["mass_mmd_scale"], torch.tensor(0.75))
 
 
 class AngularMMDTest(unittest.TestCase):
@@ -1104,90 +660,6 @@ class AngularMMDTest(unittest.TestCase):
         expected = torch.tensor([[-1.0, -1.0, 0.0, 1.0, 0.0, -1.0]])
         torch.testing.assert_close(features, expected, atol=1.0e-6, rtol=0.0)
 
-    def test_encodes_phi_as_sine_cosine_pairs(self):
-        true_booster = Mock()
-        pred_booster = Mock()
-        true_angles = (
-            torch.tensor([0.0, torch.pi]),
-            torch.tensor([-torch.pi / 2.0, torch.pi]),
-            torch.tensor([torch.pi / 2.0, torch.pi / 4.0]),
-            torch.tensor([0.0, -torch.pi / 2.0]),
-        )
-        pred_angles = (
-            torch.tensor([torch.pi / 4.0, torch.pi / 2.0]),
-            torch.tensor([torch.pi / 2.0, -torch.pi]),
-            torch.tensor([torch.pi, 0.0]),
-            torch.tensor([torch.pi / 2.0, 0.0]),
-        )
-        true_booster.lep_theta_phi_with_validity.return_value = (
-            torch.tensor([True, True]),
-            torch.stack(true_angles, dim=-1),
-        )
-        pred_booster.lep_theta_phi_with_validity.return_value = (
-            torch.tensor([True, True]),
-            torch.stack(pred_angles, dim=-1),
-        )
-        captured = {}
-
-        def capture_mmd(pred_features, true_features, **kwargs):
-            captured["pred"] = pred_features
-            captured["true"] = true_features
-            return pred_features.sum() * 0.0
-
-        with patch("model.losses.Booster", side_effect=[true_booster, pred_booster]):
-            with patch("model.losses.compute_mmd", side_effect=capture_mmd):
-                loss_module.angular_mmd(
-                    torch.zeros((2, 21)),
-                    torch.zeros((2, 10)),
-                    torch.zeros((2, 8)),
-                    torch.zeros((2, 4)),
-                )
-
-        expected_true = torch.tensor(
-            [
-                [-1.0, -1.0, 0.0, 0.0, 0.0, 1.0],
-                [1.0, 0.0, -1.0, -0.5, -1.0, 0.0],
-            ]
-        )
-        expected_pred = torch.tensor(
-            [
-                [-0.5, 1.0, 0.0, 1.0, 1.0, 0.0],
-                [0.0, 0.0, -1.0, -1.0, 0.0, 1.0],
-            ]
-        )
-        torch.testing.assert_close(captured["true"], expected_true, atol=1.0e-6, rtol=0.0)
-        torch.testing.assert_close(captured["pred"], expected_pred, atol=1.0e-6, rtol=0.0)
-
-    def test_uses_common_truth_prediction_validity_mask(self):
-        true_booster = Mock()
-        pred_booster = Mock()
-        angles = tuple(torch.arange(3, dtype=torch.float32) for _ in range(4))
-        true_booster.lep_theta_phi_with_validity.return_value = (
-            torch.tensor([True, True, False]),
-            torch.stack(angles, dim=-1),
-        )
-        pred_booster.lep_theta_phi_with_validity.return_value = (
-            torch.tensor([True, False, True]),
-            torch.stack(angles, dim=-1),
-        )
-        condition = torch.arange(12, dtype=torch.float32).reshape(3, 4)
-        captured = {}
-
-        def capture_mmd(pred_features, true_features, **kwargs):
-            captured["rows"] = pred_features.shape[0]
-            return pred_features.sum() * 0.0
-
-        with patch("model.losses.Booster", side_effect=[true_booster, pred_booster]):
-            with patch("model.losses.compute_mmd", side_effect=capture_mmd):
-                loss_module.angular_mmd(
-                    torch.zeros((3, 21)),
-                    torch.zeros((3, 10)),
-                    torch.zeros((3, 8)),
-                    condition,
-                )
-
-        self.assertEqual(captured["rows"], 1)
-
 
 class WMassHuberTest(unittest.TestCase):
     def test_compares_normalized_predicted_mass_squared_to_target_masses(self):
@@ -1197,9 +669,8 @@ class WMassHuberTest(unittest.TestCase):
 
         loss = loss_module.w_mass_huber_loss(y_true, y_pred)
 
-        expected_pred = torch.tensor([[1.0, 0.25]])
-        expected_true = torch.tensor([[0.25, 1.0]])
-        torch.testing.assert_close(loss, F.huber_loss(expected_pred, expected_true))
+        expected = torch.tensor(0.5 * 0.75**2)
+        torch.testing.assert_close(loss, expected)
 
 
 class GradientCosineLoggingTest(unittest.TestCase):

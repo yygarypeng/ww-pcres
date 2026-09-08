@@ -24,6 +24,74 @@ from scripts.evaluate_mmd_bandwidths import (
 
 
 class BandwidthEvaluationTest(unittest.TestCase):
+    def test_batch_features_do_not_require_removed_condition_output(self):
+        class Model:
+            def __call__(self, features, return_aux=False):
+                assert not return_aux
+                return torch.zeros((len(features), 8))
+
+            def _mmd_kwargs(self, _name):
+                return {"kernel": "imq", "bandwidths": [1.0]}
+
+        def capture(_loss_fn, *args, **_kwargs):
+            return args
+
+        with patch.object(mmd_script, "_capture_mmd_inputs", side_effect=capture):
+            captured = mmd_script._batch_feature_inputs(
+                Model(), torch.zeros((2, 21)), torch.zeros((2, 10))
+            )
+
+        self.assertEqual(len(captured["alpha"]), 3)
+        self.assertEqual(len(captured["mass"]), 3)
+        self.assertEqual(len(captured["angular"]), 3)
+
+    def test_checkpoint_evaluation_applies_captured_valid_mask(self):
+        class Model:
+            mmd_config = {
+                name: {"kernel": "imq", "bandwidths": [1.0]}
+                for name in ("alpha", "mass", "angular")
+            }
+
+            def eval(self):
+                return self
+
+            def to(self, _device):
+                return self
+
+        prediction = torch.tensor([[0.0], [1.0]])
+        truth = torch.tensor([[0.0], [2.0]])
+        captured_features = {
+            name: (
+                prediction,
+                truth,
+                {"kernel": "imq", "bandwidths": [1.0], "valid_mask": torch.tensor([True, False])},
+            )
+            for name in ("alpha", "mass", "angular")
+        }
+        row_counts = []
+
+        def diagnostics(prediction, truth, *, kernel, bandwidths):
+            del truth, kernel, bandwidths
+            row_counts.append(len(prediction))
+            zero = prediction.new_zeros(())
+            return [(zero, zero, zero, prediction.numel())]
+
+        checkpoint = CheckpointInfo(Path("model.ckpt"), epoch=1, global_step=2)
+        with (
+            patch.object(mmd_script.LightningWBoson, "load_from_checkpoint", return_value=Model()),
+            patch.object(mmd_script, "_batch_feature_inputs", return_value=captured_features),
+            patch.object(mmd_script, "per_bandwidth_mmd_diagnostics", side_effect=diagnostics),
+        ):
+            mmd_script.evaluate_checkpoint(
+                checkpoint,
+                np.zeros((2, 21)),
+                np.zeros((2, 10)),
+                batch_size=2,
+                device=torch.device("cpu"),
+            )
+
+        self.assertEqual(row_counts, [1, 1, 1])
+
     def test_capture_returns_none_when_loss_has_no_valid_feature_rows(self):
         def zero_without_mmd_call(prediction):
             return prediction.sum() * 0.0
