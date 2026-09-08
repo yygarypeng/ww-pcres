@@ -28,14 +28,12 @@ QUANTILES = {
 }
 
 
-def higgs_batch_metrics(predictions, *, target_mass, scale, delta, weight):
+def higgs_batch_metrics(predictions, *, target_mass, weight):
     predictions = predictions.detach().requires_grad_(True)
     with torch.enable_grad():
         raw_loss = higgs_mass_loss(
             predictions,
             target_mass=target_mass,
-            scale=scale,
-            delta=delta,
         )
         gradient = torch.autograd.grad(raw_loss, predictions)[0] * predictions.shape[0]
 
@@ -128,8 +126,6 @@ def evaluate_checkpoint(checkpoint, features, batch_size, device):
                 higgs_batch_metrics(
                     predictions,
                     target_mass=model.higgs_mass_target,
-                    scale=model.higgs_mass_scale,
-                    delta=model.higgs_mass_delta,
                     weight=weight,
                 )
             )

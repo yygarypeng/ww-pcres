@@ -21,7 +21,6 @@ from data import compute_neural_input_stats
 from data import load_data as data
 from data.data_module import WBosonDataModule
 from model import LightningWBoson
-from model.losses import W_MASS_SCALE
 
 
 def resolve_repo_path(raw_path):
@@ -80,35 +79,6 @@ def prime_csv_metric_header(csv_logger, model):
     writer.metrics_keys = sorted(existing_keys | metric_keys)
 
 
-def compute_w_fourvec_scales(targets):
-    w_fourvecs = targets[:, :8].reshape(-1, 4)
-    scales = np.std(w_fourvecs, axis=0)
-    return np.maximum(scales, np.finfo(np.float32).eps).astype(np.float32)
-
-
-def compute_dmet_scales(features, targets):
-    true_nu0_t = targets[:, :2] - features[:, :2]
-    true_nu1_t = targets[:, 4:6] - features[:, 4:6]
-    true_dmet = features[:, 16:18] - true_nu0_t - true_nu1_t
-    scales = np.std(true_dmet, axis=0)
-    return np.maximum(scales, np.finfo(np.float32).eps).astype(np.float32)
-
-
-def compute_mass_mmd_standardization(targets):
-    """Fit one robust scale shared by both charge-ordered W-mass slots."""
-    masses = np.asarray(targets[:, 8:10], dtype=np.float64)
-    transformed = np.arcsinh((masses / W_MASS_SCALE) ** 2).reshape(-1)
-    transformed = transformed[np.isfinite(transformed)]
-    if transformed.size == 0:
-        raise ValueError("cannot fit mass MMD standardization without finite training masses")
-
-    center = np.median(transformed)
-    q25, q75 = np.percentile(transformed, [25.0, 75.0])
-    scale = (q75 - q25) / 1.349
-    scale = max(scale, np.finfo(np.float32).eps)
-    return np.float32(center), np.float32(scale)
-
-
 def build_datamodule(cfg, data_path):
     params = cfg["parameters"]
     splits = data.load_presplit_data(
@@ -133,17 +103,7 @@ def build_datamodule(cfg, data_path):
     )
     dm.setup()
     standardization = compute_neural_input_stats(X_train)
-    w_fourvec_scales = compute_w_fourvec_scales(Y_train)
-    mass_mmd_standardization = compute_mass_mmd_standardization(Y_train)
-    dmet_scales = compute_dmet_scales(X_train, Y_train)
-    return (
-        dm,
-        X_train.shape[1],
-        standardization,
-        w_fourvec_scales,
-        mass_mmd_standardization,
-        dmet_scales,
-    )
+    return dm, X_train.shape[1], standardization
 
 
 def create_loggers(cfg, model, saved_path, use_wandb):
@@ -204,25 +164,17 @@ def run_training(
     dm,
     input_dim,
     standardization,
-    w_fourvec_scales,
-    mass_mmd_standardization,
-    dmet_scales,
     saved_path,
     use_wandb,
 ):
     params = cfg["parameters"]
     std_mean_train, std_scale_train = standardization
-    mass_mmd_center, mass_mmd_scale = mass_mmd_standardization
     print("Starting training...")
     print(f"Input dimension: {input_dim}")
     model = LightningWBoson(
         input_dim=input_dim,
         std_mean_train=std_mean_train,
         std_scale_train=std_scale_train,
-        w_fourvec_scales=w_fourvec_scales,
-        mass_mmd_center=mass_mmd_center,
-        mass_mmd_scale=mass_mmd_scale,
-        dmet_scales=dmet_scales,
         lr=params["learning_rate"],
         weight_decay=params.get("weight_decay", 1e-4),
         loss_weights=params["loss_weights"],
@@ -230,9 +182,6 @@ def run_training(
         angular_mmd_ramp_epochs=params.get("angular_mmd_ramp_epochs", 0),
         adaptive_loss_weights=params.get("adaptive_loss_weights", False),
         log_loss_gradient_cosines=params.get("log_loss_gradient_cosines", False),
-        higgs_mass_target=params.get("higgs_mass_target", 125.0),
-        higgs_mass_scale=params.get("higgs_mass_scale", 10.0),
-        higgs_mass_delta=params.get("higgs_mass_delta", 2.0),
         d_model=params["d_model"],
         num_heads=params["n_heads"],
         attention_blocks=params.get("attention_blocks", 4),
@@ -322,14 +271,7 @@ def main(train=True, arg=None, config_path=DEFAULT_CONFIG):
     torch.set_float32_matmul_precision("medium")
 
     data_path = resolve_repo_path(cfg["paths"]["data_path"])
-    (
-        dm,
-        input_dim,
-        standardization,
-        w_fourvec_scales,
-        mass_mmd_standardization,
-        dmet_scales,
-    ) = build_datamodule(cfg, data_path)
+    dm, input_dim, standardization = build_datamodule(cfg, data_path)
     if not train:
         print("Evaluation mode, returning datamodule...")
         return dm
@@ -340,9 +282,6 @@ def main(train=True, arg=None, config_path=DEFAULT_CONFIG):
         dm,
         input_dim,
         standardization,
-        w_fourvec_scales,
-        mass_mmd_standardization,
-        dmet_scales,
         saved_path,
         arg.wandb if arg is not None else False,
     )

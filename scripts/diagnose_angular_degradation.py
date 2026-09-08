@@ -543,12 +543,12 @@ def gradient_diagnostic_rows(model, features, targets, gradient_indices, *, epoc
     features = features[indices]
     targets = targets[indices]
     prediction, auxiliary = model(features, return_aux=True)
-    _, losses = model._compute_losses(features, targets, prediction, auxiliary["cond"], auxiliary)
-    residual = (prediction - targets[:, :8]).reshape(len(prediction), 2, 4)
-    residual = residual / model.w_fourvec_scales
+    _, losses = model._compute_losses(features, targets, prediction, auxiliary)
+    pred_slots = prediction.reshape(len(prediction), 2, 4)
+    true_slots = targets[:, :8].reshape(len(prediction), 2, 4)
     references = {
-        "huber_wplus": F.huber_loss(residual[:, 0], torch.zeros_like(residual[:, 0])),
-        "huber_wminus": F.huber_loss(residual[:, 1], torch.zeros_like(residual[:, 1])),
+        "huber_wplus": F.huber_loss(pred_slots[:, 0], true_slots[:, 0]),
+        "huber_wminus": F.huber_loss(pred_slots[:, 1], true_slots[:, 1]),
     }
     weights = model._effective_loss_weights()
     parameters = tuple(parameter for parameter in model.parameters() if parameter.requires_grad)
@@ -598,14 +598,13 @@ def _angular_features(inputs, w_fourvectors):
     return encoded, valid
 
 
-def _slot_huber(prediction, truth, scales, slot):
+def _slot_huber(prediction, truth, slot):
     prediction = prediction[:, slot]
     truth = truth[:, slot]
     valid = torch.isfinite(prediction).all(dim=1) & torch.isfinite(truth).all(dim=1)
     if not valid.any():
         raise ValueError("checkpoint has no finite W four-vector predictions")
-    residual = (prediction[valid] - truth[valid]) / scales
-    return float(F.huber_loss(residual, torch.zeros_like(residual)))
+    return float(F.huber_loss(prediction[valid], truth[valid]))
 
 
 def _checkpoint_learning_rate(path):
@@ -631,7 +630,6 @@ def evaluate_checkpoint(
     targets = tensor_batch(targets, device)
     partitions = manifest_partition_positions(manifest)
     predictions = []
-    conditions = []
     totals = []
     with torch.no_grad():
         for partition in partitions:
@@ -642,14 +640,11 @@ def evaluate_checkpoint(
                 batch_features,
                 batch_targets,
                 prediction,
-                auxiliary["cond"],
                 auxiliary,
             )
             predictions.append(prediction)
-            conditions.append(auxiliary["cond"])
             totals.append(float(total))
     prediction = torch.cat(predictions)
-    condition = torch.cat(conditions)
     truth_angles, truth_valid = _angular_angles(features, targets[:, :8])
     pred_angles, pred_valid = _angular_angles(features, prediction)
     truth_angular = features.new_full((len(features), 6), torch.nan)
@@ -663,7 +658,6 @@ def evaluate_checkpoint(
         truth_valid,
         feature_bandwidths=manifest["feature_bandwidths"],
         partitions=partitions,
-        condition=condition,
         raw_mmd_kwargs=legacy_raw_mmd_kwargs(model),
         block_size=block_size,
     )
@@ -680,10 +674,8 @@ def evaluate_checkpoint(
         "epoch": checkpoint.epoch,
         "val_loss": float(np.mean(totals)),
         **angular_metrics,
-        "huber_wplus": _slot_huber(prediction, targets[:, :8], model.w_fourvec_scales, slice(0, 4)),
-        "huber_wminus": _slot_huber(
-            prediction, targets[:, :8], model.w_fourvec_scales, slice(4, 8)
-        ),
+        "huber_wplus": _slot_huber(prediction, targets[:, :8], slice(0, 4)),
+        "huber_wminus": _slot_huber(prediction, targets[:, :8], slice(4, 8)),
         "learning_rate": _checkpoint_learning_rate(checkpoint.path),
     }
 

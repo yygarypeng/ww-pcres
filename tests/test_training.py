@@ -16,15 +16,12 @@ from train.train import (
 
 
 class TrainingTest(unittest.TestCase):
-    def test_run_training_routes_higgs_mass_parameters(self):
+    def test_run_training_uses_fixed_higgs_mass_target(self):
         params = {
             "batch_size": 2,
             "epochs": 1,
             "learning_rate": 1.0e-4,
             "loss_weights": {"higgs_mass": 3.0},
-            "higgs_mass_target": 126.0,
-            "higgs_mass_scale": 9.0,
-            "higgs_mass_delta": 1.5,
             "d_model": 8,
             "n_heads": 2,
         }
@@ -47,16 +44,13 @@ class TrainingTest(unittest.TestCase):
                 datamodule,
                 21,
                 (np.zeros(21), np.ones(21)),
-                np.ones(3),
-                (0.0, 1.0),
-                np.ones(2),
                 "unused-output",
                 False,
             )
 
-        self.assertEqual(model_class.call_args.kwargs["higgs_mass_target"], 126.0)
-        self.assertEqual(model_class.call_args.kwargs["higgs_mass_scale"], 9.0)
-        self.assertEqual(model_class.call_args.kwargs["higgs_mass_delta"], 1.5)
+        self.assertNotIn("higgs_mass_target", model_class.call_args.kwargs)
+        self.assertNotIn("higgs_mass_scale", model_class.call_args.kwargs)
+        self.assertNotIn("higgs_mass_delta", model_class.call_args.kwargs)
         trainer_class.return_value.fit.assert_called_once_with(
             model_class.return_value, datamodule=datamodule
         )
@@ -90,9 +84,6 @@ class TrainingTest(unittest.TestCase):
                 datamodule,
                 21,
                 (np.zeros(21), np.ones(21)),
-                np.ones(3),
-                (0.0, 1.0),
-                np.ones(2),
                 "unused-output",
                 False,
             )
@@ -132,9 +123,6 @@ class TrainingTest(unittest.TestCase):
                 datamodule,
                 21,
                 (np.zeros(21), np.ones(21)),
-                np.ones(3),
-                (0.0, 1.0),
-                np.ones(2),
                 "unused-output",
                 False,
             )
@@ -229,57 +217,7 @@ class DeferredEarlyStoppingTest(unittest.TestCase):
         self.assertTrue(overridden[0].save_last)
 
 
-class TrainingScaleTest(unittest.TestCase):
-    def test_mass_mmd_standardization_uses_training_truth_only(self):
-        targets = np.zeros((3, 10), dtype=np.float32)
-        targets[:, 8:10] = np.array(
-            [[20.0, 30.0], [40.0, 50.0], [60.0, 70.0]],
-            dtype=np.float32,
-        )
-
-        center, scale = train_module.compute_mass_mmd_standardization(targets)
-
-        transformed = np.arcsinh((targets[:, 8:10].reshape(-1) / 80.4) ** 2)
-        expected_center = np.median(transformed)
-        q25, q75 = np.percentile(transformed, [25.0, 75.0])
-        np.testing.assert_allclose(center, expected_center)
-        np.testing.assert_allclose(scale, (q75 - q25) / 1.349)
-
-    def test_build_datamodule_computes_dmet_scales_from_training_split(self):
-        x_train = np.zeros((3, 21), dtype=np.float32)
-        y_train = np.zeros((3, 10), dtype=np.float32)
-        x_val = np.ones((2, 21), dtype=np.float32)
-        y_val = np.ones((2, 10), dtype=np.float32)
-        x_test = np.full((2, 21), 2.0, dtype=np.float32)
-        y_test = np.full((2, 10), 2.0, dtype=np.float32)
-        expected_scales = np.array([2.0, 3.0], dtype=np.float32)
-        cfg = {"parameters": {"batch_size": 2}, "data": {}}
-
-        with (
-            unittest.mock.patch.object(
-                train_module.data,
-                "load_presplit_data",
-                return_value=(x_train, y_train, x_val, y_val, x_test, y_test),
-            ),
-            unittest.mock.patch.object(train_module, "WBosonDataModule") as datamodule,
-            unittest.mock.patch.object(
-                train_module,
-                "compute_neural_input_stats",
-                return_value=(np.zeros(21), np.ones(21)),
-            ),
-            unittest.mock.patch.object(
-                train_module,
-                "compute_dmet_scales",
-                return_value=expected_scales,
-            ) as compute_dmet_scales,
-        ):
-            result = train_module.build_datamodule(cfg, "unused.h5")
-
-        datamodule.return_value.setup.assert_called_once_with()
-        np.testing.assert_array_equal(compute_dmet_scales.call_args.args[0], x_train)
-        np.testing.assert_array_equal(compute_dmet_scales.call_args.args[1], y_train)
-        np.testing.assert_array_equal(result[-1], expected_scales)
-
+class TrainingInputStatsTest(unittest.TestCase):
     def test_build_datamodule_keeps_raw_inputs_and_fits_neural_stats_on_train_only(self):
         x_train = np.full((3, 21), 1.0, dtype=np.float32)
         y_train = np.zeros((3, 10), dtype=np.float32)
@@ -306,6 +244,7 @@ class TrainingScaleTest(unittest.TestCase):
             result = train_module.build_datamodule(cfg, "unused.h5")
 
         datamodule.assert_called_once()
+        self.assertEqual(len(result), 3)
         self.assertEqual(result[1], 21)
         self.assertEqual(result[2][0].shape, (21,))
         self.assertEqual(result[2][1].shape, (21,))

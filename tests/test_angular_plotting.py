@@ -10,6 +10,7 @@ matplotlib.use("Agg")
 import numpy as np
 import pytest
 from matplotlib import pyplot as plt
+from matplotlib.collections import LineCollection, PolyCollection
 from matplotlib.colors import LogNorm
 
 from notebooks import plottingtool
@@ -39,9 +40,77 @@ def _atlas_label_count(fig):
     return sum("Internal Simulation" in text.get_text() for text in texts)
 
 
+def _assert_ratio_rendering(ax, ratio_label):
+    ratio_points = next(line for line in ax.lines if line.get_label() == ratio_label)
+    np.testing.assert_allclose(ratio_points.get_xdata(), [0.5])
+    np.testing.assert_allclose(ratio_points.get_ydata(), [1.0])
+
+    error_bars = next(
+        collection for collection in ax.collections if isinstance(collection, LineCollection)
+    )
+    np.testing.assert_allclose(
+        error_bars.get_segments()[0],
+        [[0.5, 1.0 - np.sqrt(0.5)], [0.5, 1.0 + np.sqrt(0.5)]],
+    )
+
+    truth_band = next(
+        collection for collection in ax.collections if isinstance(collection, PolyCollection)
+    )
+    band_y = truth_band.get_paths()[0].vertices[:, 1]
+    assert np.isclose(band_y, 0.0).any()
+    assert np.isclose(band_y, 2.0).any()
+
+    arrows = sorted((annotation.xy, annotation.get_position()) for annotation in ax.texts)
+    assert arrows == [((1.5, 1.5), (1.5, 1.35)), ((2.5, 0.5), (2.5, 0.65))]
+    assert ax.get_ylim() == pytest.approx((0.5, 1.5))
+    assert ax.get_ylabel() == ratio_label
+
+
+def test_plot_1d_hist_renders_uncertainties_overflows_and_omits_zero_counts():
+    pred = np.repeat(np.arange(5) + 0.5, [4, 4, 1, 0, 2])
+    truth = np.repeat(np.arange(5) + 0.5, [4, 1, 4, 3, 0])
+    figures_before = set(plt.get_fignums())
+
+    try:
+        plot_1d_hist(
+            pred,
+            truth,
+            "x",
+            bins_edges=np.arange(6),
+            ratio_ylim=(0.5, 1.5),
+            ratio_text="Model/Data",
+        )
+
+        _assert_ratio_rendering(plt.gcf().axes[1], "Model/Data")
+    finally:
+        for figure_number in set(plt.get_fignums()) - figures_before:
+            plt.close(figure_number)
+
+
+def test_plot_1d_hist_truth_band_spans_isolated_bin_edges():
+    samples = np.repeat(1.5, 4)
+    figures_before = set(plt.get_fignums())
+
+    try:
+        plot_1d_hist(samples, samples, "x", bins_edges=np.arange(4))
+
+        ratio_ax = plt.gcf().axes[1]
+        truth_band = next(
+            collection
+            for collection in ratio_ax.collections
+            if isinstance(collection, PolyCollection)
+        )
+        band_x = truth_band.get_paths()[0].vertices[:, 0]
+        assert band_x.min() == pytest.approx(1.0)
+        assert band_x.max() == pytest.approx(2.0)
+    finally:
+        for figure_number in set(plt.get_fignums()) - figures_before:
+            plt.close(figure_number)
+
+
 def test_plot_1d_histogram_call_computes_each_array_once(monkeypatch):
-    pred = np.array([0.25, 0.75, 1.25])
-    truth = np.array([0.25, 1.25, 1.75])
+    pred = np.array([0.25, np.nan, 1.25, 1.75])
+    truth = np.array([0.25, 0.75, np.inf, 1.75])
     bins = np.array([0.0, 1.0, 2.0])
 
     class NumpySpy:
@@ -57,6 +126,7 @@ def test_plot_1d_histogram_call_computes_each_array_once(monkeypatch):
     try:
         plot_1d_hist(pred, truth, "x", bins_edges=bins)
 
+        assert plt.gcf().axes[0].get_title(loc="right") == "x  EMD = 0.17"
         assert numpy_spy.histogram.call_count == 2
         pred_call, truth_call = numpy_spy.histogram.call_args_list
         np.testing.assert_array_equal(pred_call.args[0], pred)
@@ -80,14 +150,12 @@ def test_plot_angular_1d_grid_returns_histogram_and_raw_ratio_axes():
         assert hist_axes[0, 0].get_shared_y_axes().joined(hist_axes[0, 0], hist_axes[1, 1])
         assert not ratio_axes[0, 0].get_shared_y_axes().joined(ratio_axes[0, 0], hist_axes[0, 0])
 
-        ratio_line = next(
-            line for line in ratio_axes[0, 0].lines if line.get_label() == "Pred/True"
-        )
-        np.testing.assert_allclose(ratio_line.get_xdata(), [0.5, 1.5])
-        np.testing.assert_allclose(ratio_line.get_ydata(), [2.0, 0.5])
-        assert np.isfinite(ratio_line.get_ydata()).all()
+        ratio_line = next(line for line in ratio_axes[0, 0].lines if line.get_label() == "Pred/True")
+        np.testing.assert_allclose(ratio_line.get_xdata(), [1.5])
+        np.testing.assert_allclose(ratio_line.get_ydata(), [0.5])
         assert ratio_axes[0, 0].get_ylim() == pytest.approx((0.5, 1.5))
         assert not any(label.get_visible() for label in hist_axes[0, 0].get_xticklabels())
+        assert hist_axes[0, 0].get_title() == "angle 0  EMD = 0.21"
         np.testing.assert_allclose(fig.get_size_inches(), [10, 10])
         fig.canvas.draw()
         assert all(
@@ -97,6 +165,79 @@ def test_plot_angular_1d_grid_returns_histogram_and_raw_ratio_axes():
         assert _atlas_label_count(fig) == 0
     finally:
         plt.close(fig)
+
+
+def test_angular_1d_grid_separates_axis_labels_and_header_legend():
+    fig, (hist_axes, ratio_axes) = plot_angular_1d_grid(
+        _observables(), "Angular distributions"
+    )
+
+    try:
+        assert [ax.get_ylabel() for ax in hist_axes[:, 0]] == ["Events", "Events"]
+        assert [ax.get_ylabel() for ax in hist_axes[:, 1]] == ["", ""]
+        assert [ax.get_ylabel() for ax in ratio_axes[:, 0]] == ["Pred/True", "Pred/True"]
+        assert [ax.get_ylabel() for ax in ratio_axes[:, 1]] == ["", ""]
+        assert all(ax.yaxis.label.get_fontsize() == 12 for ax in hist_axes[:, 0])
+        assert all(ax.yaxis.label.get_fontsize() == 12 for ax in ratio_axes[:, 0])
+        assert fig._supylabel is None
+
+        legend = fig.legends[0]
+        assert legend._ncols == 2
+        fig.canvas.draw()
+        renderer = fig.canvas.get_renderer()
+        legend_bounds = legend.get_window_extent(renderer)
+        title_bounds = fig._suptitle.get_window_extent(renderer)
+        panel_title_bounds = [
+            ax.title.get_window_extent(renderer) for ax in hist_axes[0]
+        ]
+        assert legend_bounds.x0 + legend_bounds.width / 2 == pytest.approx(
+            fig.bbox.width / 2, abs=2
+        )
+        assert legend_bounds.y1 < title_bounds.y0
+        assert all(bounds.y1 < legend_bounds.y0 for bounds in panel_title_bounds)
+    finally:
+        plt.close(fig)
+
+
+def test_angular_ratio_panels_share_full_histogram_ratio_rendering():
+    observable = {
+        "pred": np.append(np.repeat(np.arange(5) + 0.5, [4, 4, 1, 0, 2]), 6.5) * np.pi,
+        "truth": np.repeat(np.arange(5) + 0.5, [4, 1, 4, 3, 0]) * np.pi,
+        "label": "angle",
+        "bins": np.arange(6),
+        "log": False,
+        "vmax": 10,
+    }
+    fig, (_, ratio_axes) = plot_angular_1d_grid(
+        [observable] * 4,
+        "Angular distributions",
+        pred_label="Model",
+        truth_label="Data",
+    )
+
+    try:
+        _assert_ratio_rendering(ratio_axes[0, 0], "Model/Data")
+    finally:
+        plt.close(fig)
+
+
+@pytest.mark.parametrize(
+    "pred, truth",
+    [
+        ([np.nan, np.inf], [0.25, 0.75]),
+        ([0.25, 0.75], [np.nan, -np.inf]),
+    ],
+)
+def test_plot_1d_hist_displays_na_when_either_emd_sample_has_no_finite_values(pred, truth):
+    figures_before = set(plt.get_fignums())
+
+    try:
+        plot_1d_hist(pred, truth, "x", bins_edges=np.array([0.0, 0.5, 1.0]))
+
+        assert plt.gcf().axes[0].get_title(loc="right") == "x  EMD = n/a"
+    finally:
+        for figure_number in set(plt.get_fignums()) - figures_before:
+            plt.close(figure_number)
 
 
 def test_angular_grids_use_supplied_prediction_and_truth_labels():

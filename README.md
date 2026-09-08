@@ -88,11 +88,17 @@ Outputs are written under `paths.saved_path`. Training deletes that output direc
 
 Adaptive loss weights, when enabled, are updated once at the end of each training epoch using the first training batch from that epoch. The cosine metrics are logged as `grad_cos/{loss}__total`.
 
+### Loss units
+
+All pointwise terms use PyTorch's mean Huber loss with `delta=1`: quadratic near zero and linear for larger errors. The `huber` key uses `fourvec_huber_loss` on the eight raw W components in GeV; `dmet` uses raw MET-correction residuals in GeV. The `higgs_mass` term compares the signed combined mass to 125 GeV, with a linear continuation below `|m^2| = 0.01 GeV^2` to bound the square-root gradient. The `w_mass_huber` term uses the dimensionless squared-mass residual `(m_pred^2 - m_true^2) / 80.4^2`. No loss-normalization statistics are fitted or stored.
+
+Angular diagnostics use the same raw Huber loss as training for `huber_wplus`/`huber_wminus` and their gradient references. Configured weights are not rescaled automatically and should be reassessed when changing loss definitions. Older checkpoints with fitted loss-statistics buffers are not supported; historical checkpoints and diagnostic outputs are not migrated.
+
 ### MMD configuration
 
 The `alpha_mmd`, charge-ordered `mass_mmd`, and `angular_mmd` losses use a global, non-negative V-statistic. Each loss has a kernel and fixed absolute `bandwidths` under the top-level `mmd` section; see `configs/config.example.yaml` for the supported keys. Adding another bandwidth changes kernel coverage without mechanically rescaling the loss.
 
-The mass loss applies `asinh(m_W^2 / 80.4^2)` and fixed robust statistics fitted on the training truth split. Angular features use `2 * theta / pi - 1` together with `sin(phi)` and `cos(phi)`, producing six features in [-1, 1] while preserving phi periodicity. High-level features remain inputs to the neural network but are not used as MMD condition kernels.
+Mass MMD uses the two charge-ordered features `asinh(m_W^2 / 80.4^2)` directly, preserving the sign of invariant mass squared without fitted centering or scaling. Angular features use `2 * theta / pi - 1` together with `sin(phi)` and `cos(phi)`, producing six features in [-1, 1] while preserving phi periodicity. High-level features remain inputs to the neural network but are not used as MMD condition kernels.
 
 Set `parameters.angular_mmd_ramp_epochs` to ramp the angular MMD weight over $R$ epochs. At epoch $e$, its effective weight is $w_{\mathrm{angular}}[1 - \cos(\pi \min(e / R, 1))] / 2$, reaching the configured $w_{\mathrm{angular}}$ at epoch $R$; setting $R$ to zero applies the full configured weight immediately. Other loss weights are unaffected. Early stopping starts checking `val_loss` at epoch $R$, so the ramp-up phase cannot stop training prematurely; with $R$ set to zero it checks from epoch 0 as usual.
 

@@ -10,7 +10,7 @@ Checkpoints must match the current model constructor and state-dictionary shapes
 
 ## Contents
 
-- `inputs`: raw input features passed to the model, shape `(n_events, 21)`.
+- `inputs`: raw input features passed to the model, shape `(n_events, 18)`.
 - `outputs`: model predictions, shape `(n_events, 8)`.
 - `targets`: true target values, shape `(n_events, 10)`.
 - `checkpoint`: checkpoint path used for inference.
@@ -18,7 +18,7 @@ Checkpoints must match the current model constructor and state-dictionary shapes
 
 Each row corresponds to one test event, so `inputs[i]`, `outputs[i]`, and `targets[i]` refer to the same sample.
 
-The archive deliberately saves the public raw 21-column inputs, not the model's internal 21-column neural representation. Lepton energies are finite and strictly positive. Each saved jet slot is either an exact-zero padded four-vector or has finite, strictly positive energy. Negative or non-finite jet energies and nonzero jet four-vectors with exactly zero energy are invalid. Zero-padded jets remain in these arrays.
+The archive deliberately saves the public raw 18-column inputs, not the model's internal 18-column neural representation. Lepton energies are finite and strictly positive. Each saved jet slot is either an exact-zero padded four-vector or has finite, strictly positive energy. Negative or non-finite jet energies and nonzero jet four-vectors with exactly zero energy are invalid. Zero-padded jets remain in these arrays.
 
 ## Input Columns
 
@@ -42,39 +42,36 @@ The archive deliberately saves the public raw 21-column inputs, not the model's 
 | 15 | `jet1_energy` |
 | 16 | `met_px` |
 | 17 | `met_py` |
-| 18 | `m_ll` |
-| 19 | `deta_ll` |
-| 20 | `dphi_ll` |
 
-Inside neural aggregation, energies become `log1p(E)` and raw `dphi_ll` is passed through unchanged, producing 21 features. The internal order is positive-lepton `(px, py, pz, log1p(E))`, negative-lepton `(px, py, pz, log1p(E))`, jet 0 `(px, py, pz, log1p(E))`, jet 1 `(px, py, pz, log1p(E))`, MET `(px, py)`, `m_ll`, `deta_ll`, and `dphi_ll`. Training statistics exclude padded events separately for each jet slot, while `dphi_ll` retains mean zero and scale one. This transform does not alter the saved `inputs` array.
+Inside neural aggregation, energies become `log1p(E)`, producing 18 features. The internal order is positive-lepton `(px, py, pz, log1p(E))`, negative-lepton `(px, py, pz, log1p(E))`, jet 0 `(px, py, pz, log1p(E))`, jet 1 `(px, py, pz, log1p(E))`, MET `(px, py)`. Training statistics exclude padded events separately for each jet slot.
 
 ## Output Columns
 
 | Index | Name |
 | --- | --- |
-| 0 | `w_pos_px` |
-| 1 | `w_pos_py` |
-| 2 | `w_pos_pz` |
+| 0 | `w_pos_px` [GeV] |
+| 1 | `w_pos_py` [GeV] |
+| 2 | `w_pos_pz` [GeV] |
 | 3 | `w_pos_energy` [GeV] |
-| 4 | `w_neg_px` |
-| 5 | `w_neg_py` |
-| 6 | `w_neg_pz` |
+| 4 | `w_neg_px` [GeV] |
+| 5 | `w_neg_py` [GeV] |
+| 6 | `w_neg_pz` [GeV] |
 | 7 | `w_neg_energy` [GeV] |
 
 ## Target Columns
 
 | Index | Name |
 | --- | --- |
-| 0 | `w_pos_px` |
-| 1 | `w_pos_py` |
-| 2 | `w_pos_pz` |
+| 0 | `w_pos_px` [GeV] |
+| 1 | `w_pos_py` [GeV] |
+| 2 | `w_pos_pz` [GeV] |
 | 3 | `w_pos_energy` [GeV] |
-| 4 | `w_neg_px` |
-| 5 | `w_neg_py` |
-| 6 | `w_neg_pz` |
+| 4 | `w_neg_px` [GeV] |
+| 5 | `w_neg_py` [GeV] |
+| 6 | `w_neg_pz` [GeV] |
 | 7 | `w_neg_energy` [GeV] |
-| 8 | `w_pos_mass` |
-| 9 | `w_neg_mass` |
+| 8 | `w_pos_mass` [GeV] |
+| 9 | `w_neg_mass` [GeV] |
 
 Compare `outputs` with `targets[:, :8]`. Momentum, energy, and mass values are in GeV. The final two target columns are truth W masses kept for reference/checking and are not directly predicted by the model.
 

@@ -42,6 +42,11 @@ class InferenceCheckpointLoadingTest(unittest.TestCase):
             "pytorch-lightning_version": L.__version__,
         }
 
+        for name in ("w_fourvec_scales", "dmet_scales", "mass_mmd_center", "mass_mmd_scale"):
+            self.assertNotIn(name, set(checkpoint["state_dict"]))
+            self.assertNotIn(name, checkpoint["hyper_parameters"])
+            self.assertNotIn(name, set(dict(model.named_buffers())))
+
         with tempfile.TemporaryDirectory() as tmpdir:
             checkpoint_path = Path(tmpdir) / "current.ckpt"
             torch.save(checkpoint, checkpoint_path)

@@ -131,15 +131,13 @@ def _capture_mmd_inputs(loss_fn, *args, **kwargs):
 
 
 def _batch_feature_inputs(model, features, targets):
-    predictions, auxiliary = model(features, return_aux=True)
-    condition = auxiliary["cond"]
+    predictions = model(features)
     return {
         "alpha": _capture_mmd_inputs(
             loss_module.alpha_mmd,
             features,
             targets,
             predictions,
-            condition,
             **model._mmd_kwargs("alpha"),
         ),
         "mass": _capture_mmd_inputs(
@@ -147,9 +145,6 @@ def _batch_feature_inputs(model, features, targets):
             features,
             targets,
             predictions,
-            condition,
-            model.mass_mmd_center,
-            model.mass_mmd_scale,
             **model._mmd_kwargs("mass"),
         ),
         "angular": _capture_mmd_inputs(
@@ -157,7 +152,6 @@ def _batch_feature_inputs(model, features, targets):
             features,
             targets,
             predictions,
-            condition,
             **model._mmd_kwargs("angular"),
         ),
     }
@@ -190,7 +184,11 @@ def evaluate_checkpoint(checkpoint, features, targets, batch_size, device):
             if captured is None:
                 continue
             prediction, truth, kwargs = captured
+            kwargs = dict(kwargs)
             valid_rows = valid_mmd_rows(prediction, truth)
+            captured_valid = kwargs.pop("valid_mask", None)
+            if captured_valid is not None:
+                valid_rows &= captured_valid.to(device=valid_rows.device, dtype=torch.bool)
             prediction = prediction[valid_rows]
             truth = truth[valid_rows]
             if prediction.shape[0] == 0:

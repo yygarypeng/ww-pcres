@@ -5,6 +5,7 @@ from matplotlib import pyplot as plt
 from matplotlib.colors import LogNorm
 from matplotlib.lines import Line2D
 from matplotlib.ticker import FormatStrFormatter
+from scipy.stats import wasserstein_distance
 
 hep.style.use(hep.style.ATLAS)
 ATLAS_LABEL_TEXT = "Internal Simulation"
@@ -26,6 +27,129 @@ def _rmse(pred, truth):
     pred = pred[mask]
     truth = truth[mask]
     return np.sqrt(np.mean((pred - truth) ** 2))
+
+
+def _fmt_metric(value, threshold=1e-2):
+    """Fixed-point for typical magnitudes, scientific notation once that would round to 0.00."""
+    if value == 0 or abs(value) >= threshold:
+        return f"{value:.2f}"
+    return f"{value:.2e}"
+
+
+def _emd_title(label, pred, truth):
+    pred = np.asarray(pred)
+    truth = np.asarray(truth)
+    pred = pred[np.isfinite(pred)]
+    truth = truth[np.isfinite(truth)]
+    if pred.size == 0 or truth.size == 0:
+        return f"{label}  EMD = n/a"
+    return f"{label}  EMD = {_fmt_metric(wasserstein_distance(pred, truth))}"
+
+
+def _hist2d_kwargs(bins_edges, vmax, log):
+    kwargs = {"bins": [bins_edges, bins_edges], "cmap": "viridis"}
+    if log:
+        kwargs["norm"] = LogNorm(vmin=1, vmax=vmax)
+    else:
+        kwargs.update(vmin=1, vmax=vmax)
+    return kwargs
+
+
+def _apply_atlas_label(ax, color, loc=2, text=ATLAS_LABEL_TEXT):
+    txt = hep.atlas.label(text, data=True, loc=loc, rlabel="", ax=ax)
+    txt[0].set_color(color)
+    txt[1].set_color(color)
+    return txt
+
+
+def _set_square_ticks(ax, bins_edges, n_ticks=5, pad=10):
+    ax.tick_params(axis="both", which="major", pad=pad)
+    ticks = np.linspace(bins_edges[0], bins_edges[-1], n_ticks)
+    ax.set_xticks(ticks)
+    ax.set_yticks(ticks)
+    ax.xaxis.set_major_formatter(FormatStrFormatter("%.1f"))
+    ax.yaxis.set_major_formatter(FormatStrFormatter("%.1f"))
+    ax.set_aspect("equal", adjustable="box")
+
+
+def _plot_hist_ratio(
+    ax,
+    pred_counts,
+    truth_counts,
+    bin_edges,
+    *,
+    ratio_ylim=(0.5, 1.5),
+    ratio_text="Pred/True",
+    show_ylabel=True,
+):
+    pred_counts = np.asarray(pred_counts, dtype=float)
+    truth_counts = np.asarray(truth_counts, dtype=float)
+    bin_edges = np.asarray(bin_edges)
+    bin_centers = 0.5 * (bin_edges[1:] + bin_edges[:-1])
+
+    valid = (pred_counts > 0) & (truth_counts > 0)
+    ratio = np.full_like(pred_counts, np.nan, dtype=float)
+    ratio_err = np.full_like(pred_counts, np.nan, dtype=float)
+    ratio[valid] = pred_counts[valid] / truth_counts[valid]
+    ratio_err[valid] = ratio[valid] * np.sqrt(1.0 / pred_counts[valid] + 1.0 / truth_counts[valid])
+
+    truth_rel_err = np.full_like(truth_counts, np.nan, dtype=float)
+    truth_mask = truth_counts > 0
+    truth_rel_err[truth_mask] = 1.0 / np.sqrt(truth_counts[truth_mask])
+    band_low = 1.0 - truth_rel_err
+    band_high = 1.0 + truth_rel_err
+    ax.fill_between(
+        np.repeat(bin_edges, 2)[1:-1],
+        np.repeat(band_low, 2),
+        np.repeat(band_high, 2),
+        color="gray",
+        alpha=0.25,
+        linewidth=0,
+    )
+
+    y_min, y_max = ratio_ylim
+    span = y_max - y_min
+    in_view = valid & (ratio >= y_min) & (ratio <= y_max)
+    overflow_high = valid & (ratio > y_max)
+    overflow_low = valid & (ratio < y_min)
+
+    ax.axhline(1.0, color="gray", linestyle="--", linewidth=1.3)
+    errorbar = ax.errorbar(
+        bin_centers[in_view],
+        ratio[in_view],
+        yerr=ratio_err[in_view],
+        fmt="o",
+        color="black",
+        markersize=3,
+        linewidth=1,
+        capsize=0,
+        label=ratio_text,
+    )
+    errorbar.lines[0].set_label(ratio_text)
+
+    y_top_from = y_max - 0.15 * span
+    y_bot_from = y_min + 0.15 * span
+    for x in bin_centers[overflow_high]:
+        ax.annotate(
+            "",
+            xy=(x, y_max),
+            xytext=(x, y_top_from),
+            arrowprops=dict(arrowstyle="-|>", color="black", lw=0.5),
+            clip_on=False,
+        )
+    for x in bin_centers[overflow_low]:
+        ax.annotate(
+            "",
+            xy=(x, y_min),
+            xytext=(x, y_bot_from),
+            arrowprops=dict(arrowstyle="-|>", color="black", lw=0.5),
+            clip_on=False,
+        )
+
+    ax.set_ylabel(ratio_text if show_ylabel else "")
+    ax.set_ylim(*ratio_ylim)
+    ax.grid(axis="y", linestyle="--", alpha=0.35)
+    ax.tick_params(axis="both", which="major", pad=10)
 
 
 def _prepare_angular_data(observable):
@@ -60,7 +184,7 @@ def plot_angular_1d_grid(
         left=0.1,
         right=0.96,
         bottom=0.08,
-        top=0.9,
+        top=0.86,
         wspace=0.22,
         hspace=0.32,
     )
@@ -82,9 +206,6 @@ def plot_angular_1d_grid(
         bins = observable["bins"]
         pred_counts, _ = np.histogram(pred, bins=bins)
         truth_counts, _ = np.histogram(truth, bins=bins)
-        valid = truth_counts != 0
-        bin_centers = 0.5 * (bins[1:] + bins[:-1])
-
         ax.hist(
             pred,
             bins=bins,
@@ -102,38 +223,46 @@ def plot_angular_1d_grid(
             label=truth_label,
         )
         ax.set_xlim(bins[0], bins[-1])
-        ax.set_title(observable["label"], fontsize=14, pad=7)
+        ax.set_title(
+            _emd_title(
+                observable["label"],
+                np.asarray(observable["pred"]) / np.pi,
+                np.asarray(observable["truth"]) / np.pi,
+            ),
+            fontsize=14,
+            pad=7,
+        )
+        ax.set_ylabel("Events" if column == 0 else "", fontsize=12)
         ax.tick_params(axis="x", which="both", bottom=False, labelbottom=False)
         ax.tick_params(axis="y", labelsize=10)
         ax.grid(axis="y", linestyle="--", alpha=0.25)
         if share_axes:
             ax.label_outer()
 
-        rax.axhline(1.0, color="gray", linestyle="--", linewidth=1.3)
-        rax.plot(
-            bin_centers[valid],
-            pred_counts[valid] / truth_counts[valid],
-            color="black",
-            marker="o",
-            linestyle="none",
-            markersize=3,
-            label=f"{pred_label}/{truth_label}",
+        _plot_hist_ratio(
+            rax,
+            pred_counts,
+            truth_counts,
+            bins,
+            ratio_ylim=(0.5, 1.5),
+            ratio_text=f"{pred_label}/{truth_label}",
+            show_ylabel=column == 0,
         )
-        rax.set_ylim(0.5, 1.5)
+        if column == 0:
+            rax.yaxis.label.set_fontsize(12)
         rax.tick_params(axis="both", labelsize=10)
-        rax.grid(axis="y", linestyle="--", alpha=0.25)
 
     handles, labels = hist_axes[0, 0].get_legend_handles_labels()
     fig.legend(
         handles,
         labels,
-        loc="upper right",
-        bbox_to_anchor=(0.96, 0.97),
+        loc="upper center",
+        bbox_to_anchor=(0.5, 0.95),
         frameon=False,
         fontsize=12,
+        ncols=2,
     )
     fig.supxlabel(r"Observable [rad/$\pi$]", fontsize=12)
-    fig.supylabel("Events", fontsize=12)
     fig.suptitle(title, fontsize=17, fontweight="semibold")
     plt.show()
     return fig, (hist_axes, ratio_axes)
@@ -160,13 +289,9 @@ def plot_angular_2d_grid(
     for ax, observable, (pred, truth) in zip(axes.flat, observables, prepared_data):
         bins = observable["bins"]
         rmse = np.sqrt(np.mean((pred - truth) ** 2))
-        hist2d_kwargs = {"bins": [bins, bins], "cmap": "viridis"}
-        if observable["log"]:
-            hist2d_kwargs["norm"] = LogNorm(vmin=1, vmax=observable["vmax"])
-        else:
-            hist2d_kwargs.update(vmin=1, vmax=observable["vmax"])
-
-        image = ax.hist2d(pred, truth, **hist2d_kwargs)[3]
+        image = ax.hist2d(
+            pred, truth, **_hist2d_kwargs(bins, observable["vmax"], observable["log"])
+        )[3]
         ax.plot(
             [bins[0], bins[-1]],
             [bins[0], bins[-1]],
@@ -176,7 +301,7 @@ def plot_angular_2d_grid(
         )
         ax.set_xlim(bins[0], bins[-1])
         ax.set_ylim(bins[0], bins[-1])
-        ax.set_title(f"{observable['label']}  RMSE = {rmse:.2f}", fontsize=13, pad=7)
+        ax.set_title(f"{observable['label']}  RMSE = {_fmt_metric(rmse)}", fontsize=13, pad=7)
         ax.tick_params(axis="both", labelsize=10)
         ax.set_aspect("equal", adjustable="box")
         if share_axes:
@@ -236,86 +361,22 @@ def plot_1d_hist(
     )
     ax.legend(frameon=False, loc="upper right")
     ax.set_ylabel("Events", loc="top")
+    ax.set_title(_emd_title(name, pred, truth), loc="right")
 
-    txt = hep.atlas.label(ATLAS_LABEL_TEXT, data=True, loc=2, rlabel="", ax=ax)
-    txt[0].set_color(color)
-    txt[1].set_color(color)
+    _apply_atlas_label(ax, color)
     ax.set_ylim(0, 1.15 * max(pred_counts.max(), truth_counts.max(), 1))
     ax.tick_params(axis="x", which="both", bottom=False, labelbottom=False)
     ax.tick_params(axis="y", which="major", pad=12)
 
-    # Bottom panel: Pred/True ratio
-    pred_counts = pred_counts.astype(float)
-    truth_counts = truth_counts.astype(float)
-    bin_centers = 0.5 * (bins_edges[1:] + bins_edges[:-1])
-
-    valid = (pred_counts > 0) & (truth_counts > 0)
-    ratio = np.full_like(pred_counts, np.nan, dtype=float)
-    ratio_err = np.full_like(pred_counts, np.nan, dtype=float)
-
-    ratio[valid] = pred_counts[valid] / truth_counts[valid]
-    # Propagated Poisson uncertainty for r = N_pred / N_true:
-    # sigma_r = r * sqrt(1/N_pred + 1/N_true)
-    ratio_err[valid] = ratio[valid] * np.sqrt(1.0 / pred_counts[valid] + 1.0 / truth_counts[valid])
-
-    # Reference uncertainty band from denominator (truth) statistics around unity
-    truth_rel_err = np.full_like(truth_counts, np.nan, dtype=float)
-    truth_mask = truth_counts > 0
-    truth_rel_err[truth_mask] = 1.0 / np.sqrt(truth_counts[truth_mask])
-    band_low = 1.0 - truth_rel_err
-    band_high = 1.0 + truth_rel_err
-    rax.fill_between(
-        bin_centers, band_low, band_high, step="mid", color="gray", alpha=0.25, linewidth=0
+    _plot_hist_ratio(
+        rax,
+        pred_counts,
+        truth_counts,
+        bins_edges,
+        ratio_ylim=ratio_ylim,
+        ratio_text=ratio_text,
     )
-
-    y_min, y_max = ratio_ylim
-    span = y_max - y_min
-
-    in_view = valid & (ratio >= y_min) & (ratio <= y_max)
-    overflow_high = valid & (ratio > y_max)
-    overflow_low = valid & (ratio < y_min)
-
-    rax.axhline(1.0, color="gray", linestyle="--", linewidth=1.3)
-    rax.errorbar(
-        bin_centers[in_view],
-        ratio[in_view],
-        yerr=ratio_err[in_view],
-        fmt="o",
-        color="black",
-        markersize=3,
-        linewidth=1,
-        capsize=0,
-    )
-
-    # Draw arrows at the panel edge for overflow points
-    y_top = y_max
-    y_top_from = y_max - 0.15 * span
-    y_bot = y_min
-    y_bot_from = y_min + 0.15 * span
-
-    for x in bin_centers[overflow_high]:
-        rax.annotate(
-            "",
-            xy=(x, y_top),
-            xytext=(x, y_top_from),
-            arrowprops=dict(arrowstyle="-|>", color="black", lw=0.5),
-            clip_on=False,
-        )
-
-    for x in bin_centers[overflow_low]:
-        rax.annotate(
-            "",
-            xy=(x, y_bot),
-            xytext=(x, y_bot_from),
-            arrowprops=dict(arrowstyle="-|>", color="black", lw=0.5),
-            clip_on=False,
-        )
-
     rax.set_xlabel(name + " [" + unit + "]", loc="right")
-    rax.set_ylabel(ratio_text)
-    rax.set_ylim(*ratio_ylim)
-    rax.grid(axis="y", linestyle="--", alpha=0.35)
-    rax.tick_params(axis="both", which="major", pad=10)
 
     if savepath is not None:
         fig.savefig(savepath, bbox_inches="tight")
@@ -333,35 +394,22 @@ def plot_2d_hist(
     xlabel="Pred",
     ylabel="True",
     vmax=1e2,
-    offset=0.5,
     savepath=None,
 ):
     err = 0.2
     cor_mask = np.abs(_rel_err_func(pred, truth)) <= err  # set 20% relative error cut
     fig, ax = plt.subplots()
-    if log:
-        norm = LogNorm(vmin=1, vmax=vmax)
-        ax.hist2d(pred, truth, bins=[bins_edges, bins_edges], cmap="viridis", norm=norm)
-    else:
-        ax.hist2d(pred, truth, bins=[bins_edges, bins_edges], cmap="viridis", vmin=1, vmax=vmax)
+    ax.hist2d(pred, truth, **_hist2d_kwargs(bins_edges, vmax, log))
 
     ax.plot(bins_edges, bins_edges, color="gainsboro", linestyle="--")
 
     ax.set_xlabel(f"{xlabel} [{unit}]")
     ax.set_ylabel(f"{ylabel} [{unit}]")
-    ax.set_title(f"{name}" + f" (RMSE: {_rmse(pred, truth):.2f})", loc="right")
+    ax.set_title(f"{name}" + f" (RMSE: {_fmt_metric(_rmse(pred, truth))})", loc="right")
     print(f"Rel err < 20%: {100 * np.sum(cor_mask) / len(truth):.2f} %")
 
-    txt = hep.atlas.label(ATLAS_LABEL_TEXT, data=True, loc=2, rlabel="", ax=ax)
-    txt[0].set_color(color)
-    txt[1].set_color(color)
-    ax.tick_params(axis="both", which="major", pad=10)
-
-    ticks = np.linspace(bins_edges[0], bins_edges[-1], 5)
-    ax.set_xticks(ticks)
-    ax.set_yticks(ticks)
-    ax.xaxis.set_major_formatter(FormatStrFormatter("%.1f"))
-    ax.yaxis.set_major_formatter(FormatStrFormatter("%.1f"))
+    _apply_atlas_label(ax, color)
+    _set_square_ticks(ax, bins_edges)
 
     x_min, x_max = bins_edges[0], bins_edges[-1]
     y_min, y_max = bins_edges[0], bins_edges[-1]
@@ -370,7 +418,6 @@ def plot_2d_hist(
     ax.set_ylim(y_min, y_max)
 
     fig.colorbar(ax.collections[0], ax=ax, label="Events")
-    ax.set_aspect("equal", adjustable="box")  # Make plot square
     if savepath is not None:
         fig.savefig(savepath, bbox_inches="tight")
     plt.show()
@@ -389,31 +436,19 @@ def plot_2d_res_hist(
     savepath=None,
 ):
     fig, ax = plt.subplots()
-    if log:
-        norm = LogNorm(vmin=1, vmax=vmax)
-        ax.hist2d(pred, truth, bins=[bins_edges, bins_edges], cmap="viridis", norm=norm)
-    else:
-        ax.hist2d(pred, truth, bins=[bins_edges, bins_edges], cmap="viridis", vmin=1, vmax=vmax)
+    ax.hist2d(pred, truth, **_hist2d_kwargs(bins_edges, vmax, log))
     ax.set_xlabel(rf"$\Delta_\text{{res}}${name_pos} [{unit}]")
     ax.set_ylabel(rf"$\Delta_\text{{res}}${name_neg} [{unit}]")
-    txt = hep.atlas.label("   " + ATLAS_LABEL_TEXT, data=True, loc=0, rlabel="", ax=ax)
-    txt[0].set_color(color)
-    txt[1].set_color(color)
-    ax.tick_params(axis="both", which="major", pad=10)
-    ticks = np.linspace(bins_edges[0], bins_edges[-1], 5)
-    ax.set_xticks(ticks)
-    ax.set_yticks(ticks)
-    ax.xaxis.set_major_formatter(FormatStrFormatter("%.1f"))
-    ax.yaxis.set_major_formatter(FormatStrFormatter("%.1f"))
+    _apply_atlas_label(ax, color, loc=0, text="   " + ATLAS_LABEL_TEXT)
+    _set_square_ticks(ax, bins_edges)
     fig.colorbar(ax.collections[0], ax=ax, label="Events")
-    ax.set_aspect("equal", adjustable="box")  # Make plot square
     if savepath is not None:
         fig.savefig(savepath, bbox_inches="tight")
     plt.show()
 
 
 LOSS_COMPONENTS = [
-    ("huber", r"Std $W$ 4-vec Huber"),
+    ("huber", r"$W$ 4-vec Huber"),
     ("higgs_mass", r"$m_H$ Huber"),
     ("alpha_mmd", r"$\alpha$ MMD"),
     ("mass_mmd", r"Joint $m_W$ MMD"),
@@ -554,21 +589,33 @@ def plot_loss_curves(metrics_path, cfg):
         return None
 
     best_epoch = data["best_epoch"]
-    print("Best loss values at best epoch (min val_loss):")
-    print(
-        f"  total: loss={_fmt_value(_value_at(data['totals']['train'], best_epoch))} "
-        f"val_loss={_fmt_value(_value_at(data['totals']['val'], best_epoch))}"
-    )
+    rows = [
+        {
+            "component": "total",
+            "train": _fmt_value(_value_at(data["totals"]["train"], best_epoch)),
+            "val": _fmt_value(_value_at(data["totals"]["val"], best_epoch)),
+            "weighted_train": "",
+            "weighted_val": "",
+        }
+    ]
     for name, label in LOSS_COMPONENTS:
         if name not in data["raw"]["val"]:
             continue
-        train = _fmt_value(_value_at(data["raw"]["train"][name], best_epoch))
-        val = _fmt_value(_value_at(data["raw"]["val"][name], best_epoch))
-        weighted_train = _fmt_value(_value_at(data["contributions"]["train"][name], best_epoch))
-        weighted_val = _fmt_value(_value_at(data["contributions"]["val"][name], best_epoch))
-        print(
-            f"  {label}: train={train} val={val} weighted_train={weighted_train} weighted_val={weighted_val}"
+        rows.append(
+            {
+                "component": label,
+                "train": _fmt_value(_value_at(data["raw"]["train"][name], best_epoch)),
+                "val": _fmt_value(_value_at(data["raw"]["val"][name], best_epoch)),
+                "weighted_train": _fmt_value(
+                    _value_at(data["contributions"]["train"][name], best_epoch)
+                ),
+                "weighted_val": _fmt_value(
+                    _value_at(data["contributions"]["val"][name], best_epoch)
+                ),
+            }
         )
+    print(f"Best loss values at best epoch {best_epoch} (min val_loss):")
+    print(pd.DataFrame(rows).to_string(index=False))
     fig_raw, raw_axes = plt.subplots(2, 4, figsize=(16, 8.5), sharex=True, layout="constrained")
     fig_weighted, weighted_axes = plt.subplots(
         2, 4, figsize=(16, 8.5), sharex=True, layout="constrained"
@@ -687,6 +734,22 @@ def plot_loss_curves(metrics_path, cfg):
     return data
 
 
+def _plot_grad_cos_heatmap(heatmap, x_col, ylabel, title):
+    plt.figure(figsize=(16, max(8, 0.35 * len(heatmap))))
+    plt.imshow(heatmap, aspect="auto", cmap="coolwarm", vmin=-1, vmax=1, interpolation="nearest")
+    plt.colorbar(label="Gradient cosine")
+    plt.yticks(range(len(heatmap.index)), heatmap.index)
+    tick_positions = np.linspace(
+        0, len(heatmap.columns) - 1, min(10, len(heatmap.columns)), dtype=int
+    )
+    plt.xticks(tick_positions, heatmap.columns[tick_positions])
+    plt.xlabel(x_col.capitalize())
+    plt.ylabel(ylabel)
+    plt.title(title)
+    plt.tight_layout()
+    plt.show()
+
+
 def plot_gradient_cosine_heatmaps(df):
     grad_cols = sorted(col for col in df.columns if col.startswith("grad_cos/"))
     if not grad_cols:
@@ -721,22 +784,7 @@ def plot_gradient_cosine_heatmaps(df):
         heatmap.index = [
             col.replace("grad_cos/", "").replace("__", " vs ") for col in heatmap.index
         ]
-
-        plt.figure(figsize=(16, max(8, 0.35 * len(pair_grad_cols))))
-        plt.imshow(
-            heatmap, aspect="auto", cmap="coolwarm", vmin=-1, vmax=1, interpolation="nearest"
-        )
-        plt.colorbar(label="Gradient cosine")
-        plt.yticks(range(len(heatmap.index)), heatmap.index)
-        tick_positions = np.linspace(
-            0, len(heatmap.columns) - 1, min(10, len(heatmap.columns)), dtype=int
-        )
-        plt.xticks(tick_positions, heatmap.columns[tick_positions])
-        plt.xlabel(x_col.capitalize())
-        plt.ylabel("Loss pair")
-        plt.title("Pairwise Similarity Over Training")
-        plt.tight_layout()
-        plt.show()
+        _plot_grad_cos_heatmap(heatmap, x_col, "Loss pair", "Pairwise Similarity Over Training")
 
         pair_latest = latest[pair_grad_cols].dropna()
         loss_names = sorted(
@@ -771,26 +819,9 @@ def plot_gradient_cosine_heatmaps(df):
         if total_heatmap.empty:
             print("No populated loss-vs-total grad_cos metrics found.")
         else:
-            plt.figure(figsize=(16, max(8, 0.35 * len(total_heatmap))))
-            plt.imshow(
-                total_heatmap,
-                aspect="auto",
-                cmap="coolwarm",
-                vmin=-1,
-                vmax=1,
-                interpolation="nearest",
+            _plot_grad_cos_heatmap(
+                total_heatmap, x_col, "Loss", "Loss-vs-Total Similarity Over Training"
             )
-            plt.colorbar(label="Gradient cosine")
-            plt.yticks(range(len(total_heatmap.index)), total_heatmap.index)
-            tick_positions = np.linspace(
-                0, len(total_heatmap.columns) - 1, min(10, len(total_heatmap.columns)), dtype=int
-            )
-            plt.xticks(tick_positions, total_heatmap.columns[tick_positions])
-            plt.xlabel(x_col.capitalize())
-            plt.ylabel("Loss")
-            plt.title("Loss-vs-Total Similarity Over Training")
-            plt.tight_layout()
-            plt.show()
     else:
         print("No populated loss-vs-total grad_cos metrics found.")
 
@@ -804,26 +835,9 @@ def plot_gradient_cosine_heatmaps(df):
         if rest_heatmap.empty:
             print("No populated loss-vs-rest grad_cos metrics found.")
         else:
-            plt.figure(figsize=(16, max(8, 0.35 * len(rest_heatmap))))
-            plt.imshow(
-                rest_heatmap,
-                aspect="auto",
-                cmap="coolwarm",
-                vmin=-1,
-                vmax=1,
-                interpolation="nearest",
+            _plot_grad_cos_heatmap(
+                rest_heatmap, x_col, "Loss", "Loss-vs-Rest Similarity Over Training"
             )
-            plt.colorbar(label="Gradient cosine")
-            plt.yticks(range(len(rest_heatmap.index)), rest_heatmap.index)
-            tick_positions = np.linspace(
-                0, len(rest_heatmap.columns) - 1, min(10, len(rest_heatmap.columns)), dtype=int
-            )
-            plt.xticks(tick_positions, rest_heatmap.columns[tick_positions])
-            plt.xlabel(x_col.capitalize())
-            plt.ylabel("Loss")
-            plt.title("Loss-vs-Rest Similarity Over Training")
-            plt.tight_layout()
-            plt.show()
     else:
         print("No populated loss-vs-rest grad_cos metrics found.")
 
