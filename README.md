@@ -60,6 +60,8 @@ data:
 
 `max_events_per_category` optionally caps the number of events read from each selected category in each split. `null` loads every event.
 
+`max_dilepton_mass` optionally drops events whose measured dilepton mass reaches the given bound, in GeV, in every split. `null` applies no bound. `WConstraintsLayer` requires a bound below the Higgs mass: adding massless neutrinos can only raise an invariant mass, so a lepton pair at or above 125 GeV can never be put on the Higgs mass shell, and the layer has no solution for it. The bound uses measured leptons only, so the same selection applies to data and simulation.
+
 ## Train
 
 ```bash

@@ -100,6 +100,20 @@ def _valid_truth_w_rows(target_obj):
     return valid & np.isfinite(pair_m2) & (pair_m2 > 0.0)
 
 
+def _valid_dilepton_mass_rows(train_obj, max_dilepton_mass):
+    """Rows whose measured dilepton mass stays below the bound, in GeV.
+
+    Adding massless neutrinos can only raise an invariant mass, so an event
+    whose two leptons already reach the Higgs mass can never be put on the Higgs
+    mass shell. The bound is therefore an event selection on measured leptons,
+    decidable before the model runs, and it has to be applied to every split.
+    """
+    leptons = np.asarray(train_obj[:, :8], dtype=np.float64)
+    px, py, pz, energy = (leptons[:, i] + leptons[:, i + 4] for i in range(4))
+    mass2 = energy**2 - px**2 - py**2 - pz**2
+    return np.isfinite(mass2) & (mass2 < float(max_dilepton_mass) ** 2)
+
+
 def load_particles_from_h5(filename, categories=None, max_events=None):
     result = {}
 
@@ -135,7 +149,7 @@ def load_particles_from_h5(filename, categories=None, max_events=None):
     return result
 
 
-def _load_filtered_arrays(data_path, categories, max_events):
+def _load_filtered_arrays(data_path, categories, max_events, max_dilepton_mass=None):
     """Load + row-filter raw train/target arrays without fitting scalers."""
     data = load_particles_from_h5(
         data_path,
@@ -245,6 +259,16 @@ def _load_filtered_arrays(data_path, categories, max_events):
         "rows with non-finite values, invalid input energies, or invalid truth W kinematics",
     )
 
+    if max_dilepton_mass is not None:
+        below_bound = _valid_dilepton_mass_rows(train_obj, max_dilepton_mass)
+        train_obj = train_obj[below_bound]
+        target_obj = target_obj[below_bound]
+        print(
+            "Removed",
+            (~below_bound).sum(),
+            f"rows with a dilepton mass of {max_dilepton_mass} GeV or more",
+        )
+
     return train_obj, target_obj
 
 
@@ -252,8 +276,11 @@ def load_data(
     data_path,
     categories=None,
     max_events_per_category=None,
+    max_dilepton_mass=None,
 ):
-    train_obj, target_obj = _load_filtered_arrays(data_path, categories, max_events_per_category)
+    train_obj, target_obj = _load_filtered_arrays(
+        data_path, categories, max_events_per_category, max_dilepton_mass
+    )
     (std_mean_train, std_scale_train), (std_mean_target, std_scale_target) = (
         compute_standardization_stats(train_obj, target_obj)
     )
@@ -280,8 +307,11 @@ def load_presplit_data(data_path, data_cfg=None):
     print("Test categories:", ", ".join(test_categories))
 
     max_events = data_cfg.get("max_events_per_category")
-    X_train, Y_train = _load_filtered_arrays(data_path, train_categories, max_events)
-    X_val, Y_val = _load_filtered_arrays(data_path, val_categories, max_events)
-    X_test, Y_test = _load_filtered_arrays(data_path, test_categories, max_events)
+    max_dilepton_mass = data_cfg.get("max_dilepton_mass")
+    splits = (train_categories, val_categories, test_categories)
+    (X_train, Y_train), (X_val, Y_val), (X_test, Y_test) = (
+        _load_filtered_arrays(data_path, categories, max_events, max_dilepton_mass)
+        for categories in splits
+    )
 
     return X_train, Y_train, X_val, Y_val, X_test, Y_test

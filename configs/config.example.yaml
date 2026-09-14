@@ -43,6 +43,9 @@ mmd:
 
 data:
   categories: null
+  # Drop events whose measured dilepton mass reaches this bound, in GeV.
+  # WConstraintsLayer needs a value below 125; null applies no bound.
+  max_dilepton_mass: null
 
 paths:
   saved_path: "outputs/run"
