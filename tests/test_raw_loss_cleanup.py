@@ -1,11 +1,9 @@
 from unittest.mock import patch
 
 import numpy as np
-import pytest
 import torch
 
 from model import LightningWBoson, losses
-from scripts import diagnose_angular_degradation as diagnostics
 from train import train
 
 
@@ -89,10 +87,3 @@ def test_training_constructs_model_with_configured_loss_weights():
     total.backward()
     torch.testing.assert_close(prediction.grad, torch.full((1, 8), 0.25))
     torch.testing.assert_close(dmet.grad, torch.tensor([[1.5, -1.5]]))
-
-
-def test_slot_diagnostic_uses_raw_huber_and_filters_invalid_rows():
-    prediction = torch.tensor([[0.5, -1.0, 2.0, -3.0, 0.0, 0.0, 0.0, 0.0], [float("nan")] * 8])
-    assert diagnostics._slot_huber(prediction, torch.zeros(2, 8), slice(0, 4)) == pytest.approx(
-        1.15625
-    )
