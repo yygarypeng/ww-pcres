@@ -88,9 +88,6 @@ class FlattenedAggregationTest(unittest.TestCase):
         model = self.make_model()
         aggregated = model.global_feature_aggregation(self.make_inputs(3))
 
-        self.assertFalse(hasattr(model, "pooling_mode"))
-        self.assertFalse(hasattr(model, "event_pool"))
-        self.assertFalse(hasattr(model, "pool_norm"))
         self.assertEqual(aggregated.shape, (3, model.num_tokens * 8))
 
     def test_both_lepton_embedding_paths_receive_gradients(self):
@@ -175,3 +172,27 @@ class FlattenedAggregationTest(unittest.TestCase):
 
         torch.testing.assert_close(missing_after, missing_before)
         self.assertFalse(torch.allclose(present_after, present_before))
+
+    def test_empty_jet_tokens_are_zeroed_only_after_refinement(self):
+        class RecordingRefiner(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.seen = None
+
+            def forward(self, inputs, key_padding_mask=None):
+                self.seen = inputs.detach().clone()
+                return inputs + 1.0
+
+        model = self.make_model().eval()
+        refiners = [RecordingRefiner(), RecordingRefiner()]
+        model.sa_blocks = torch.nn.ModuleList(refiners)
+        inputs = self.make_inputs()
+        inputs[:, 8:12] = 0.0
+        with torch.no_grad():
+            model.jet0_embed.weight.zero_()
+            model.jet0_embed.bias.fill_(2.0)
+            aggregated = model.global_feature_aggregation(inputs)
+
+        torch.testing.assert_close(refiners[0].seen[:, 2], torch.full((2, 8), 2.0))
+        torch.testing.assert_close(refiners[1].seen[:, 2], torch.full((2, 8), 3.0))
+        torch.testing.assert_close(aggregated[:, 16:24], torch.zeros((2, 8)))

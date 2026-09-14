@@ -60,7 +60,7 @@ class TrainingTest(unittest.TestCase):
             "batch_size": 2,
             "epochs": 1,
             "learning_rate": 1.0e-4,
-            "loss_weights": {"huber": 1.0},
+            "loss_weights": {"w_fourvec": 1.0},
             "angular_mmd_ramp_epochs": 80,
             "d_model": 8,
             "n_heads": 2,
@@ -139,7 +139,7 @@ class TrainingTest(unittest.TestCase):
         writer = SimpleNamespace(metrics_keys=[])
         logger = SimpleNamespace(experiment=writer)
         model = SimpleNamespace(
-            loss_weights={"huber": 1.0, "higgs_mass": 2.0, "dmet": 0.0},
+            loss_weights={"w_fourvec": 1.0, "higgs_mass": 2.0, "dmet": 0.0},
             adaptive_loss_names=["higgs_mass"],
             log_loss_gradient_cosines=True,
         )
@@ -148,8 +148,10 @@ class TrainingTest(unittest.TestCase):
 
         self.assertIn("grad_cos/higgs_mass__total", writer.metrics_keys)
         self.assertIn("grad_cos/higgs_mass__rest", writer.metrics_keys)
-        self.assertNotIn("grad_cos/huber__total", writer.metrics_keys)
-        self.assertNotIn("grad_cos/huber__rest", writer.metrics_keys)
+        self.assertIn("grad_norm/higgs_mass", writer.metrics_keys)
+        self.assertNotIn("grad_cos/w_fourvec__total", writer.metrics_keys)
+        self.assertNotIn("grad_cos/w_fourvec__rest", writer.metrics_keys)
+        self.assertNotIn("grad_norm/w_fourvec", writer.metrics_keys)
 
 
 class DeferredEarlyStoppingTest(unittest.TestCase):

@@ -448,7 +448,7 @@ class _GradientModel(nn.Module):
     def __init__(self):
         super().__init__()
         self.slot_scale = nn.Parameter(torch.tensor([0.2, 0.4]))
-        self.loss_weights = {"huber": 50.0, "sum": -2.0, "disabled": 0.0}
+        self.loss_weights = {"w_fourvec": 50.0, "sum": -2.0, "disabled": 0.0}
         self.seen_features = None
         self.forward_calls = 0
 
@@ -473,9 +473,9 @@ class _GradientModel(nn.Module):
     def _compute_losses(self, features, targets, prediction, auxiliary=None):
         del auxiliary
         self.seen_features = features.detach().clone()
-        huber = torch.nn.functional.huber_loss(prediction, targets[:, :8])
-        losses = {"huber": huber, "sum": self.slot_scale.sum()}
-        return 50.0 * huber - 2.0 * losses["sum"], losses
+        w_fourvec = torch.nn.functional.l1_loss(prediction, targets[:, :8])
+        losses = {"w_fourvec": w_fourvec, "sum": self.slot_scale.sum()}
+        return 50.0 * w_fourvec - 2.0 * losses["sum"], losses
 
     def _effective_loss_weights(self):
         return self.loss_weights
@@ -493,22 +493,21 @@ def test_gradient_rows_use_persisted_batch_and_report_weighted_reference_cosines
     assert not model.training
     torch.testing.assert_close(model.seen_features, features[indices])
     assert [row["loss"] for row in rows] == [
-        "huber",
+        "w_fourvec",
         "sum",
         "huber_wplus",
         "huber_wminus",
     ]
     by_name = {row["loss"]: row for row in rows}
-    assert by_name["huber"]["raw_loss"] == pytest.approx(0.05)
+    assert by_name["w_fourvec"]["raw_loss"] == pytest.approx(0.3)
     assert by_name["huber_wplus"]["raw_loss"] == pytest.approx(0.02)
     assert by_name["huber_wminus"]["raw_loss"] == pytest.approx(0.08)
-    assert by_name["huber"]["raw_loss"] == pytest.approx(
-        0.5 * (by_name["huber_wplus"]["raw_loss"] + by_name["huber_wminus"]["raw_loss"])
-    )
-    assert by_name["huber"]["effective_weight"] == 50.0
+    assert by_name["w_fourvec"]["effective_weight"] == 50.0
     assert by_name["huber_wplus"]["effective_weight"] == 25.0
     assert by_name["huber_wminus"]["effective_weight"] == 25.0
-    assert by_name["huber"]["weighted_gradient_l2"] == pytest.approx(np.sqrt(5.0**2 + 10.0**2))
+    assert by_name["w_fourvec"]["weighted_gradient_l2"] == pytest.approx(
+        np.sqrt(25.0**2 + 25.0**2)
+    )
     assert by_name["sum"]["weighted_gradient_l2"] == pytest.approx(2 * np.sqrt(2))
     assert by_name["huber_wplus"]["weighted_gradient_l2"] == pytest.approx(5.0)
     assert by_name["huber_wminus"]["weighted_gradient_l2"] == pytest.approx(10.0)
@@ -537,7 +536,7 @@ def test_gradient_csv_has_stable_schema(tmp_path):
     path = tmp_path / "gradients.csv"
     row = {
         "epoch": 2,
-        "loss": "huber",
+        "loss": "w_fourvec",
         "raw_loss": 0.5,
         "effective_weight": 50.0,
         "weighted_gradient_l2": 3.0,
@@ -550,7 +549,33 @@ def test_gradient_csv_has_stable_schema(tmp_path):
     with path.open(newline="") as stream:
         reader = csv.DictReader(stream)
         assert reader.fieldnames == list(row)
-        assert next(reader)["loss"] == "huber"
+        assert next(reader)["loss"] == "w_fourvec"
+
+
+def test_expected_gradient_losses_include_enabled_higgs_fourvec(tmp_path):
+    checkpoint = SimpleNamespace(epoch=1, path=tmp_path / "model.ckpt")
+    torch.save(
+        {
+            "hyper_parameters": {
+                "loss_weights": {"w_fourvec": 0.0, "higgs_fourvec": 0.06},
+                "adaptive_loss_weights": False,
+            }
+        },
+        checkpoint.path,
+    )
+
+    assert "higgs_fourvec" in diagnostic_script.expected_gradient_loss_names(checkpoint)
+
+
+def test_expected_gradient_losses_reject_legacy_huber_key(tmp_path):
+    checkpoint = SimpleNamespace(epoch=1, path=tmp_path / "model.ckpt")
+    torch.save(
+        {"hyper_parameters": {"loss_weights": {"huber": 1.0}}},
+        checkpoint.path,
+    )
+
+    with pytest.raises(ValueError, match="unsupported loss_weights key.*huber"):
+        diagnostic_script.expected_gradient_loss_names(checkpoint)
 
 
 def test_checkpoint_evaluation_resumes_only_complete_epochs_without_duplicates(
@@ -564,7 +589,7 @@ def test_checkpoint_evaluation_resumes_only_complete_epochs_without_duplicates(
         torch.save(
             {
                 "hyper_parameters": {
-                    "loss_weights": {"huber": 1.0},
+                    "loss_weights": {"w_fourvec": 1.0},
                     "angular_mmd_ramp_epochs": 0,
                     "adaptive_loss_weights": False,
                 }
@@ -625,7 +650,7 @@ def test_checkpoint_evaluation_resumes_only_complete_epochs_without_duplicates(
                 "cosine_huber_wplus": 0.3,
                 "cosine_huber_wminus": 0.4,
             }
-            for loss in ("huber", "huber_wplus", "huber_wminus")
+            for loss in ("w_fourvec", "huber_wplus", "huber_wminus")
         ]
 
     monkeypatch.setattr(
@@ -663,10 +688,10 @@ def test_checkpoint_evaluation_resumes_only_complete_epochs_without_duplicates(
         gradient_rows = list(csv.DictReader(stream))
     assert [int(row["epoch"]) for row in metric_rows] == [1, 2]
     assert [(int(row["epoch"]), row["loss"]) for row in gradient_rows] == [
-        (1, "huber"),
+        (1, "w_fourvec"),
         (1, "huber_wplus"),
         (1, "huber_wminus"),
-        (2, "huber"),
+        (2, "w_fourvec"),
         (2, "huber_wplus"),
         (2, "huber_wminus"),
     ]

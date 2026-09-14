@@ -72,6 +72,7 @@ def prime_csv_metric_header(csv_logger, model):
     if model.log_loss_gradient_cosines:
         metric_keys.update(f"grad_cos/{name}__total" for name in model.adaptive_loss_names)
         metric_keys.update(f"grad_cos/{name}__rest" for name in model.adaptive_loss_names)
+        metric_keys.update(f"grad_norm/{name}" for name in model.adaptive_loss_names)
     metric_keys.update(f"loss_weight/{name}" for name in loss_names)
 
     writer = csv_logger.experiment

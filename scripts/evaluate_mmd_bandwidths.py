@@ -141,7 +141,7 @@ def _batch_feature_inputs(model, features, targets):
             **model._mmd_kwargs("alpha"),
         ),
         "mass": _capture_mmd_inputs(
-            loss_module.mass_mmd,
+            loss_module.w_mass_mmd,
             features,
             targets,
             predictions,

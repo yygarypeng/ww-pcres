@@ -72,16 +72,10 @@ With Weights & Biases:
 python train/train.py --config configs/config.yaml --wandb
 ```
 
-The launcher uses the same entry point and writes to `record.log` by default:
+The launcher uses the same entry point and writes to `record.log`:
 
 ```bash
 ./train/run_train.sh
-```
-
-Set `TRAIN_LOG_PATH` to keep a run's log separate:
-
-```bash
-TRAIN_LOG_PATH=/tmp/pcres-train.log ./train/run_train.sh
 ```
 
 Outputs are written under `paths.saved_path`. Training deletes that output directory before a fresh run, after data and model setup have succeeded.
@@ -90,21 +84,35 @@ Adaptive loss weights, when enabled, are updated once at the end of each trainin
 
 ### Loss units
 
-All pointwise terms use PyTorch's mean Huber loss with `delta=1`: quadratic near zero and linear for larger errors. The `huber` key uses `fourvec_huber_loss` on the eight raw W components in GeV; `dmet` uses raw MET-correction residuals in GeV. The `higgs_mass` term compares the signed combined mass to 125 GeV, with a linear continuation below `|m^2| = 0.01 GeV^2` to bound the square-root gradient. The `w_mass_huber` term uses the dimensionless squared-mass residual `(m_pred^2 - m_true^2) / 80.4^2`. No loss-normalization statistics are fitted or stored.
+Every pointwise term is a mean L1 error in GeV, so equal weights mean equal cost
+per GeV and the logged values read directly as physical errors. `w_fourvec` uses
+the eight raw W components; `higgs_fourvec` compares the summed predicted and
+truth W four-vectors in `(px, py, pz, E)`; `dmet` uses raw MET-correction
+residuals.
 
-Angular diagnostics use the same raw Huber loss as training for `huber_wplus`/`huber_wminus` and their gradient references. Configured weights are not rescaled automatically and should be reassessed when changing loss definitions. Older checkpoints with fitted loss-statistics buffers are not supported; historical checkpoints and diagnostic outputs are not migrated.
+The two mass terms use the linearized residual $(m^2 - m_\mathrm{target}^2) / (2
+m_\mathrm{ref})$, which equals $m - m_\mathrm{target}$ to first order and takes
+no square root, so it stays finite and differentiable when a prediction goes
+spacelike. `higgs_mass` references the 125 GeV target, so its value is the mean
+Higgs mass error in GeV. `w_mass` references the fixed 80.4 GeV scale rather than
+the per-event truth mass, whose reciprocal would blow up for a far off-shell W.
+
+Angular diagnostics use raw Huber loss for `huber_wplus`/`huber_wminus` and their
+gradient references; these diagnostic references differ from the L1 `w_fourvec`
+training term. Configured weights are not rescaled automatically and should be
+reassessed when changing loss definitions.
 
 ### MMD configuration
 
-The `alpha_mmd`, charge-ordered `mass_mmd`, and `angular_mmd` losses use a global, non-negative V-statistic. Each loss has a kernel and fixed absolute `bandwidths` under the top-level `mmd` section; see `configs/config.example.yaml` for the supported keys. Adding another bandwidth changes kernel coverage without mechanically rescaling the loss.
+The `alpha_mmd`, charge-ordered `w_mass_mmd`, and `angular_mmd` losses use a global, non-negative V-statistic. Each loss has a kernel and fixed absolute `bandwidths` under the top-level `mmd` section; see `configs/config.example.yaml` for the supported keys. Adding another bandwidth changes kernel coverage without mechanically rescaling the loss.
 
-Mass MMD uses the two charge-ordered features `asinh(m_W^2 / 80.4^2)` directly, preserving the sign of invariant mass squared without fitted centering or scaling. Angular features use `2 * theta / pi - 1` together with `sin(phi)` and `cos(phi)`, producing six features in [-1, 1] while preserving phi periodicity. High-level features remain inputs to the neural network but are not used as MMD condition kernels.
+Because the bandwidths are fixed absolute numbers, every MMD feature map is bounded and O(1); a map that left its natural units in place would put every pair far outside every bandwidth and collapse the kernel. W-mass MMD uses `asinh(m^2 / 80.4^2)` on the two charge-ordered signed invariant mass-squared values. Angular features use `2 * theta / pi - 1` together with `sin(phi)` and `cos(phi)`, producing six features in [-1, 1] while preserving phi periodicity. High-level features remain inputs to the neural network but are not used as MMD condition kernels.
 
 Set `parameters.angular_mmd_ramp_epochs` to ramp the angular MMD weight over $R$ epochs. At epoch $e$, its effective weight is $w_{\mathrm{angular}}[1 - \cos(\pi \min(e / R, 1))] / 2$, reaching the configured $w_{\mathrm{angular}}$ at epoch $R$; setting $R$ to zero applies the full configured weight immediately. Other loss weights are unaffected. Early stopping starts checking `val_loss` at epoch $R$, so the ramp-up phase cannot stop training prematurely; with $R$ set to zero it checks from epoch 0 as usual.
 
 ### Visualization and inference check
 
-`notebooks/visualize.ipynb` reads the component losses, effective weights, and gradient-cosine columns from the Lightning `metrics.csv`. Its loss panels include the separate alpha and joint-mass MMD histories.
+`notebooks/visualize.ipynb` reads the component losses, effective weights, and gradient-cosine columns from the Lightning `metrics.csv`. Its loss panels include the separate alpha and joint W-mass MMD histories.
 
 To verify checkpoint reload and export aligned test-set arrays plus quick parity/residual plots:
 
@@ -125,9 +133,9 @@ The HDF5 file should contain top-level categories such as `ggF_train`, `ggF_val`
 - `truth_pos_w`: `px`, `py`, `pz`, `energy`, `m`
 - `truth_neg_w`: `px`, `py`, `pz`, `energy`, `m`
 
-The loader's public input contains 21 raw columns, ordered as positive-lepton `(px, py, pz, E)`, negative-lepton `(px, py, pz, E)`, jet 0 `(px, py, pz, E)`, jet 1 `(px, py, pz, E)`, MET `(px, py)`, then `m_ll`, `deta_ll`, and `dphi_ll`. Lepton energies must be finite and strictly positive. Each missing jet must be an exact-zero four-vector, while each present jet must have finite, strictly positive energy. Negative or non-finite jet energies and nonzero jet four-vectors with exactly zero energy are invalid.
+The HDF5 loader produces 18 raw columns, ordered as positive-lepton `(px, py, pz, E)`, negative-lepton `(px, py, pz, E)`, jet 0 `(px, py, pz, E)`, jet 1 `(px, py, pz, E)`, and MET `(px, py)`. The model also accepts externally constructed 21-column inputs that append `m_ll`, `deta_ll`, and `dphi_ll`. Lepton energies must be finite and strictly positive. Each missing jet must be an exact-zero four-vector, while each present jet must have finite, strictly positive energy. Negative or non-finite jet energies and nonzero jet four-vectors with exactly zero energy are invalid.
 
-Only the neural aggregation path converts these raw inputs to 21 features, in this order: positive-lepton `(px, py, pz, log1p(E))`, negative-lepton `(px, py, pz, log1p(E))`, jet 0 `(px, py, pz, log1p(E))`, jet 1 `(px, py, pz, log1p(E))`, MET `(px, py)`, `m_ll`, `deta_ll`, and `dphi_ll`. Non-angular statistics are fitted on the training split only; each jet slot uses only events where that raw jet is present, with mean zero and scale one if no training event contains the slot. The `dphi_ll` feature keeps fixed mean zero and scale one. Padded jets remain in event arrays and are excluded by attention masks.
+The neural aggregation path applies `log1p` to each energy column and otherwise preserves the 18- or 21-column layout. Non-angular statistics are fitted on the training split only; each jet slot uses only events where that raw jet is present, with mean zero and scale one if no training event contains the slot. For 21-column inputs, `dphi_ll` keeps fixed mean zero and scale one. Padded jets remain in event arrays and are excluded by attention masks.
 
 The loader also builds 10 targets. Target columns contain each W boson's `(px, py, pz, energy)` in GeV followed by the two truth W masses. Each truth W must be finite and timelike, have a nonnegative stored mass, and agree with $E^2-|p|^2$ within `1e-6 + 1e-6` times the sum-of-squares scale; the combined W pair must also be timelike.
 

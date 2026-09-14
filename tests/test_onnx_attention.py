@@ -8,7 +8,6 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from model import layers
 from model.model import WBosonRegressor
 
 CONVERTER_PATH = Path(__file__).resolve().parents[1] / "onnx" / "convert_to_onnx.py"
@@ -157,9 +156,6 @@ class Opset11MultiheadAttentionTest(unittest.TestCase):
                 else:
                     self.assertGreater(jet[3], torch.linalg.vector_norm(jet[:3]))
 
-    def test_cross_attention_block_is_removed(self):
-        self.assertFalse(hasattr(layers, "CrossAttentionBlock"))
-
     def test_self_attention_matches_pytorch(self):
         torch.manual_seed(4)
         source = nn.MultiheadAttention(8, 2, dropout=0.0, batch_first=True).eval()
@@ -215,7 +211,6 @@ class Opset11MultiheadAttentionTest(unittest.TestCase):
                 isinstance(block.mha, Opset11MultiheadAttention) for block in export_model.sa_blocks
             )
         )
-        self.assertFalse(hasattr(export_model, "event_pool"))
         self.assertEqual(export_model.num_tokens, 6)
 
         with tempfile.TemporaryDirectory() as temp_dir:

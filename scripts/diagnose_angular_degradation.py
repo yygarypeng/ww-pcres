@@ -56,11 +56,12 @@ GRADIENT_CSV_COLUMNS = (
     "cosine_huber_wminus",
 )
 GRADIENT_LOSS_ORDER = (
-    "huber",
+    "w_fourvec",
+    "higgs_fourvec",
     "higgs_mass",
-    "w_mass_huber",
+    "w_mass",
     "alpha_mmd",
-    "mass_mmd",
+    "w_mass_mmd",
     "angular_mmd",
     "dmet",
     "huber_wplus",
@@ -561,7 +562,11 @@ def gradient_diagnostic_rows(model, features, targets, gradient_indices, *, epoc
     }
     rows = []
     for name, loss in all_losses.items():
-        weight = 0.5 * weights.get("huber", 0.0) if name in references else weights.get(name, 0.0)
+        weight = (
+            0.5 * weights.get("w_fourvec", 0.0)
+            if name in references
+            else weights.get(name, 0.0)
+        )
         gradient = gradients[name]
         rows.append(
             {
@@ -589,13 +594,6 @@ def _angular_angles(inputs, w_fourvectors):
         valid_angles = booster.lep_theta_phi_in_w_rest(booster.particles[valid])[:4]
         angles[valid] = torch.stack(valid_angles, dim=-1)
     return angles, valid
-
-
-def _angular_features(inputs, w_fourvectors):
-    angles, valid = _angular_angles(inputs, w_fourvectors)
-    encoded = inputs.new_full((len(inputs), 6), torch.nan)
-    encoded[valid] = angular_mmd_features(angles[valid])
-    return encoded, valid
 
 
 def _slot_huber(prediction, truth, slot):
@@ -710,17 +708,23 @@ def expected_gradient_loss_names(checkpoint):
     saved = torch.load(checkpoint.path, map_location="cpu", weights_only=False)
     hyper_parameters = saved["hyper_parameters"]
     defaults = {
-        "huber": 1.0,
+        "w_fourvec": 1.0,
+        "higgs_fourvec": 0.0,
         "higgs_mass": 0.0,
-        "w_mass_huber": 0.0,
+        "w_mass": 0.0,
         "alpha_mmd": 0.0,
-        "mass_mmd": 0.0,
+        "w_mass_mmd": 0.0,
         "angular_mmd": 0.0,
         "dmet": 0.0,
     }
+    saved_weights = hyper_parameters.get("loss_weights", {})
+    unsupported = set(saved_weights) - defaults.keys()
+    if unsupported:
+        names = ", ".join(sorted(unsupported))
+        raise ValueError(f"unsupported loss_weights key(s): {names}")
     weights = {
         **defaults,
-        **hyper_parameters.get("loss_weights", {}),
+        **saved_weights,
     }
     effective_weights = dict(weights)
     ramp_epochs = hyper_parameters.get("angular_mmd_ramp_epochs", 0)

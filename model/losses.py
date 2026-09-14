@@ -1,3 +1,16 @@
+"""Loss terms for the physics-constrained W regressor.
+
+Two conventions keep the configured weights meaningful:
+
+* Pointwise terms are a mean absolute error in GeV. Every residual is reduced to
+  a GeV-valued quantity first, so equal weights mean equal cost per GeV and the
+  logged values read directly as physical errors.
+* MMD terms compare distributions through bounded, O(1) feature maps. The kernel
+  bandwidths are fixed absolute numbers, so a feature map that leaves its natural
+  units in place would put every pair far outside every bandwidth and collapse
+  the kernel.
+"""
+
 import math
 
 import torch
@@ -8,7 +21,6 @@ from physics.torchBoost import Booster
 TOR = 1e-16
 W_MASS_SCALE = 80.4
 H_MASS_SCALE = 125.0
-H_MASS2_FLOOR = 1e-2
 
 ##################
 # Shared helpers #
@@ -18,6 +30,16 @@ H_MASS2_FLOOR = 1e-2
 def invariant_mass2(fourvec):
     px, py, pz, E = fourvec[..., 0], fourvec[..., 1], fourvec[..., 2], fourvec[..., 3]
     return E**2 - (px**2 + py**2 + pz**2)
+
+
+def mass_residual(fourvec, target_mass2, reference_mass):
+    """Mass residual in GeV, linearized as (m^2 - m_target^2) / (2 m_ref).
+
+    This equals m - m_target to first order around the reference mass and takes no
+    square root, so it stays finite and differentiable when a prediction goes
+    spacelike instead of folding that case onto the timelike side.
+    """
+    return (invariant_mass2(fourvec) - target_mass2) / (2.0 * reference_mass)
 
 
 def _valid_kinematic_rows(x_batch, y_true, y_pred):
@@ -33,9 +55,17 @@ def _sanitized_rows(tensor, keep):
     return torch.where(keep.unsqueeze(-1), tensor, torch.zeros_like(tensor))
 
 
-def _mass_features(w_fourvecs):
-    w_pos, w_neg = w_fourvecs[..., :4], w_fourvecs[..., 4:8]
-    mass2 = torch.stack([invariant_mass2(w_pos), invariant_mass2(w_neg)], dim=-1)
+def mass_mmd_features(w_fourvecs):
+    """Bounded mass features for the fixed-bandwidth kernels.
+
+    asinh is monotonic in m^2 and defined for spacelike values, and dividing by
+    m_W^2 first maps the whole off-shell spectrum into an O(1) range that the
+    configured bandwidths can resolve.
+    """
+    mass2 = torch.stack(
+        [invariant_mass2(w_fourvecs[..., :4]), invariant_mass2(w_fourvecs[..., 4:8])],
+        dim=-1,
+    )
     return torch.asinh(mass2 / W_MASS_SCALE**2)
 
 
@@ -58,28 +88,56 @@ def angular_mmd_features(angles):
     )
 
 
-def _positive_median_pairwise_distance(values):
-    if values.shape[0] < 2:
-        return values.new_tensor(1.0)
-
-    distances = torch.pdist(values, p=2)
-    distances = distances[torch.isfinite(distances) & (distances > 0.0)]
-
-    if distances.numel() == 0:
-        return values.new_tensor(1.0)
-
-    return torch.median(distances)
+####################
+# Pointwise losses #
+####################
 
 
-def _validate_bandwidth_multipliers(values, name):
-    multipliers = tuple(float(value) for value in values)
+def w_fourvec_loss(y_true, y_pred):
+    """Mean L1 loss on raw W components in GeV."""
+    return F.l1_loss(y_pred, y_true[..., :8])
 
-    if not multipliers:
-        raise ValueError(f"{name} must contain at least one value")
-    if not all(math.isfinite(value) and value > 0.0 for value in multipliers):
-        raise ValueError(f"{name} values must be finite and positive")
 
-    return multipliers
+def higgs_fourvec_loss(y_true, y_pred):
+    """Mean L1 loss on the summed W four-vectors in GeV."""
+    higgs_true = y_true[..., :4] + y_true[..., 4:8]
+    higgs_pred = y_pred[..., :4] + y_pred[..., 4:8]
+    return F.l1_loss(higgs_pred, higgs_true)
+
+
+def w_mass_loss(y_true, y_pred):
+    """Mean L1 loss on the two W mass residuals in GeV.
+
+    The truth W mass reaches far off shell, so the fixed W scale is used as the
+    linearization reference instead of the per-event target, whose reciprocal
+    would blow up as that target approaches zero.
+    """
+    residuals = torch.stack(
+        [
+            mass_residual(y_pred[..., :4], y_true[..., 8] ** 2, W_MASS_SCALE),
+            mass_residual(y_pred[..., 4:8], y_true[..., 9] ** 2, W_MASS_SCALE),
+        ],
+        dim=-1,
+    )
+    return residuals.abs().mean()
+
+
+def higgs_mass_loss(y_pred, target_mass=H_MASS_SCALE):
+    """Mean L1 loss on the Higgs mass residual in GeV."""
+    higgs = y_pred[..., :4] + y_pred[..., 4:8]
+    return mass_residual(higgs, target_mass**2, target_mass).abs().mean()
+
+
+def dmet_loss(x_batch, y_true, dmet):
+    """Mean L1 loss on raw MET corrections in GeV."""
+    true_w0 = y_true[..., :4]
+    true_w1 = y_true[..., 4:8]
+    true_nu0 = true_w0 - x_batch[..., :4]
+    true_nu1 = true_w1 - x_batch[..., 4:8]
+    true_dinu_pxpy = true_nu0[..., :2] + true_nu1[..., :2]
+    dmet_target = x_batch[..., 16:18] - true_dinu_pxpy
+
+    return F.l1_loss(dmet, dmet_target)
 
 
 ##############
@@ -134,55 +192,6 @@ def compute_mmd(x, y, *, kernel="imq", bandwidths=(0.1, 1.0, 10.0), valid_mask=N
     return (mmd / len(bandwidths)).clamp_min(0.0)
 
 
-####################
-# Pointwise losses #
-####################
-
-
-def fourvec_huber_loss(y_true, y_pred):
-    """Mean Huber loss on raw W components in GeV, with delta=1 GeV."""
-    return F.huber_loss(y_pred, y_true[..., :8])
-
-
-def w_mass_huber_loss(y_true, y_pred):
-    w0_pred, w1_pred = y_pred[..., :4], y_pred[..., 4:8]
-    w0_true_mass, w1_true_mass = y_true[..., 8], y_true[..., 9]
-
-    w0_mass2 = invariant_mass2(w0_pred)
-    w1_mass2 = invariant_mass2(w1_pred)
-
-    w_lst_true = torch.stack([w0_true_mass**2, w1_true_mass**2], dim=-1) / W_MASS_SCALE**2
-    w_lst_pred = torch.stack([w0_mass2, w1_mass2], dim=-1) / W_MASS_SCALE**2
-
-    return F.huber_loss(w_lst_pred, w_lst_true)
-
-
-def higgs_mass_loss(y_pred, target_mass=H_MASS_SCALE):
-    """Mean Huber loss on signed Higgs mass in GeV, with delta=1 GeV."""
-    w0_4, w1_4 = y_pred[..., :4], y_pred[..., 4:8]
-
-    higgs_mass2 = invariant_mass2(w0_4 + w1_4)
-    abs_mass2 = higgs_mass2.abs()
-    higgs_mass = torch.where(
-        abs_mass2 < H_MASS2_FLOOR,
-        higgs_mass2 / math.sqrt(H_MASS2_FLOOR),
-        higgs_mass2.sign() * torch.sqrt(abs_mass2.clamp_min(H_MASS2_FLOOR)),
-    )
-    return F.huber_loss(higgs_mass, torch.full_like(higgs_mass, target_mass))
-
-
-def dmet_loss(x_batch, y_true, dmet):
-    """Mean Huber loss on raw MET corrections in GeV, with delta=1 GeV."""
-    true_w0 = y_true[..., :4]
-    true_w1 = y_true[..., 4:8]
-    true_nu0 = true_w0 - x_batch[..., :4]
-    true_nu1 = true_w1 - x_batch[..., 4:8]
-    true_dinu_pxpy = true_nu0[..., :2] + true_nu1[..., :2]
-    dmet_target = x_batch[..., 16:18] - true_dinu_pxpy
-
-    return F.huber_loss(dmet, dmet_target)
-
-
 def alpha_mmd(x_batch, y_true, y_pred, valid_mask=None, **mmd_kwargs):
     if valid_mask is None:
         valid_mask = _valid_kinematic_rows(x_batch, y_true, y_pred)
@@ -230,17 +239,16 @@ def alpha_mmd(x_batch, y_true, y_pred, valid_mask=None, **mmd_kwargs):
     )
 
 
-def mass_mmd(x_batch, y_true, y_pred, valid_mask=None, **mmd_kwargs):
+def w_mass_mmd(x_batch, y_true, y_pred, valid_mask=None, **mmd_kwargs):
     if valid_mask is None:
         valid_mask = _valid_kinematic_rows(x_batch, y_true, y_pred)
 
-    true_features = _mass_features(_sanitized_rows(y_true[..., :8], valid_mask))
-    pred_features = _mass_features(_sanitized_rows(y_pred, valid_mask))
+    true_features = mass_mmd_features(_sanitized_rows(y_true[..., :8], valid_mask))
+    pred_features = mass_mmd_features(_sanitized_rows(y_pred, valid_mask))
     return compute_mmd(pred_features, true_features, valid_mask=valid_mask, **mmd_kwargs)
 
 
-def angular_mmd(x_batch, y_true, y_pred, **mmd_kwargs):
-    """Compute MMD over lepton angles in the W rest frames."""
+def _angular_mmd_with_valid_mask(x_batch, y_true, y_pred, valid_mask, **mmd_kwargs):
     lep = x_batch[..., :8]
     with torch.no_grad():
         truth_valid, truth_angles = Booster(lep, y_true[..., :8]).lep_theta_phi_with_validity()
@@ -248,7 +256,7 @@ def angular_mmd(x_batch, y_true, y_pred, **mmd_kwargs):
 
     # The boost chain is only NaN-safe for finite inputs, and its gradient runs
     # before the weighting in compute_mmd, so clean the rows up front.
-    finite = torch.isfinite(lep).all(dim=-1) & torch.isfinite(y_pred).all(dim=-1)
+    finite = valid_mask
     pred_valid, pred_angles = Booster(
         _sanitized_rows(lep, finite),
         _sanitized_rows(y_pred, finite),
@@ -262,9 +270,44 @@ def angular_mmd(x_batch, y_true, y_pred, **mmd_kwargs):
     )
 
 
+def angular_mmd(x_batch, y_true, y_pred, **mmd_kwargs):
+    """Compute MMD over lepton angles in the W rest frames."""
+    return _angular_mmd_with_valid_mask(
+        x_batch,
+        y_true,
+        y_pred,
+        _valid_kinematic_rows(x_batch, y_true, y_pred),
+        **mmd_kwargs,
+    )
+
+
 ###################
 # Local MMD (WIP) #
 ###################
+
+
+def _positive_median_pairwise_distance(values):
+    if values.shape[0] < 2:
+        return values.new_tensor(1.0)
+
+    distances = torch.pdist(values, p=2)
+    distances = distances[torch.isfinite(distances) & (distances > 0.0)]
+
+    if distances.numel() == 0:
+        return values.new_tensor(1.0)
+
+    return torch.median(distances)
+
+
+def _validate_bandwidth_multipliers(values, name):
+    multipliers = tuple(float(value) for value in values)
+
+    if not multipliers:
+        raise ValueError(f"{name} must contain at least one value")
+    if not all(math.isfinite(value) and value > 0.0 for value in multipliers):
+        raise ValueError(f"{name} values must be finite and positive")
+
+    return multipliers
 
 
 def compute_local_mmd(

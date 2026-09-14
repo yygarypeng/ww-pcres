@@ -169,9 +169,6 @@ def _load_filtered_arrays(data_path, categories, max_events):
 
         met_px = category_data["met"]["px"]
         met_py = category_data["met"]["py"]
-        # truth met (ptvv)
-        # truth_ptvv_px = (category_data["truth_pos_w"]["px"] - category_data["pos_lep"]["px"]) + (category_data["truth_neg_w"]["px"] - category_data["neg_lep"]["px"])
-        # truth_ptvv_py = (category_data["truth_pos_w"]["py"] - category_data["pos_lep"]["py"]) + (category_data["truth_neg_w"]["py"] - category_data["neg_lep"]["py"])
 
         jet_px = category_data["jets"]["px"][:, 0:2]
         jet_py = category_data["jets"]["py"][:, 0:2]
@@ -201,10 +198,6 @@ def _load_filtered_arrays(data_path, categories, max_events):
                 col(jet_energy[:, 1]),  # 15
                 col(met_px),  # 16
                 col(met_py),  # 17
-                # high level features
-                # col(m_ll),  # 18
-                # col(deta_ll),  # 19
-                # col(dphi_ll),  # 20
             ],
             axis=-1,
         )

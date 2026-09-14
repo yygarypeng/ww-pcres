@@ -14,14 +14,15 @@ from data.preprocessing import (
 from model.layers import ResidualBlock, SelfAttentionBlock, Standardization, WBosonFourVectorLayer
 from model.losses import (
     H_MASS_SCALE,
+    _angular_mmd_with_valid_mask,
     _valid_kinematic_rows,
     alpha_mmd,
-    angular_mmd,
     dmet_loss,
-    fourvec_huber_loss,
+    higgs_fourvec_loss,
     higgs_mass_loss,
-    mass_mmd,
-    w_mass_huber_loss,
+    w_fourvec_loss,
+    w_mass_loss,
+    w_mass_mmd,
 )
 
 DEFAULT_MMD_CONFIG = {
@@ -123,42 +124,27 @@ class WBosonRegressor(nn.Module):
             nn.Linear(d_model * self.num_tokens, 512),
             nn.GELU(),
             nn.Dropout(decoder_dropout),
-            ResidualBlock(512, 512, hidden_dim=512, dropout=decoder_dropout),
-            ResidualBlock(512, 256, hidden_dim=512, dropout=decoder_dropout),
-            ResidualBlock(256, 256, hidden_dim=256, dropout=decoder_dropout),
-            ResidualBlock(256, 128, hidden_dim=256, dropout=decoder_dropout),
-            ResidualBlock(128, 128, hidden_dim=128, dropout=decoder_dropout),
-            ResidualBlock(128, 64, hidden_dim=128, dropout=decoder_dropout),
+            ResidualBlock(512, 256, hidden_dim=256, dropout=decoder_dropout),
+            ResidualBlock(256, 128, hidden_dim=128, dropout=decoder_dropout),
         )
-        # Latent regression head1 layout: [delta_dinu_px, delta_dinu_py, nu0_pz, nu1_pz]
-        # self.nu_mom_head = nn.Sequential(
-        #     nn.LayerNorm(128),
-        #     nn.Linear(128, 32),
-        #     nn.GELU(),
-        #     nn.Linear(32, 4),
-        # )
         # Latent regression head1 layout: [delta_dinu_px, delta_dinu_py]
         self.nu_tran_head = nn.Sequential(
-            nn.LayerNorm(64),
-            nn.Linear(64, 32),
+            nn.LayerNorm(128),
+            nn.Linear(128, 32),
             nn.GELU(),
             nn.Linear(32, 2),
         )
         # Latent regression head2 layout: [nu0_pz, nu1_pz]
         self.nu_long_head = nn.Sequential(
-            nn.LayerNorm(64),
-            nn.Linear(64, 64),
-            nn.GELU(),
-            nn.Linear(64, 32),
-            nn.GELU(),
-            nn.Linear(32, 32),
+            nn.LayerNorm(128),
+            nn.Linear(128, 32),
             nn.GELU(),
             nn.Linear(32, 2),
         )
         # Latent regression head3 layout: [dmet_x, dmet_y]
         self.nu_dmet_head = nn.Sequential(
-            nn.LayerNorm(64),
-            nn.Linear(64, 32),
+            nn.LayerNorm(128),
+            nn.Linear(128, 32),
             nn.GELU(),
             nn.Linear(32, 2),
         )
@@ -189,11 +175,9 @@ class WBosonRegressor(nn.Module):
         key_mask = torch.zeros((batch_size, self.num_tokens), dtype=torch.bool, device=x.device)
         key_mask[:, 2] = x[:, 8:12].abs().sum(dim=1) == 0
         key_mask[:, 3] = x[:, 12:16].abs().sum(dim=1) == 0
-        context = context.masked_fill(key_mask.unsqueeze(-1), 0.0)
 
         for refiner in self.sa_blocks:
             context = refiner(context, key_padding_mask=key_mask)  # [B, num_tokens, d_model]
-            context = context.masked_fill(key_mask.unsqueeze(-1), 0.0)
 
         context = self.context_norm(context)
         context = context.masked_fill(key_mask.unsqueeze(-1), 0.0)
@@ -205,7 +189,6 @@ class WBosonRegressor(nn.Module):
 
         h = self.global_feature_aggregation(x)
         h = self.trunk(h)
-        # nu_mom_params = self.nu_mom_head(h)
         nu_tran_params = self.nu_tran_head(h)
         nu_long_params = self.nu_long_head(h)
         dmet_params = self.nu_dmet_head(h)
@@ -283,15 +266,16 @@ class LightningWBoson(L.LightningModule):
         )  # give a base model structure for forward()
         defaults = {
             # main loss
-            "huber": 1.0,
+            "w_fourvec": 1.0,
+            "higgs_fourvec": 0.0,
             # mass losses
             "higgs_mass": 0.0,
-            "w_mass_huber": 0.0,
+            "w_mass": 0.0,
             # met loss
             "dmet": 0.0,
             # auxiliary losses
             "alpha_mmd": 0.0,
-            "mass_mmd": 0.0,
+            "w_mass_mmd": 0.0,
             "angular_mmd": 0.0,
         }
         unsupported = set(loss_weights or {}) - defaults.keys()
@@ -341,15 +325,21 @@ class LightningWBoson(L.LightningModule):
     def _compute_losses(self, x, y, y_pred, aux=None):
         losses = {}
         weights = self._effective_loss_weights()
-        if self._loss_enabled("huber", weights):
-            losses["huber"] = fourvec_huber_loss(y, y_pred)
+        if self._loss_enabled("w_fourvec", weights):
+            losses["w_fourvec"] = w_fourvec_loss(y, y_pred)
+        if self._loss_enabled("higgs_fourvec", weights):
+            losses["higgs_fourvec"] = higgs_fourvec_loss(y, y_pred)
         if self._loss_enabled("higgs_mass", weights):
             losses["higgs_mass"] = higgs_mass_loss(y_pred)
-        if self._loss_enabled("w_mass_huber", weights):
-            losses["w_mass_huber"] = w_mass_huber_loss(y, y_pred)
+        if self._loss_enabled("w_mass", weights):
+            losses["w_mass"] = w_mass_loss(y, y_pred)
         kinematic_valid = (
             _valid_kinematic_rows(x, y, y_pred)
-            if (self._loss_enabled("alpha_mmd", weights) or self._loss_enabled("mass_mmd", weights))
+            if (
+                self._loss_enabled("alpha_mmd", weights)
+                or self._loss_enabled("w_mass_mmd", weights)
+                or self._loss_enabled("angular_mmd", weights)
+            )
             else None
         )
         if self._loss_enabled("alpha_mmd", weights):
@@ -360,8 +350,8 @@ class LightningWBoson(L.LightningModule):
                 valid_mask=kinematic_valid,
                 **self._mmd_kwargs("alpha"),
             )
-        if self._loss_enabled("mass_mmd", weights):
-            losses["mass_mmd"] = mass_mmd(
+        if self._loss_enabled("w_mass_mmd", weights):
+            losses["w_mass_mmd"] = w_mass_mmd(
                 x,
                 y,
                 y_pred,
@@ -369,10 +359,11 @@ class LightningWBoson(L.LightningModule):
                 **self._mmd_kwargs("mass"),
             )
         if self._loss_enabled("angular_mmd", weights):
-            losses["angular_mmd"] = angular_mmd(
+            losses["angular_mmd"] = _angular_mmd_with_valid_mask(
                 x,
                 y,
                 y_pred,
+                valid_mask=kinematic_valid,
                 **self._mmd_kwargs("angular"),
             )
         if self._loss_enabled("dmet", weights):
@@ -411,7 +402,14 @@ class LightningWBoson(L.LightningModule):
             for param, grad in zip(parameters, grads)
         )
 
-    def _compute_loss_gradient_cosines(self, losses, total):
+    def _compute_loss_gradient_stats(self, losses, total):
+        """Per-loss gradient direction and magnitude, measured on one batch.
+
+        The cosines say whether a term pulls with or against the rest; the norm
+        says how hard it pulls. A term can hold a negligible share of the loss
+        value and still dominate the update, so both are needed to read the
+        balance.
+        """
         names = [name for name in self.adaptive_loss_names if name in losses]
         if not names:
             return {}
@@ -424,7 +422,7 @@ class LightningWBoson(L.LightningModule):
         total_grad = self._loss_grad_vector(total, parameters)
 
         effective_weights = self._effective_loss_weights()
-        cosines = {}
+        stats = {}
         for name in names:
             grad = self._loss_grad_vector(losses[name], parameters)
             cos_total = torch.nn.functional.cosine_similarity(grad, total_grad, dim=0, eps=1.0e-6)
@@ -433,21 +431,22 @@ class LightningWBoson(L.LightningModule):
             cos_rest = torch.nn.functional.cosine_similarity(grad, rest_grad, dim=0, eps=1.0e-6)
             if not torch.isfinite(cos_total).item() or not torch.isfinite(cos_rest).item():
                 return {}
-            cosines[name] = {
+            stats[name] = {
                 "total": cos_total.detach(),
                 "rest": cos_rest.detach(),
+                "norm": (weight * grad).norm().detach(),
             }
-        return cosines
+        return stats
 
-    def _update_adaptive_loss_weights(self, cosines):
-        if not cosines:
+    def _update_adaptive_loss_weights(self, stats):
+        if not stats:
             return
 
-        names = list(cosines)
+        names = list(stats)
         adaptive_loss_budget = sum(self.loss_weights.get(name, 0.0) for name in names)
         if adaptive_loss_budget <= 0.0:
             return
-        raw_weights = [torch.clamp(1.0 - cosines[name]["total"], min=0.0) for name in names]
+        raw_weights = [torch.clamp(1.0 - stats[name]["rest"], min=0.0) for name in names]
 
         raw_sum = torch.stack(raw_weights).sum()
         if not torch.isfinite(raw_sum).item() or raw_sum.item() <= 0.0:
@@ -481,24 +480,16 @@ class LightningWBoson(L.LightningModule):
                 on_epoch=not on_step,
             )
 
-    def _log_grad_cosines(self, cosines):
+    def _log_grad_stats(self, stats):
         if not self.log_loss_gradient_cosines:
             return
-        for name, cos in cosines.items():
-            self.log(
-                f"grad_cos/{name}__total",
-                cos["total"],
-                prog_bar=False,
-                on_step=False,
-                on_epoch=True,
-            )
-            self.log(
-                f"grad_cos/{name}__rest",
-                cos["rest"],
-                prog_bar=False,
-                on_step=False,
-                on_epoch=True,
-            )
+        for name, stat in stats.items():
+            for metric, value in (
+                (f"grad_cos/{name}__total", stat["total"]),
+                (f"grad_cos/{name}__rest", stat["rest"]),
+                (f"grad_norm/{name}", stat["norm"]),
+            ):
+                self.log(metric, value, prog_bar=False, on_step=False, on_epoch=True)
 
     def on_train_epoch_start(self):
         self._gradient_analysis_batch = None
@@ -512,10 +503,10 @@ class LightningWBoson(L.LightningModule):
             x = x.to(self.device)
             y = y.to(self.device)
             total, losses = self._compute_batch_losses(x, y)
-            cosines = self._compute_loss_gradient_cosines(losses, total)
+            stats = self._compute_loss_gradient_stats(losses, total)
         if self.adaptive_loss_weights:
-            self._update_adaptive_loss_weights(cosines)
-        self._log_grad_cosines(cosines)
+            self._update_adaptive_loss_weights(stats)
+        self._log_grad_stats(stats)
         self._gradient_analysis_batch = None
 
     def training_step(self, batch, batch_idx):
@@ -525,7 +516,8 @@ class LightningWBoson(L.LightningModule):
         if needs_gradient_analysis and self._gradient_analysis_batch is None:
             self._gradient_analysis_batch = (x.detach().cpu(), y.detach().cpu())
         self._log_losses("", losses, total)
-        self._log_loss_weights()
+        if self.adaptive_loss_weights or batch_idx == 0:
+            self._log_loss_weights()
         return total
 
     def _shared_step(self, batch, batch_idx, stage):
@@ -541,8 +533,11 @@ class LightningWBoson(L.LightningModule):
         _ = self._shared_step(batch, batch_idx, stage="test_")
 
     def configure_optimizers(self):
+        # fused=True collapses the per-parameter optimizer kernels into one launch;
+        # this step is CPU-dispatch-bound, so the launch count is what costs time.
         return torch.optim.AdamW(
             self.parameters(),
             lr=self.hparams.lr,
             weight_decay=self.hparams.weight_decay,
+            fused=torch.cuda.is_available(),
         )

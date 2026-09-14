@@ -1,29 +1,25 @@
-import inspect
 from unittest.mock import patch
 
 import numpy as np
 import pytest
 import torch
 
-from model import LightningWBoson
-from model import losses
+from model import LightningWBoson, losses
 from scripts import diagnose_angular_degradation as diagnostics
 from train import train
 
 
-def test_fourvec_raw_gev_values_and_gradients():
-    assert hasattr(losses, "fourvec_huber_loss")
+def test_w_fourvec_raw_gev_values_and_gradients():
     prediction = torch.tensor([[0.0, 0.5, -0.5, 1.0, -1.0, 2.0, -3.0, 4.0]], requires_grad=True)
-    loss = losses.fourvec_huber_loss(torch.zeros(1, 10), prediction)
-    torch.testing.assert_close(loss, torch.tensor(8.75 / 8.0))
+    loss = losses.w_fourvec_loss(torch.zeros(1, 10), prediction)
+    torch.testing.assert_close(loss, torch.tensor(1.5))
     loss.backward()
     torch.testing.assert_close(
-        prediction.grad, torch.tensor([[0.0, 0.5, -0.5, 1.0, -1.0, 1.0, -1.0, 1.0]]) / 8
+        prediction.grad, torch.tensor([[0.0, 1.0, -1.0, 1.0, -1.0, 1.0, -1.0, 1.0]]) / 8
     )
 
 
 def test_dmet_raw_gev_values_and_gradients():
-    assert "component_scales" not in inspect.signature(losses.dmet_loss).parameters
     features = torch.zeros(1, 21)
     features[:, :2] = torch.tensor([[1.0, 2.0]])
     features[:, 4:6] = torch.tensor([[-3.0, 4.0]])
@@ -33,33 +29,35 @@ def test_dmet_raw_gev_values_and_gradients():
     targets[:, 4:6] = torch.tensor([[8.0, 2.0]])
     prediction = torch.tensor([[4.5, 22.0]], requires_grad=True)
     loss = losses.dmet_loss(features, targets, prediction)
-    torch.testing.assert_close(loss, torch.tensor(1.3125))
+    torch.testing.assert_close(loss, torch.tensor(1.75))
     loss.backward()
-    torch.testing.assert_close(prediction.grad, torch.tensor([[0.25, -0.5]]))
+    torch.testing.assert_close(prediction.grad, torch.tensor([[0.5, -0.5]]))
 
 
-def test_mass_features_keep_signed_asinh_without_fitted_statistics():
-    assert "center" not in inspect.signature(losses.mass_mmd).parameters
+def test_w_mass_mmd_uses_bounded_mass_features():
+    """Raw m^2 would sit far outside every configured bandwidth and collapse the kernel."""
     truth = torch.tensor([[0.0, 0.0, 0.0, 80.4, 80.4, 0.0, 0.0, 0.0, 80.4, 0.0]])
     prediction = torch.tensor([[0.0, 0.0, 0.0, 40.2, 0.0, 0.0, 0.0, 80.4]], requires_grad=True)
-    expected_truth = torch.tensor([[0.881373587, -0.881373587]])
-    expected_prediction = torch.tensor([[0.247466462, 0.881373587]])
-    torch.testing.assert_close(losses._mass_features(truth[:, :8]), expected_truth)
-    torch.testing.assert_close(losses._mass_features(prediction), expected_prediction)
-    actual = losses.mass_mmd(torch.zeros(1, 21), truth, prediction, bandwidths=(0.5,))
-    expected = losses.compute_mmd(expected_prediction, expected_truth, bandwidths=(0.5,))
+    expected_truth = torch.tensor([[0.881374, -0.881374]])
+    expected_prediction = torch.tensor([[0.247466, 0.881374]])
+
+    torch.testing.assert_close(
+        losses.mass_mmd_features(truth[..., :8]), expected_truth, atol=1e-6, rtol=0.0
+    )
+
+    actual = losses.w_mass_mmd(torch.zeros(1, 21), truth, prediction, bandwidths=(1.0,))
+    expected = losses.compute_mmd(expected_prediction, expected_truth, bandwidths=(1.0,))
     torch.testing.assert_close(actual, expected)
     actual.backward()
     assert torch.isfinite(prediction.grad).all()
     assert prediction.grad.abs().sum() > 0
 
 
-def test_training_constructs_model_without_loss_statistics():
-    assert "w_fourvec_scales" not in inspect.signature(train.run_training).parameters
+def test_training_constructs_model_with_configured_loss_weights():
     cfg = {
         "parameters": {
             "learning_rate": 1e-4,
-            "loss_weights": {"huber": 2.0, "dmet": 3.0},
+            "loss_weights": {"w_fourvec": 2.0, "dmet": 3.0},
             "d_model": 8,
             "n_heads": 2,
             "epochs": 1,
@@ -85,16 +83,15 @@ def test_training_constructs_model_without_loss_statistics():
     total, terms = model._compute_losses(
         torch.zeros(1, 21), torch.zeros(1, 10), prediction, {"dmet": dmet}
     )
-    torch.testing.assert_close(terms["huber"], torch.tensor(1.5))
-    torch.testing.assert_close(terms["dmet"], torch.tensor(1.3125))
-    torch.testing.assert_close(total, torch.tensor(6.9375))
+    torch.testing.assert_close(terms["w_fourvec"], torch.tensor(2.0))
+    torch.testing.assert_close(terms["dmet"], torch.tensor(1.75))
+    torch.testing.assert_close(total, torch.tensor(9.25))
     total.backward()
     torch.testing.assert_close(prediction.grad, torch.full((1, 8), 0.25))
-    torch.testing.assert_close(dmet.grad, torch.tensor([[0.75, -1.5]]))
+    torch.testing.assert_close(dmet.grad, torch.tensor([[1.5, -1.5]]))
 
 
 def test_slot_diagnostic_uses_raw_huber_and_filters_invalid_rows():
-    assert hasattr(diagnostics, "_slot_huber")
     prediction = torch.tensor([[0.5, -1.0, 2.0, -3.0, 0.0, 0.0, 0.0, 0.0], [float("nan")] * 8])
     assert diagnostics._slot_huber(prediction, torch.zeros(2, 8), slice(0, 4)) == pytest.approx(
         1.15625

@@ -5,12 +5,12 @@ import numpy as np
 import pandas as pd
 from matplotlib import pyplot as plt
 
-from notebooks import plottingtool
 from notebooks.plottingtool import (
     LOSS_COMPONENTS,
     _metric_series,
     _prepare_loss_plot_data,
     plot_gradient_cosine_heatmaps,
+    plot_gradient_norms,
     plot_loss_curves,
 )
 
@@ -34,11 +34,11 @@ def sparse_metrics(epochs, component_values, weights):
 
 
 def test_static_data_keeps_epoch_zero_and_reconstructs_totals():
-    weights = {"huber": 2.0, "dmet": 3.0}
+    weights = {"w_fourvec": 2.0, "dmet": 3.0}
     df = sparse_metrics(
         epochs=[0, 1, 2],
         component_values={
-            "huber": ([3.0, 2.0, 1.0], [3.2, 1.8, 1.9]),
+            "w_fourvec": ([3.0, 2.0, 1.0], [3.2, 1.8, 1.9]),
             "dmet": ([2.0, 1.5, 1.0], [2.1, 1.4, 1.6]),
         },
         weights=weights,
@@ -54,9 +54,9 @@ def test_static_data_keeps_epoch_zero_and_reconstructs_totals():
 
     assert data["best_epoch"] == 1
     assert data["final_epoch"] == 2
-    assert data["raw"]["train"]["huber"].index.tolist() == [0, 1, 2]
+    assert data["raw"]["train"]["w_fourvec"].index.tolist() == [0, 1, 2]
     pd.testing.assert_series_equal(
-        data["contributions"]["train"]["huber"],
+        data["contributions"]["train"]["w_fourvec"],
         pd.Series([6.0, 4.0, 2.0], index=pd.Index([0, 1, 2], name="epoch")),
     )
     assert data["mismatches"] == []
@@ -64,11 +64,11 @@ def test_static_data_keeps_epoch_zero_and_reconstructs_totals():
 
 def test_partial_loss_weights_inherit_model_defaults():
     expected_weights = {
-        "huber": 1.0,
+        "w_fourvec": 1.0,
         "higgs_mass": 0.0,
         "alpha_mmd": 0.0,
-        "mass_mmd": 0.0,
-        "w_mass_huber": 0.0,
+        "w_mass_mmd": 0.0,
+        "w_mass": 0.0,
         "angular_mmd": 0.0,
         "dmet": 2.0,
     }
@@ -89,22 +89,22 @@ def test_logged_weights_override_static_config_and_use_last_duplicate():
     df = sparse_metrics(
         epochs=[0, 1, 2],
         component_values={
-            "huber": ([2.0, 2.0, 2.0], [3.0, 3.0, 3.0]),
+            "w_fourvec": ([2.0, 2.0, 2.0], [3.0, 3.0, 3.0]),
             "dmet": ([1.0, 1.0, 1.0], [1.0, 1.0, 1.0]),
         },
-        weights={"huber": 1.5, "dmet": 3.0},
+        weights={"w_fourvec": 1.5, "dmet": 3.0},
     )
     weight_rows = pd.DataFrame(
         [
-            {"epoch": 1, "loss_weight/huber": 1.5},
-            {"epoch": 1, "loss_weight/huber": 2.0},
-            {"epoch": 2, "loss_weight/huber": 4.0},
+            {"epoch": 1, "loss_weight/w_fourvec": 1.5},
+            {"epoch": 1, "loss_weight/w_fourvec": 2.0},
+            {"epoch": 2, "loss_weight/w_fourvec": 4.0},
         ]
     )
     df = pd.concat([df, weight_rows], ignore_index=True)
     cfg = {
         "parameters": {
-            "loss_weights": {"huber": 1.5, "dmet": 3.0},
+            "loss_weights": {"w_fourvec": 1.5, "dmet": 3.0},
             "adaptive_loss_weights": False,
         }
     }
@@ -112,8 +112,10 @@ def test_logged_weights_override_static_config_and_use_last_duplicate():
     data = _prepare_loss_plot_data(df, cfg)
 
     pd.testing.assert_series_equal(
-        data["weights"]["huber"],
-        pd.Series([1.5, 2.0, 4.0], index=pd.Index([0, 1, 2], name="epoch"), name="huber"),
+        data["weights"]["w_fourvec"],
+        pd.Series(
+            [1.5, 2.0, 4.0], index=pd.Index([0, 1, 2], name="epoch"), name="w_fourvec"
+        ),
     )
     pd.testing.assert_series_equal(
         data["weights"]["dmet"],
@@ -124,16 +126,16 @@ def test_logged_weights_override_static_config_and_use_last_duplicate():
 def test_sparse_logged_weights_seed_initial_value_then_forward_fill():
     df = sparse_metrics(
         epochs=[0, 1, 2, 3],
-        component_values={"huber": ([1.0] * 4, [1.0] * 4)},
-        weights={"huber": 2.0},
+        component_values={"w_fourvec": ([1.0] * 4, [1.0] * 4)},
+        weights={"w_fourvec": 2.0},
     )
     df = pd.concat(
         [
             df,
             pd.DataFrame(
                 [
-                    {"epoch": 1, "loss_weight/huber": 4.0},
-                    {"epoch": 3, "loss_weight/huber": 8.0},
+                    {"epoch": 1, "loss_weight/w_fourvec": 4.0},
+                    {"epoch": 3, "loss_weight/w_fourvec": 8.0},
                 ]
             ),
         ],
@@ -142,15 +144,15 @@ def test_sparse_logged_weights_seed_initial_value_then_forward_fill():
 
     data = _prepare_loss_plot_data(
         df,
-        {"parameters": {"loss_weights": {"huber": 2.0}}},
+        {"parameters": {"loss_weights": {"w_fourvec": 2.0}}},
     )
 
     pd.testing.assert_series_equal(
-        data["weights"]["huber"],
+        data["weights"]["w_fourvec"],
         pd.Series(
             [2.0, 4.0, 4.0, 8.0],
             index=pd.Index([0, 1, 2, 3], name="epoch"),
-            name="huber",
+            name="w_fourvec",
         ),
     )
 
@@ -159,46 +161,49 @@ def test_component_only_epoch_gets_forward_filled_effective_weight():
     df = pd.DataFrame(
         [
             {"epoch": 0, "loss": 5.0, "val_loss": 6.0},
-            {"epoch": 1, "loss": 4.0, "val_loss": 3.0, "loss_weight/huber": 2.0},
-            {"epoch": 2, "huber_loss": 4.0, "val_huber_loss": 5.0},
+            {"epoch": 1, "loss": 4.0, "val_loss": 3.0, "loss_weight/w_fourvec": 2.0},
+            {"epoch": 2, "w_fourvec_loss": 4.0, "val_w_fourvec_loss": 5.0},
         ]
     )
 
     data = _prepare_loss_plot_data(
         df,
-        {"parameters": {"loss_weights": {"huber": 1.0}}},
+        {"parameters": {"loss_weights": {"w_fourvec": 1.0}}},
     )
 
     pd.testing.assert_series_equal(
-        data["weights"]["huber"],
+        data["weights"]["w_fourvec"],
         pd.Series(
             [1.0, 2.0, 2.0],
             index=pd.Index([0, 1, 2], name="epoch"),
-            name="huber",
+            name="w_fourvec",
         ),
     )
-    assert data["contributions"]["train"]["huber"].loc[2] == 8.0
-    assert data["contributions"]["val"]["huber"].loc[2] == 10.0
+    assert data["contributions"]["train"]["w_fourvec"].loc[2] == 8.0
+    assert data["contributions"]["val"]["w_fourvec"].loc[2] == 10.0
 
 
 def test_metric_series_keeps_last_value_for_duplicate_epoch():
     df = pd.DataFrame(
         {
             "epoch": [1, 0, 1],
-            "huber_loss": [10.0, 2.0, 3.0],
+            "w_fourvec_loss": [10.0, 2.0, 3.0],
         }
     )
 
-    result = _metric_series(df, "huber_loss")
+    result = _metric_series(df, "w_fourvec_loss")
 
     pd.testing.assert_series_equal(
         result,
-        pd.Series([2.0, 3.0], index=pd.Index([0, 1], name="epoch"), name="huber_loss"),
+        pd.Series(
+            [2.0, 3.0], index=pd.Index([0, 1], name="epoch"), name="w_fourvec_loss"
+        ),
     )
 
 
 def test_plot_loss_curves_builds_two_slide_subplot_figures(tmp_path, capsys):
     component_names = [name for name, _ in LOSS_COMPONENTS]
+    assert "higgs_fourvec" in component_names
     weights = {name: index + 1.0 for index, name in enumerate(component_names)}
     df = sparse_metrics(
         epochs=[0, 1],
@@ -219,7 +224,7 @@ def test_plot_loss_curves_builds_two_slide_subplot_figures(tmp_path, capsys):
     diagnostics = plot_loss_curves(metrics_path, cfg)
 
     assert diagnostics["mismatches"] == ["val"]
-    assert [len(figure.axes) for figure in diagnostics["figures"]] == [8, 8]
+    assert [len(figure.axes) for figure in diagnostics["figures"]] == [9, 9]
     assert "summary" not in diagnostics
     assert "contribution_shares" not in diagnostics
 
@@ -227,11 +232,11 @@ def test_plot_loss_curves_builds_two_slide_subplot_figures(tmp_path, capsys):
     assert (
         raw_figure.axes[0].get_subplotspec().get_gridspec().nrows,
         raw_figure.axes[0].get_subplotspec().get_gridspec().ncols,
-    ) == (2, 4)
+    ) == (3, 3)
     assert (
         weighted_figure.axes[0].get_subplotspec().get_gridspec().nrows,
         weighted_figure.axes[0].get_subplotspec().get_gridspec().ncols,
-    ) == (2, 4)
+    ) == (3, 3)
 
     for index, (name, label) in enumerate(LOSS_COMPONENTS):
         raw_axis = raw_figure.axes[index]
@@ -267,20 +272,20 @@ def test_plot_loss_curves_builds_two_slide_subplot_figures(tmp_path, capsys):
     total_axis = raw_figure.axes[len(component_names)]
     total_lines = {line.get_label(): line for line in total_axis.lines}
     assert total_axis.get_title(loc="left") == "Logged Total"
-    np.testing.assert_array_equal(total_lines["total:train"].get_ydata(), [168.0, 140.0])
-    np.testing.assert_array_equal(total_lines["total:val"].get_ydata(), [183.0, 155.0])
+    np.testing.assert_array_equal(total_lines["total:train"].get_ydata(), [240.0, 204.0])
+    np.testing.assert_array_equal(total_lines["total:val"].get_ydata(), [259.0, 223.0])
     assert total_lines["total:train"].get_color() == "tab:blue"
     assert total_lines["total:val"].get_color() == "tab:orange"
     np.testing.assert_array_equal(total_lines["best_epoch"].get_xdata(), [1, 1])
-    assert raw_figure.axes[7].axison
-    assert not weighted_figure.axes[7].axison
+    assert raw_figure.axes[8].axison
+    assert not weighted_figure.axes[8].axison
     assert len(raw_figure.legends) == 0
     assert len(weighted_figure.legends) == 0
-    assert raw_figure.axes[3].get_legend() is not None
-    assert weighted_figure.axes[3].get_legend() is not None
+    assert raw_figure.axes[2].get_legend() is not None
+    assert weighted_figure.axes[2].get_legend() is not None
     for figure, legend_index in (
-        (raw_figure, 3),
-        (weighted_figure, 3),
+        (raw_figure, 2),
+        (weighted_figure, 2),
     ):
         figure.canvas.draw()
         renderer = figure.canvas.get_renderer()
@@ -296,15 +301,9 @@ def test_plot_loss_curves_builds_two_slide_subplot_figures(tmp_path, capsys):
     output = capsys.readouterr().out
     normalized_output = " ".join(output.split())
     assert "component train val weighted_train weighted_val" in normalized_output
-    assert r"$\Delta \mathrm{MET}$ 7 7.5 49 52.5" in normalized_output
+    assert r"$\Delta \mathrm{MET}$ 8 8.5 64 68" in normalized_output
     assert "could not be reconstructed exactly for: validation" in output
     plt.close("all")
-
-
-def test_removed_loss_dashboard_helpers_are_absent():
-    assert not hasattr(plottingtool, "_contribution_shares")
-    assert not hasattr(plottingtool, "_loss_summary")
-    assert not hasattr(plottingtool, "Normalize")
 
 
 def test_plot_loss_curves_reports_missing_csv(tmp_path, capsys):
@@ -333,9 +332,9 @@ def test_plot_loss_curves_reports_when_all_components_are_unavailable(tmp_path, 
     diagnostics = plot_loss_curves(metrics_path, {"parameters": {}})
 
     raw_figure, weighted_figure = diagnostics["figures"]
-    assert [len(figure.axes) for figure in diagnostics["figures"]] == [8, 8]
-    assert all(not axis.axison for axis in raw_figure.axes[:7])
-    assert raw_figure.axes[7].axison
+    assert [len(figure.axes) for figure in diagnostics["figures"]] == [9, 9]
+    assert all(not axis.axison for axis in raw_figure.axes[:8])
+    assert raw_figure.axes[8].axison
     assert all(not axis.axison for axis in weighted_figure.axes)
     assert "summary" not in diagnostics
     assert "contribution_shares" not in diagnostics
@@ -350,3 +349,51 @@ def test_plot_gradient_cosine_heatmaps_reports_missing_columns(capsys):
     plot_gradient_cosine_heatmaps(df)
 
     assert "No grad_cos columns found" in capsys.readouterr().out
+
+
+def test_plot_gradient_norms_reports_missing_columns(capsys):
+    df = pd.DataFrame({"epoch": [0], "loss": [1.0]})
+
+    assert plot_gradient_norms(df) is None
+    assert "No populated grad_norm columns found" in capsys.readouterr().out
+
+
+def test_plot_gradient_norms_shows_magnitude_and_share(capsys):
+    df = pd.DataFrame(
+        {
+            "epoch": [0, 1, 2],
+            "grad_norm/angular_mmd": [0.03, 0.02, 0.01],
+            "grad_norm/higgs_mass": [0.01, 0.02, 0.03],
+        }
+    )
+
+    fig = plot_gradient_norms(df)
+
+    magnitude, budget = fig.axes
+    assert magnitude.get_yscale() == "log"
+    assert magnitude.get_ylabel() == r"$\|w\,\nabla_{\theta} L\|$"
+    assert budget.get_ylim() == (0.0, 1.0)
+
+    lines = {line.get_label(): line for line in magnitude.get_lines()}
+    assert set(lines) == {"angular_mmd", "higgs_mass"}
+    np.testing.assert_allclose(lines["higgs_mass"].get_ydata(), [0.01, 0.02, 0.03])
+
+    # The same term keeps its colour in both panels, and the shares fill the axis.
+    stack_colors = [tuple(patch.get_facecolor()[0][:3]) for patch in budget.collections]
+    line_colors = [tuple(lines[name].get_color()[:3]) for name in ("angular_mmd", "higgs_mass")]
+    assert stack_colors == line_colors
+
+    out = capsys.readouterr().out
+    assert "Gradient budget at epoch 2" in out
+    assert "75.0%" in out  # higgs_mass 0.03 of 0.04 at the last epoch
+    plt.close("all")
+
+
+def test_plot_gradient_norms_survives_a_single_logged_epoch(recwarn):
+    df = pd.DataFrame({"epoch": [0], "grad_norm/higgs_mass": [1.0], "grad_norm/w_mass": [3.0]})
+
+    fig = plot_gradient_norms(df)
+
+    assert fig is not None
+    assert not [w for w in recwarn if "identical low and high xlims" in str(w.message)]
+    plt.close("all")

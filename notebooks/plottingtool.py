@@ -1,6 +1,7 @@
 import mplhep as hep
 import numpy as np
 import pandas as pd
+from matplotlib import colormaps
 from matplotlib import pyplot as plt
 from matplotlib.colors import LogNorm
 from matplotlib.lines import Line2D
@@ -448,21 +449,23 @@ def plot_2d_res_hist(
 
 
 LOSS_COMPONENTS = [
-    ("huber", r"$W$ 4-vec Huber"),
-    ("higgs_mass", r"$m_H$ Huber"),
+    ("w_fourvec", r"$W$ 4-vec L1"),
+    ("higgs_fourvec", r"$H$ 4-vec L1"),
+    ("higgs_mass", r"$m_H$ L1"),
     ("alpha_mmd", r"$\alpha$ MMD"),
-    ("mass_mmd", r"Joint $m_W$ MMD"),
-    ("w_mass_huber", r"$m_W$ Huber"),
+    ("w_mass_mmd", r"Joint $m_W$ MMD"),
+    ("w_mass", r"$m_W$ L1"),
     ("angular_mmd", "Angular MMD"),
     ("dmet", r"$\Delta \mathrm{MET}$"),
 ]
 
 DEFAULT_LOSS_WEIGHTS = {
-    "huber": 1.0,
+    "w_fourvec": 1.0,
+    "higgs_fourvec": 0.0,
     "higgs_mass": 0.0,
     "alpha_mmd": 0.0,
-    "mass_mmd": 0.0,
-    "w_mass_huber": 0.0,
+    "w_mass_mmd": 0.0,
+    "w_mass": 0.0,
     "angular_mmd": 0.0,
     "dmet": 0.0,
 }
@@ -616,9 +619,9 @@ def plot_loss_curves(metrics_path, cfg):
         )
     print(f"Best loss values at best epoch {best_epoch} (min val_loss):")
     print(pd.DataFrame(rows).to_string(index=False))
-    fig_raw, raw_axes = plt.subplots(2, 4, figsize=(16, 8.5), sharex=True, layout="constrained")
+    fig_raw, raw_axes = plt.subplots(3, 3, figsize=(14, 11), sharex=True, layout="constrained")
     fig_weighted, weighted_axes = plt.subplots(
-        2, 4, figsize=(16, 8.5), sharex=True, layout="constrained"
+        3, 3, figsize=(14, 11), sharex=True, layout="constrained"
     )
     raw_axes = raw_axes.ravel()
     weighted_axes = weighted_axes.ravel()
@@ -847,243 +850,71 @@ def plot_gradient_cosine_heatmaps(df):
     )
 
 
-# ---------------------------------------------------------------------------
-# Disabled diagnostics moved from notebooks/visualize.ipynb.
-# Kept as comments: re-enable by turning the blocks below into live functions.
-# ---------------------------------------------------------------------------
+def plot_gradient_norms(df):
+    """Plot how hard each loss term pulls: absolute magnitude and share of the total.
 
-# ===== input-gaussianization (notebook cell) =====
-# # Diagnose the production neural-input representation without changing raw inputs.
-# from data.preprocessing import neural_input_features_numpy
-# from matplotlib.lines import Line2D
-# from scipy import stats as scipy_stats
+    The cosine panels show gradient direction; these show magnitude. A term can
+    hold a negligible share of the loss value and still dominate the update, so
+    the share panel is the one that says who is actually steering training.
+    """
+    norm_cols = sorted(col for col in df.columns if col.startswith("grad_norm/"))
+    if norm_cols:
+        populated = df[norm_cols].notna().sum()
+        norm_cols = sorted(populated[populated > 0].index)
+    if not norm_cols:
+        print(
+            "No populated grad_norm columns found. Enable parameters.log_loss_gradient_cosines "
+            "and rerun training with the current logging implementation."
+        )
+        return
 
+    df_norm = df[df[norm_cols].notna().any(axis=1)]
+    x_col = "epoch" if "epoch" in df_norm.columns else "step"
+    norms = df_norm.set_index(x_col)[norm_cols].ffill()
+    norms.columns = [col.replace("grad_norm/", "") for col in norms.columns]
+    shares = norms.div(norms.sum(axis=1), axis=0)
 
-# feature_names = [
-#     "lep+ px", "lep+ py", "lep+ pz", "lep+ log1p(E)",
-#     "lep- px", "lep- py", "lep- pz", "lep- log1p(E)",
-#     "jet0 px", "jet0 py", "jet0 pz", "jet0 log1p(E)",
-#     "jet1 px", "jet1 py", "jet1 pz", "jet1 log1p(E)",
-#     "MET px", "MET py", "m_ll", "deta_ll",
-#     "dphi_ll",
-# ]
+    # One colour per term in both panels, paired with a dash pattern so the lines
+    # stay separable without relying on hue.
+    palette = colormaps["tab10"].colors
+    dashes = ("-", "--", "-.", ":")
+    styles = {
+        name: (palette[index % len(palette)], dashes[index % len(dashes)])
+        for index, name in enumerate(norms.columns)
+    }
 
-# test_candidate = neural_input_features_numpy(train_features)
-# checkpoint_mean = model.model.norm.mean.detach().cpu().numpy()
-# checkpoint_std = model.model.norm.std.detach().cpu().numpy()
-# # if checkpoint_mean.shape != (21,) or checkpoint_std.shape != (21,):
-#     # raise ValueError("Checkpoint normalization must contain 21 means and scales")
-# if not np.isfinite(checkpoint_mean).all() or not np.isfinite(checkpoint_std).all():
-#     raise ValueError("Checkpoint normalization statistics must be finite")
-# if np.any(checkpoint_std <= 0.0):
-#     raise ValueError("Checkpoint normalization scales must be positive")
-# features_z = (test_candidate - checkpoint_mean) / checkpoint_std
+    fig, axes = plt.subplots(1, 2, figsize=(16, 6), constrained_layout=True)
+    for name in norms.columns:
+        color, dash = styles[name]
+        axes[0].plot(norms.index, norms[name], label=name, color=color, linestyle=dash)
+    axes[0].set_yscale("log")
+    axes[0].set_xlabel(x_col.capitalize())
+    axes[0].set_ylabel(r"$\|w\,\nabla_{\theta} L\|$")
+    axes[0].set_title("Weighted gradient magnitude per loss term")
+    axes[0].legend(fontsize=8)
 
-# # if features_z.shape[1] != 21 or not np.isfinite(features_z).all():
-# #     raise ValueError("Candidate standardized features must be finite with 21 columns")
+    axes[1].stackplot(
+        shares.index,
+        *(shares[name] for name in shares.columns),
+        labels=list(shares.columns),
+        colors=[styles[name][0] for name in shares.columns],
+    )
+    if shares.index.min() < shares.index.max():
+        axes[1].set_xlim(shares.index.min(), shares.index.max())
+    axes[1].set_ylim(0.0, 1.0)
+    axes[1].set_xlabel(x_col.capitalize())
+    axes[1].set_ylabel("Share of total gradient")
+    axes[1].set_title("Gradient budget: which term steers the update")
+    # Outside the axes and top-down, so the legend matches the stacking order
+    # instead of covering the bands it describes.
+    handles, labels = axes[1].get_legend_handles_labels()
+    axes[1].legend(
+        handles[::-1], labels[::-1], fontsize=8, loc="center left", bbox_to_anchor=(1.01, 0.5)
+    )
+    plt.show()
 
-# z_limits = (-6, 6)
-# z_edges = np.linspace(*z_limits, 61)
-# all_events = np.ones(len(train_features), dtype=bool)
-# jet0_padding = (train_features[:, 8:12] == 0.0).all(axis=1)
-# jet1_padding = (train_features[:, 12:16] == 0.0).all(axis=1)
-# jet0_present = ~jet0_padding
-# jet1_present = ~jet1_padding
-# jet_present_masks = {**{i: jet0_present for i in range(8, 12)},
-#                      **{i: jet1_present for i in range(12, 16)}}
-# jet_padding_masks = {**{i: jet0_padding for i in range(8, 12)},
-#                      **{i: jet1_padding for i in range(12, 16)}}
-# fig, axes = plt.subplots(4, 6, figsize=(20, 12), constrained_layout=True)
-
-# summary_rows = []
-# for ax in axes.flat[len(feature_names):]:
-#     fig.delaxes(ax)
-# for i, ax in enumerate(axes.flat[:len(feature_names)]):
-#     present_mask = jet_present_masks.get(i, all_events)
-#     padding_mask = jet_padding_masks.get(i)
-#     values = features_z[present_mask, i]
-#     plot_limits = z_limits
-#     if padding_mask is not None:
-#         padding_location = -checkpoint_mean[i] / checkpoint_std[i]
-#         padding_margin = (z_edges[1] - z_edges[0]) / 2.0
-#         plot_limits = (min(z_limits[0], padding_location - padding_margin),
-#                        max(z_limits[1], padding_location + padding_margin))
-#     plot_edges = np.linspace(*plot_limits, len(z_edges))
-#     if len(values):
-#         event_weights = np.full(len(values), 1.0 / len(train_features))
-#         present_label = "Present fraction / bin" if padding_mask is not None else "Test fraction / bin"
-#         ax.hist(values, bins=plot_edges, weights=event_weights, histtype="step",
-#                 linewidth=1.5, color="black", label=present_label)
-#     if padding_mask is not None:
-#         padding_values = features_z[padding_mask, i]
-#         if len(padding_values):
-#             padding_weights = np.full(len(padding_values), 1.0 / len(train_features))
-#             ax.hist(padding_values, bins=plot_edges, weights=padding_weights, histtype="step",
-#                     linewidth=1.5, color="tab:blue", label="Padding fraction / bin")
-#     if len(values):
-#         distribution_summary = {
-#             "z_mean": values.mean(),
-#             "z_std": values.std(),
-#             "skew": scipy_stats.skew(values),
-#             "kurtosis": scipy_stats.kurtosis(values),
-#             "|z|>2 [%]": 100.0 * np.mean(np.abs(values) > 2),
-#             "KS p-value": scipy_stats.kstest(values, "norm").pvalue,
-#         }
-#     else:
-#         distribution_summary = {
-#             metric: np.nan
-#             for metric in ("z_mean", "z_std", "skew", "kurtosis", "|z|>2 [%]", "KS p-value")
-#         }
-#     bin_width = plot_edges[1] - plot_edges[0]
-#     reference_scale = len(values) / len(train_features) if padding_mask is not None else 1.0
-#     reference_grid = np.linspace(*plot_limits, 400)
-#     ax.plot(reference_grid, scipy_stats.norm.pdf(reference_grid) * bin_width * reference_scale,
-#             color="tab:red", linewidth=1.8,
-#             label=r"$\mathcal{N}(0,1)$")
-#     ax.set_xlim(plot_limits)
-#     ax.set_xlabel("checkpoint z", fontsize=8)
-#     ax.set_yscale("log")
-#     ax.set_title(f"[{i}] {feature_names[i]}", fontsize=11)
-#     ax.tick_params(axis="both", labelsize=8)
-#     n_present = len(values)
-#     n_padding = np.count_nonzero(padding_mask) if padding_mask is not None else 0
-#     summary_rows.append({
-#         "feature": feature_names[i],
-#         "n_events": n_present,
-#         "n_present": n_present,
-#         "n_padding": n_padding,
-#         "padding_fraction": n_padding / len(train_features),
-#         **distribution_summary,
-#         "checkpoint scale": checkpoint_std[i],
-#     })
-
-# legend_handles = [
-#     Line2D([], [], color="black", linewidth=1.5, label="Present fraction / bin"),
-#     Line2D([], [], color="tab:blue", linewidth=1.5, label="Padding fraction / bin"),
-#     Line2D([], [], color="tab:red", linewidth=1.8, label=r"$\mathcal{N}(0,1)$"),
-# ]
-# fig.legend(handles=legend_handles, loc="outside upper right", frameon=False)
-# fig.suptitle("Checkpoint-standardized test inputs", fontsize=16,
-#              fontweight="semibold")
-# plt.show()
-
-# summary_df = pd.DataFrame(summary_rows).set_index("feature")
-# well_conditioned = (
-#     (summary_df["z_mean"].abs() < 0.05)
-#     & ((summary_df["z_std"] - 1.0).abs() < 0.1)
-# )
-# print(f"{well_conditioned.sum()} / {len(summary_df)} features are well-conditioned "
-#       f"(|z mean| < 0.05 and |z std - 1| < 0.1).")
-# display(summary_df.round(4))
-
-
-# ===== truth-angle-feature-correlation (notebook cell) =====
-# # Truth-angle conditioning feature diagnostic
-# aligned_inputs = np.asarray(train_features)[np.asarray(angular_valid, dtype=bool)]
-# aligned_truth_angles = true_ang.detach().cpu().numpy() if hasattr(true_ang, "detach") else np.asarray(true_ang)
-# if aligned_inputs.ndim != 2 or aligned_inputs.shape[1] != 21:
-# #     raise ValueError(f"Expected raw inputs with shape (events, 21), got {aligned_inputs.shape}")
-# # if aligned_truth_angles.ndim != 2 or aligned_truth_angles.shape[1] != 8:
-#     raise ValueError(f"Expected truth angles with shape (events, 8), got {aligned_truth_angles.shape}")
-# if len(aligned_inputs) != len(aligned_truth_angles):
-#     raise ValueError("Aligned reconstructed features and truth angles have different row counts")
-
-# def _wrapped_delta_phi(phi_a, phi_b):
-#     return np.arctan2(np.sin(phi_a - phi_b), np.cos(phi_a - phi_b))
-
-# def _pt_eta_phi(px, py, pz):
-#     pt_value = np.hypot(px, py)
-#     eta_value = np.arcsinh(np.divide(pz, pt_value, out=np.full_like(pt_value, np.nan), where=pt_value > 0))
-#     return pt_value, eta_value, np.arctan2(py, px)
-
-# lplus_px, lplus_py, lplus_pz, lplus_energy = aligned_inputs[:, 0:4].T
-# lminus_px, lminus_py, lminus_pz, lminus_energy = aligned_inputs[:, 4:8].T
-# met_px, met_py = aligned_inputs[:, 16:18].T
-# pt_lplus, eta_lplus, phi_lplus = _pt_eta_phi(lplus_px, lplus_py, lplus_pz)
-# pt_lminus, eta_lminus, phi_lminus = _pt_eta_phi(lminus_px, lminus_py, lminus_pz)
-# met, _, phi_met = _pt_eta_phi(met_px, met_py, np.zeros_like(met_px))
-# ll_px, ll_py = lplus_px + lminus_px, lplus_py + lminus_py
-# ll_pz, ll_energy = lplus_pz + lminus_pz, lplus_energy + lminus_energy
-# pt_ll, eta_ll, phi_ll = _pt_eta_phi(ll_px, ll_py, ll_pz)
-# m_ll_sq = ll_energy**2 - ll_px**2 - ll_py**2 - ll_pz**2
-# m_ll = np.where(m_ll_sq >= -1.0e-6, np.sqrt(np.clip(m_ll_sq, 0.0, None)), np.nan)
-# deta_ll = eta_lplus - eta_lminus
-# dphi_ll = _wrapped_delta_phi(phi_lplus, phi_lminus)
-# dphi_lplus_met = _wrapped_delta_phi(phi_lplus, phi_met)
-# dphi_lminus_met = _wrapped_delta_phi(phi_lminus, phi_met)
-# dphi_ll_met = _wrapped_delta_phi(phi_ll, phi_met)
-# dR_ll = np.hypot(deta_ll, dphi_ll)
-# mT_lplus_met = np.sqrt(np.clip(2.0 * pt_lplus * met * (1.0 - np.cos(dphi_lplus_met)), 0.0, None))
-# mT_lminus_met = np.sqrt(np.clip(2.0 * pt_lminus * met * (1.0 - np.cos(dphi_lminus_met)), 0.0, None))
-# et_ll = np.sqrt(m_ll**2 + pt_ll**2)
-# mT_ll_met = np.sqrt(np.clip((et_ll + met)**2 - (ll_px + met_px)**2 - (ll_py + met_py)**2, 0.0, None))
-
-# # Values paired with True indicate periodic quantities requiring circular treatment.
-# hl_angle_features = {
-#     "pt_lplus": (pt_lplus, False), "eta_lplus": (eta_lplus, False), "phi_lplus": (phi_lplus, True),
-#     "pt_lminus": (pt_lminus, False), "eta_lminus": (eta_lminus, False), "phi_lminus": (phi_lminus, True),
-#     "MET": (met, False), "phi_MET": (phi_met, True),
-#     "pt_ll": (pt_ll, False), "eta_ll": (eta_ll, False), "phi_ll": (phi_ll, True),
-#     "m_ll": (m_ll, False), "deta_ll": (deta_ll, False), "dphi_ll": (dphi_ll, True),
-#     "dphi_lplus_MET": (dphi_lplus_met, True), "dphi_lminus_MET": (dphi_lminus_met, True),
-#     "dphi_ll_MET": (dphi_ll_met, True),
-#     # "mT_lplus_met": (mT_lplus_met, False), "dR_ll": (dR_ll, False),
-#     # "mT_lminus_met": (mT_lminus_met, False), "mT_ll_met": (mT_ll_met, False),
-# }
-# truth_angle_targets = {
-#     "theta+": (aligned_truth_angles[:, 0], False), "phi+": (aligned_truth_angles[:, 1], True),
-#     "theta-": (aligned_truth_angles[:, 2], False), "phi-": (aligned_truth_angles[:, 3], True),
-#     "sum theta": (aligned_truth_angles[:, 4], False), "diff theta": (aligned_truth_angles[:, 5], False),
-#     "sum phi": (aligned_truth_angles[:, 6], True), "diff phi": (aligned_truth_angles[:, 7], True),
-# }
-
-# def _association_strength(feature, target, feature_periodic=False, target_periodic=False):
-#     feature, target = np.asarray(feature), np.asarray(target)
-#     finite = np.isfinite(feature) & np.isfinite(target)
-#     if finite.sum() < 3:
-#         return np.nan
-#     feature, target = feature[finite], target[finite]
-#     feature_components = np.column_stack((np.sin(feature), np.cos(feature))) if feature_periodic else feature[:, None]
-#     target_components = np.column_stack((np.sin(target), np.cos(target))) if target_periodic else target[:, None]
-#     feature_components = feature_components[:, np.std(feature_components, axis=0) > np.finfo(float).eps]
-#     target_components = target_components[:, np.std(target_components, axis=0) > np.finfo(float).eps]
-#     if feature_components.shape[1] == 0 or target_components.shape[1] == 0:
-#         return np.nan
-#     if len(feature) <= feature_components.shape[1] + target_components.shape[1]:
-#         return np.nan
-#     joined = np.column_stack((feature_components, target_components))
-#     correlation = np.corrcoef(joined, rowvar=False)
-#     feature_dim = feature_components.shape[1]
-#     cross = correlation[:feature_dim, feature_dim:]
-#     if not feature_periodic and not target_periodic:
-#         return float(np.clip(cross[0, 0], -1.0, 1.0))
-#     feature_corr = correlation[:feature_dim, :feature_dim]
-#     target_corr = correlation[feature_dim:, feature_dim:]
-#     canonical_sq = np.linalg.eigvals(np.linalg.pinv(feature_corr) @ cross @ np.linalg.pinv(target_corr) @ cross.T)
-#     return float(np.sqrt(np.clip(np.max(np.real(canonical_sq)), 0.0, 1.0)))
-
-# feature_target_association = np.array([
-#     [_association_strength(feature, target, feature_periodic, target_periodic)
-#      for target, target_periodic in truth_angle_targets.values()]
-#     for feature, feature_periodic in hl_angle_features.values()
-# ])
-# feature_target_association_fig, ax = plt.subplots(figsize=(12, 12), constrained_layout=True)
-# image = ax.imshow(feature_target_association, cmap="coolwarm", vmin=-1.0, vmax=1.0, aspect="equal")
-# ax.set_xticks(range(len(truth_angle_targets)), labels=list(truth_angle_targets), rotation=35, ha="right")
-# ax.set_yticks(range(len(hl_angle_features)), labels=list(hl_angle_features))
-# # ax.set_title("Reconstructed feature association with truth rest-frame angles")
-# for row in range(feature_target_association.shape[0]):
-#     for column in range(feature_target_association.shape[1]):
-#         value = feature_target_association[row, column]
-#         ax.text(column, row, "--" if np.isnan(value) else f"{value:.2f}", ha="center", va="center", fontsize=10, color="white" if np.isfinite(value) and abs(value) > 0.55 else "black")
-# # feature_target_association_fig.colorbar(image, ax=ax, label="Association coefficient")
-# # feature_target_association_fig.text(0.5, 0.005, "Signed Pearson r for linear-linear cells; nonnegative circular-aware strength when either quantity is phi-like.", ha="center", fontsize=9)
-# plt.show()
-
-# print("Strongest reconstructed features by truth target:")
-# feature_names = list(hl_angle_features)
-# for column, target_name in enumerate(truth_angle_targets):
-#     values = feature_target_association[:, column]
-#     ranked = [index for index in np.argsort(np.nan_to_num(np.abs(values), nan=-1.0))[::-1] if np.isfinite(values[index])][:5]
-#     summary = ", ".join(f"{feature_names[index]} ({values[index]:+.3f})" for index in ranked)
-#     print(f"  {target_name:>10}: {summary}")
+    latest = shares.iloc[-1].sort_values(ascending=False)
+    print(f"Gradient budget at {x_col} {shares.index[-1]}:")
+    for name, share in latest.items():
+        print(f"  {name:>15}: {100 * share:5.1f}%   |w*grad| = {norms.iloc[-1][name]:.6g}")
+    return fig

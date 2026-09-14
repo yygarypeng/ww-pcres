@@ -116,10 +116,18 @@ class Booster(nn.Module):
         higgs = w0 + w1
         if higgs_ok is None:
             higgs_ok = self._has_rest_frame(higgs)
-        w0_h = self._boost_to_rest(w0, higgs, higgs_ok)
-        lep0_h = self._boost_to_rest(lep0, higgs, higgs_ok)
-        w1_h = self._boost_to_rest(w1, higgs, higgs_ok)
-        lep1_h = self._boost_to_rest(lep1, higgs, higgs_ok)
+        valid = higgs_ok.unsqueeze(-1)
+        energy = torch.where(valid, higgs[..., 3:4], torch.ones_like(higgs[..., 3:4]))
+        beta = torch.where(
+            valid,
+            higgs[..., 0:3] / energy,
+            torch.zeros_like(higgs[..., 0:3]),
+        )
+        boost_parameters = self._boost_parameters(-beta, w0)
+        w0_h = self._apply_boost(w0, boost_parameters)
+        lep0_h = self._apply_boost(lep0, boost_parameters)
+        w1_h = self._apply_boost(w1, boost_parameters)
+        lep1_h = self._apply_boost(lep1, boost_parameters)
         return particles, higgs, w0_h, lep0_h, w1_h, lep1_h
 
     def _valid_rest_frame_mask(self, particles, higgs_ok, w0_ok, w1_ok, w1_h):
@@ -147,28 +155,35 @@ class Booster(nn.Module):
     # Boost functions #
     ###################
 
-    def _boost(self, p4, beta):
-        """
-        Lorentz boost with the same sign convention as ROOT TLorentzVector.Boost.
-        https://root.cern.ch/doc/v632/classTLorentzVector.html
-        """
-        p3 = p4[..., 0:3]
-        e = p4[..., 3:4]
-
-        eps = self._eps(p4)
+    def _boost_parameters(self, beta, like):
+        eps = self._eps(like)
         beta = torch.nan_to_num(beta, nan=0.0, posinf=0.0, neginf=0.0)
         beta2 = torch.sum(beta * beta, dim=-1, keepdim=True)
         valid_beta = beta2 < 1.0  # cannot exceed the speed of light
         beta = torch.where(valid_beta, beta, torch.zeros_like(beta))
         beta2 = torch.where(valid_beta, beta2, torch.zeros_like(beta2))
         gamma = torch.rsqrt((1.0 - beta2).clamp_min(eps))
-        beta_dot_p = torch.sum(beta * p3, dim=-1, keepdim=True)
         # for small beta, gamma ~ 1 + 0.5 * beta2, so (gamma - 1) / beta2 ~ 0.5 := gamma2
         gamma2 = torch.where(beta2 > eps, (gamma - 1.0) / beta2, 0.5 * torch.ones_like(beta2))
+        return beta, gamma, gamma2
+
+    @staticmethod
+    def _apply_boost(p4, boost_parameters):
+        beta, gamma, gamma2 = boost_parameters
+        p3 = p4[..., 0:3]
+        e = p4[..., 3:4]
+        beta_dot_p = torch.sum(beta * p3, dim=-1, keepdim=True)
 
         boosted_p3 = p3 + gamma2 * beta_dot_p * beta + gamma * e * beta
         boosted_e = gamma * (e + beta_dot_p)
         return torch.cat([boosted_p3, boosted_e], dim=-1)
+
+    def _boost(self, p4, beta):
+        """
+        Lorentz boost with the same sign convention as ROOT TLorentzVector.Boost.
+        https://root.cern.ch/doc/v632/classTLorentzVector.html
+        """
+        return self._apply_boost(p4, self._boost_parameters(beta, p4))
 
     def _boost_to_rest(self, p4, reference, reference_is_valid=None):
         valid = (
@@ -422,9 +437,6 @@ def _ohbboosting_angles(particles):
     def unpack_theta_phi(angles):
         if len(angles) == 2:
             return angles
-        # if len(angles) == 3:
-        #     theta, sin_phi, cos_phi = angles
-        #     return theta, np.arctan2(sin_phi, cos_phi)
         raise ValueError(f"Expected 2 angle arrays from ohbboosting, got {len(angles)}")
 
     lep0_theta, lep0_phi = unpack_theta_phi(lep0_angles)

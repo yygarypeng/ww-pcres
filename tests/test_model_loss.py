@@ -9,7 +9,7 @@ import torch
 
 from model import LightningWBoson
 from model import losses as loss_module
-from model.losses import dmet_loss, fourvec_huber_loss
+from model.losses import dmet_loss, w_fourvec_loss
 from physics.torchBoost import Booster, _mock_inputs, safe_acos, safe_atan2
 
 
@@ -55,6 +55,17 @@ class BoosterSharedAngularStateTest(unittest.TestCase):
         torch.testing.assert_close(actual_angles, expected_angles)
         actual_angles[actual_valid].sum().backward()
         self.assertTrue(torch.isfinite(w_bosons.grad).all())
+
+    def test_higgs_rest_boost_does_not_reprepare_parameters_for_each_particle(self):
+        leptons, w_bosons = _mock_inputs(batch=4)
+        booster = Booster(leptons, w_bosons)
+
+        with patch.object(
+            booster, "_boost_parameters", wraps=booster._boost_parameters
+        ) as boost_parameters:
+            booster._rest_frame_state()
+
+        boost_parameters.assert_called_once()
 
 
 def _reference_angles(lep, wboson):
@@ -211,26 +222,54 @@ class BoosterAngleRegressionTest(unittest.TestCase):
         assert torch.equal(valid, ref_valid)
         assert torch.allclose(angles[ref_valid], ref_angles[ref_valid], atol=1e-6)
 
+    def test_booster_angle_gradients_unchanged_after_dedupe(self):
+        torch.manual_seed(1)
+        leptons, w_bosons = _mock_inputs(batch=32)
+        actual_w = w_bosons.clone().requires_grad_(True)
+        reference_w = w_bosons.clone().requires_grad_(True)
 
-class FourVectorHuberTest(unittest.TestCase):
+        valid, angles = Booster(leptons, actual_w).lep_theta_phi_with_validity()
+        reference_valid, reference_angles = _reference_angles(leptons, reference_w)
+        actual_grad = torch.autograd.grad(angles[valid].sum(), actual_w)[0]
+        reference_grad = torch.autograd.grad(
+            reference_angles[reference_valid].sum(), reference_w
+        )[0]
+
+        torch.testing.assert_close(valid, reference_valid)
+        torch.testing.assert_close(actual_grad, reference_grad, atol=1e-6, rtol=1e-5)
+
+
+class WFourVectorLossTest(unittest.TestCase):
     def test_loss_uses_raw_energy_for_both_slots(self):
         truth = torch.tensor([[0.0, 0.0, 0.0, 3.0, 0.0, 0.0, 0.0, 7.0, 0.0, 0.0]])
         prediction = torch.tensor([[1.0, 2.0, 3.0, 7.0, 1.0, 2.0, 3.0, 15.0]])
-        loss = fourvec_huber_loss(truth, prediction)
+        loss = w_fourvec_loss(truth, prediction)
 
-        expected = torch.tensor(20.0 / 8.0)
+        expected = torch.tensor(3.0)
         torch.testing.assert_close(loss, expected)
 
     def test_loss_is_finite_for_zero_energy(self):
         truth = torch.zeros((1, 10))
         prediction = torch.zeros((1, 8))
 
-        loss = fourvec_huber_loss(truth, prediction)
+        loss = w_fourvec_loss(truth, prediction)
 
         self.assertTrue(torch.isfinite(loss))
 
 
-class DmetHuberTest(unittest.TestCase):
+class HiggsFourVectorLossTest(unittest.TestCase):
+    def test_loss_uses_sum_of_w_four_vectors(self):
+        truth = torch.tensor([[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 0.0, 0.0]])
+        prediction = torch.tensor([[3.0, 3.0, 3.0, 3.0, 1.0, 1.0, 1.0, 1.0]], requires_grad=True)
+
+        loss = loss_module.higgs_fourvec_loss(truth, prediction)
+
+        torch.testing.assert_close(loss, torch.tensor(5.0))
+        loss.backward()
+        torch.testing.assert_close(prediction.grad, torch.full((1, 8), -0.25))
+
+
+class DmetLossTest(unittest.TestCase):
     def test_loss_uses_raw_dmet_components(self):
         features = torch.zeros((1, 21))
         features[:, :2] = torch.tensor([[1.0, 2.0]])
@@ -242,7 +281,7 @@ class DmetHuberTest(unittest.TestCase):
         prediction = torch.tensor([[6.0, 31.0]])
         loss = dmet_loss(features, targets, prediction)
 
-        expected = torch.tensor(3.5)
+        expected = torch.tensor(4.0)
         torch.testing.assert_close(loss, expected)
 
 
@@ -261,24 +300,24 @@ class HiggsMassLossTest(unittest.TestCase):
 
         torch.testing.assert_close(loss, torch.tensor(0.0))
 
-    def test_is_quadratic_near_target(self):
+    def test_reads_as_a_gev_offset_near_target(self):
+        """The residual is linearized about 125, so it reads in GeV near the peak."""
         pred = self._predictions([125.5]).requires_grad_(True)
 
         loss = loss_module.higgs_mass_loss(pred)
         loss.backward()
 
-        torch.testing.assert_close(loss, torch.tensor(0.125))
-        torch.testing.assert_close(pred.grad[0, [3, 7]], torch.tensor([0.5, 0.5]))
+        torch.testing.assert_close(loss, torch.tensor(0.501))
+        torch.testing.assert_close(pred.grad[0, [3, 7]], torch.tensor([1.004, 1.004]))
 
-    def test_large_mass_errors_have_linear_penalties_and_bounded_mass_gradients(self):
+    def test_large_mass_squared_errors_have_linear_penalties(self):
         pred = self._predictions([130.0, 165.0]).requires_grad_(True)
 
         loss = loss_module.higgs_mass_loss(pred)
         loss.backward()
 
-        torch.testing.assert_close(loss, torch.tensor((4.5 + 39.5) / 2.0))
-        # Both rest-frame masses have the same gradient despite different errors.
-        torch.testing.assert_close(pred.grad[:, [3, 7]], torch.full((2, 2), 0.5))
+        torch.testing.assert_close(loss, torch.tensor(25.75))
+        torch.testing.assert_close(pred.grad[:, [3, 7]], torch.tensor([[0.52, 0.52], [0.66, 0.66]]))
 
     def test_gradient_pushes_mass_toward_target_from_both_sides(self):
         pred = self._predictions([120.0, 130.0]).requires_grad_(True)
@@ -286,7 +325,8 @@ class HiggsMassLossTest(unittest.TestCase):
         loss_module.higgs_mass_loss(pred).backward()
 
         torch.testing.assert_close(
-            pred.grad[:, [3, 7]], torch.tensor([[-0.5, -0.5], [0.5, 0.5]])
+            pred.grad[:, [3, 7]],
+            torch.tensor([[-0.48, -0.48], [0.52, 0.52]]),
         )
 
     def test_spacelike_mass_stays_below_target(self):
@@ -298,21 +338,7 @@ class HiggsMassLossTest(unittest.TestCase):
 
         mass2 = loss_module.invariant_mass2(spacelike[..., :4] + spacelike[..., 4:8])
         self.assertLess(mass2.item(), 0.0)
-        signed_mass = -np.sqrt(abs(mass2.item()))
-        expected = abs(signed_mass - target) - 0.5
-        torch.testing.assert_close(loss, torch.tensor(expected, dtype=torch.float32))
-
-    def test_mass_floor_bounds_gradient_near_the_light_cone(self):
-        """m^2 -> 0 must not blow d|m|/dm^2 up the way a bare sqrt would."""
-        near_cone = torch.tensor([[0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0, 1.001]])
-        near_cone.requires_grad_(True)
-
-        loss = loss_module.higgs_mass_loss(near_cone)
-        loss.backward()
-
-        mass2 = loss_module.invariant_mass2(near_cone[..., :4] + near_cone[..., 4:8])
-        self.assertLess(abs(mass2.item()), loss_module.H_MASS2_FLOOR)
-        self.assertTrue(torch.isfinite(near_cone.grad).all())
+        torch.testing.assert_close(loss, torch.tensor(222.483994))
 
     def test_spacelike_sum_has_finite_nonzero_corrective_gradients(self):
         pred = torch.tensor(
@@ -346,6 +372,16 @@ class LightningModelLossTest(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "fixed at 125"):
                     self._basic_model(higgs_mass_target=value)
 
+    def test_higgs_fourvec_loss_is_weighted_and_routed(self):
+        model = self._basic_model(loss_weights={"w_fourvec": 0.0, "higgs_fourvec": 2.0})
+        truth = torch.tensor([[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 0.0, 0.0]])
+        prediction = torch.tensor([[3.0, 3.0, 3.0, 3.0, 1.0, 1.0, 1.0, 1.0]])
+
+        total, losses = model._compute_losses(torch.zeros((1, 21)), truth, prediction)
+
+        torch.testing.assert_close(losses["higgs_fourvec"], torch.tensor(5.0))
+        torch.testing.assert_close(total, torch.tensor(10.0))
+
     def _ramp_model(self, angular_mmd_ramp_epochs=80):
         return LightningWBoson(
             input_dim=21,
@@ -354,11 +390,11 @@ class LightningModelLossTest(unittest.TestCase):
             std_mean_train=np.zeros(21, dtype=np.float32),
             std_scale_train=np.ones(21, dtype=np.float32),
             loss_weights={
-                "huber": 2.0,
+                "w_fourvec": 2.0,
                 "higgs_mass": 6.0,
                 "alpha_mmd": 3.0,
-                "mass_mmd": 4.0,
-                "w_mass_huber": 7.0,
+                "w_mass_mmd": 4.0,
+                "w_mass": 7.0,
                 "angular_mmd": 5.0,
                 "dmet": 8.0,
             },
@@ -383,7 +419,7 @@ class LightningModelLossTest(unittest.TestCase):
 
                 self.assertAlmostEqual(weights["angular_mmd"], expected_angular_weight)
                 self.assertEqual(weights["alpha_mmd"], 3.0)
-                self.assertEqual(weights["mass_mmd"], 4.0)
+                self.assertEqual(weights["w_mass_mmd"], 4.0)
 
     def test_logged_loss_weights_use_effective_angular_mmd_ramp_weight(self):
         model = self._ramp_model(angular_mmd_ramp_epochs=80)
@@ -395,7 +431,7 @@ class LightningModelLossTest(unittest.TestCase):
         logged_weights = {call.args[0]: call.args[1] for call in log.call_args_list}
         self.assertAlmostEqual(logged_weights["loss_weight/angular_mmd"], 2.5)
         self.assertEqual(logged_weights["loss_weight/alpha_mmd"], 3.0)
-        self.assertEqual(logged_weights["loss_weight/mass_mmd"], 4.0)
+        self.assertEqual(logged_weights["loss_weight/w_mass_mmd"], 4.0)
 
     def test_gradient_rest_uses_effective_angular_mmd_ramp_weight(self):
         model = self._ramp_model(angular_mmd_ramp_epochs=80)
@@ -404,12 +440,12 @@ class LightningModelLossTest(unittest.TestCase):
         angular_loss = parameter.sum()
         total = 2.5 * angular_loss
 
-        cosines = model._compute_loss_gradient_cosines(
+        stats = model._compute_loss_gradient_stats(
             {"angular_mmd": angular_loss},
             total,
         )
 
-        torch.testing.assert_close(cosines["angular_mmd"]["rest"], torch.tensor(0.0))
+        torch.testing.assert_close(stats["angular_mmd"]["rest"], torch.tensor(0.0))
 
     def test_zero_angular_mmd_ramp_applies_full_weight_at_epoch_zero(self):
         model = self._ramp_model(angular_mmd_ramp_epochs=0)
@@ -500,22 +536,25 @@ class LightningModelLossTest(unittest.TestCase):
     def test_public_mmd_results_are_used_without_transformation(self):
         model = self._basic_model(
             loss_weights={
-                "huber": 0.0,
+                "w_fourvec": 0.0,
                 "alpha_mmd": 1.0,
-                "mass_mmd": 1.0,
+                "w_mass_mmd": 1.0,
                 "angular_mmd": 1.0,
             }
         )
         raw_values = {
             "alpha_mmd": torch.tensor(0.0),
-            "mass_mmd": torch.tensor(0.75),
+            "w_mass_mmd": torch.tensor(0.75),
             "angular_mmd": torch.tensor(3.75),
         }
 
         with (
             patch("model.model.alpha_mmd", return_value=raw_values["alpha_mmd"]),
-            patch("model.model.mass_mmd", return_value=raw_values["mass_mmd"]),
-            patch("model.model.angular_mmd", return_value=raw_values["angular_mmd"]),
+            patch("model.model.w_mass_mmd", return_value=raw_values["w_mass_mmd"]),
+            patch(
+                "model.model._angular_mmd_with_valid_mask",
+                return_value=raw_values["angular_mmd"],
+            ),
         ):
             total, losses = model._compute_losses(
                 torch.zeros((1, 21)),
@@ -524,7 +563,7 @@ class LightningModelLossTest(unittest.TestCase):
             )
 
         self.assertIs(losses["alpha_mmd"], raw_values["alpha_mmd"])
-        self.assertIs(losses["mass_mmd"], raw_values["mass_mmd"])
+        self.assertIs(losses["w_mass_mmd"], raw_values["w_mass_mmd"])
         self.assertIs(losses["angular_mmd"], raw_values["angular_mmd"])
         torch.testing.assert_close(total, sum(raw_values.values()))
 
@@ -569,12 +608,12 @@ class SharedValidMaskTest(unittest.TestCase):
             std_mean_train=np.zeros(21, dtype=np.float32),
             std_scale_train=np.ones(21, dtype=np.float32),
             loss_weights={
-                "huber": 0.0,
+                "w_fourvec": 0.0,
                 "higgs_mass": 0.0,
-                "w_mass_huber": 0.0,
+                "w_mass": 0.0,
                 "alpha_mmd": 1.0,
-                "mass_mmd": 1.0,
-                "angular_mmd": 0.0,
+                "w_mass_mmd": 1.0,
+                "angular_mmd": 1.0,
                 "dmet": 0.0,
             },
         )
@@ -593,11 +632,15 @@ class SharedValidMaskTest(unittest.TestCase):
 
         with (
             patch("model.model.alpha_mmd", side_effect=capture("alpha_mmd")),
-            patch("model.model.mass_mmd", side_effect=capture("mass_mmd")),
+            patch("model.model.w_mass_mmd", side_effect=capture("w_mass_mmd")),
+            patch(
+                "model.model._angular_mmd_with_valid_mask",
+                side_effect=capture("angular_mmd"),
+            ),
         ):
             model._compute_losses(x, y_true, y_pred)
 
-        for name in ("alpha_mmd", "mass_mmd"):
+        for name in ("alpha_mmd", "w_mass_mmd", "angular_mmd"):
             self.assertIn("valid_mask", calls[name])
             self.assertIsInstance(calls[name]["valid_mask"], torch.Tensor)
             self.assertEqual(set(calls[name]) - {"valid_mask"}, {"kernel", "bandwidths"})
@@ -660,20 +703,59 @@ class AngularMMDTest(unittest.TestCase):
         expected = torch.tensor([[-1.0, -1.0, 0.0, 1.0, 0.0, -1.0]])
         torch.testing.assert_close(features, expected, atol=1.0e-6, rtol=0.0)
 
+    def test_public_loss_sanitizes_nonfinite_predictions(self):
+        leptons, w_bosons = _mock_inputs(batch=4)
+        inputs = torch.zeros(4, 21)
+        inputs[:, :8] = leptons
+        targets = torch.cat([w_bosons, torch.full((4, 2), 80.4)], dim=-1)
+        predictions = w_bosons.clone()
+        predictions[0, 0] = float("nan")
+        predictions.requires_grad_(True)
 
-class WMassHuberTest(unittest.TestCase):
-    def test_compares_normalized_predicted_mass_squared_to_target_masses(self):
+        loss = loss_module.angular_mmd(inputs, targets, predictions, bandwidths=(1.0,))
+        loss.backward()
+
+        self.assertTrue(torch.isfinite(loss))
+        self.assertTrue(torch.isfinite(predictions.grad).all())
+
+
+class WMassLossTest(unittest.TestCase):
+    def test_compares_predicted_mass_to_target_masses_in_gev(self):
         y_true = torch.zeros((1, 10))
         y_true[0, 8:] = torch.tensor([40.2, 80.4])
         y_pred = torch.tensor([[0.0, 0.0, 0.0, 80.4, 0.0, 0.0, 0.0, 40.2]])
 
-        loss = loss_module.w_mass_huber_loss(y_true, y_pred)
+        loss = loss_module.w_mass_loss(y_true, y_pred)
 
-        expected = torch.tensor(0.5 * 0.75**2)
+        expected = torch.tensor(30.15)
         torch.testing.assert_close(loss, expected)
 
 
 class GradientCosineLoggingTest(unittest.TestCase):
+    def test_fixed_loss_weights_are_logged_once_per_epoch(self):
+        model = LightningWBoson(
+            input_dim=21,
+            d_model=8,
+            num_heads=2,
+            std_mean_train=np.zeros(21, dtype=np.float32),
+            std_scale_train=np.ones(21, dtype=np.float32),
+            loss_weights={"w_fourvec": 1.0},
+        )
+        parameter = next(model.parameters())
+        total = parameter.square().sum()
+        losses = {"w_fourvec": total}
+        batch = (torch.zeros(2, 21), torch.zeros(2, 10))
+
+        with (
+            patch.object(model, "_compute_batch_losses", return_value=(total, losses)),
+            patch.object(model, "_log_losses"),
+            patch.object(model, "_log_loss_weights") as log_weights,
+        ):
+            model.training_step(batch, 0)
+            model.training_step(batch, 1)
+
+        log_weights.assert_called_once_with()
+
     def test_logging_only_mode_emits_cosines_without_changing_weights(self):
         model = LightningWBoson(
             input_dim=21,
@@ -681,7 +763,7 @@ class GradientCosineLoggingTest(unittest.TestCase):
             num_heads=2,
             std_mean_train=np.zeros(21, dtype=np.float32),
             std_scale_train=np.ones(21, dtype=np.float32),
-            loss_weights={"huber": 1.0, "higgs_mass": 2.0},
+            loss_weights={"w_fourvec": 1.0, "higgs_mass": 2.0},
             adaptive_loss_weights=False,
             log_loss_gradient_cosines=True,
             attention_blocks=1,
@@ -690,10 +772,10 @@ class GradientCosineLoggingTest(unittest.TestCase):
         )
         parameter = next(model.parameters())
         losses = {
-            "huber": parameter.square().sum(),
+            "w_fourvec": parameter.square().sum(),
             "higgs_mass": parameter.sum(),
         }
-        total = losses["huber"] + 2.0 * losses["higgs_mass"]
+        total = losses["w_fourvec"] + 2.0 * losses["higgs_mass"]
         inputs = torch.randn(2, 21)
         for start in (0, 4, 8, 12):
             inputs[:, start + 3] = (
@@ -704,13 +786,53 @@ class GradientCosineLoggingTest(unittest.TestCase):
 
         with patch.object(model, "_compute_batch_losses", return_value=(total, losses)):
             with patch.object(model, "_log_losses"), patch.object(model, "_log_loss_weights"):
-                with patch.object(model, "_log_grad_cosines") as log_cosines:
+                with patch.object(model, "_log_grad_stats") as log_stats:
                     model.training_step(batch, 0)
                     model.on_train_epoch_end()
 
-        log_cosines.assert_called_once()
-        self.assertEqual(set(log_cosines.call_args.args[0]), {"huber", "higgs_mass"})
+        log_stats.assert_called_once()
+        self.assertEqual(set(log_stats.call_args.args[0]), {"w_fourvec", "higgs_mass"})
         self.assertEqual(model.loss_weights, original_weights)
+
+    def test_gradient_norm_records_the_weighted_contribution(self):
+        """The logged norm must be |weight * dLoss/dtheta|, not the unweighted one."""
+        model = LightningWBoson(
+            input_dim=21,
+            d_model=8,
+            num_heads=2,
+            std_mean_train=np.zeros(21, dtype=np.float32),
+            std_scale_train=np.ones(21, dtype=np.float32),
+            loss_weights={"w_fourvec": 1.0, "higgs_mass": 3.0},
+            log_loss_gradient_cosines=True,
+            attention_blocks=1,
+            attention_dropout=0.0,
+            decoder_dropout=0.0,
+        )
+        parameter = next(model.parameters())
+        losses = {"w_fourvec": parameter.square().sum(), "higgs_mass": parameter.sum()}
+        total = losses["w_fourvec"] + 3.0 * losses["higgs_mass"]
+
+        stats = model._compute_loss_gradient_stats(losses, total)
+
+        trainable = tuple(p for p in model.parameters() if p.requires_grad)
+        for name, weight in (("w_fourvec", 1.0), ("higgs_mass", 3.0)):
+            expected = (weight * model._loss_grad_vector(losses[name], trainable)).norm()
+            torch.testing.assert_close(stats[name]["norm"], expected)
+
+        logged = {}
+        with patch.object(model, "log", side_effect=lambda k, v, **kw: logged.__setitem__(k, v)):
+            model._log_grad_stats(stats)
+        self.assertEqual(
+            set(logged),
+            {
+                "grad_cos/w_fourvec__total",
+                "grad_cos/w_fourvec__rest",
+                "grad_norm/w_fourvec",
+                "grad_cos/higgs_mass__total",
+                "grad_cos/higgs_mass__rest",
+                "grad_norm/higgs_mass",
+            },
+        )
 
 
 if __name__ == "__main__":

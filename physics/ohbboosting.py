@@ -133,35 +133,3 @@ class Booster:
         b_yz = self._cglmp(xi_pos[1], xi_neg[1], xi_pos[2], xi_neg[2])
         b_zx = self._cglmp(xi_pos[0], xi_neg[0], xi_pos[2], xi_neg[2])
         return b_xy, b_yz, b_zx
-
-
-if __name__ == "__main__":
-    import time
-
-    from matplotlib import pyplot as plt
-
-    t1 = time.time()
-    from data import load_data
-
-    data = load_data.load_particles_from_h5("/root/data/archived/mc20_truth.h5")
-    presel = data
-    particles = np.concatenate(
-        [
-            data["lead_w"]["p4"],
-            data["truth_lead_lep"]["p4"],
-            data["sublead_w"]["p4"],
-            data["truth_sublead_lep"]["p4"],
-        ],
-        axis=-1,
-    )
-    print(particles.shape)
-    booster = Booster(particles)
-    booster.setup()
-    print(booster.lep_theta_phi_in_w_rest())
-    plt.hist(booster.lep_theta_phi_in_w_rest()[0][1], bins=50, alpha=0.5, label="pos_phi")
-    plt.savefig("pos_phi_hist.png")
-    # print(booster.lep_4_in_w_rest())
-    # print(booster.lep_xi_in_w_rest())
-    # print(booster.cglmp_bij())
-    t2 = time.time()
-    print(f"Elapsed time: {t2 - t1:<.2f} seconds")

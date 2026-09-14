@@ -17,6 +17,26 @@ from notebooks import plottingtool
 from notebooks.plottingtool import plot_1d_hist, plot_angular_1d_grid, plot_angular_2d_grid
 
 NOTEBOOK_PATH = Path(__file__).parents[1] / "notebooks" / "visualize.ipynb"
+
+
+def _notebook_code_cells():
+    """Code cell sources with IPython magics and shell escapes blanked out.
+
+    Those lines are valid in a notebook but not valid Python, so they are
+    replaced by blanks to keep line numbers aligned for compile errors.
+    """
+    notebook = json.loads(NOTEBOOK_PATH.read_text())
+    cells = []
+    for cell in notebook["cells"]:
+        if cell["cell_type"] != "code":
+            continue
+        lines = "".join(cell["source"]).splitlines()
+        cells.append(
+            "\n".join("" if line.lstrip().startswith(("%", "!")) else line for line in lines)
+        )
+    return cells
+
+
 pytestmark = pytest.mark.filterwarnings("ignore:invalid escape sequence:DeprecationWarning")
 
 
@@ -325,14 +345,11 @@ def test_plot_angular_2d_grid_preserves_panel_and_colorbar_modes(shared_colorbar
 
 
 def test_visualize_notebook_compiles_and_uses_exported_angular_helpers():
-    notebook = json.loads(NOTEBOOK_PATH.read_text())
-    for cell in notebook["cells"]:
-        if cell["cell_type"] == "code":
-            compile("".join(cell["source"]), str(NOTEBOOK_PATH), "exec")
+    cells = _notebook_code_cells()
+    for cell in cells:
+        compile(cell, str(NOTEBOOK_PATH), "exec")
 
-    code = "\n\n".join(
-        "".join(cell["source"]) for cell in notebook["cells"] if cell["cell_type"] == "code"
-    )
+    code = "\n\n".join(cells)
     tree = ast.parse(code)
 
     defined_names = {node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)}
@@ -377,10 +394,7 @@ def test_visualize_notebook_compiles_and_uses_exported_angular_helpers():
 
 
 def test_notebook_uses_exported_loss_curve_helpers():
-    notebook = json.loads(NOTEBOOK_PATH.read_text())
-    code = "\n\n".join(
-        "".join(cell["source"]) for cell in notebook["cells"] if cell["cell_type"] == "code"
-    )
+    code = "\n\n".join(_notebook_code_cells())
     tree = ast.parse(code)
 
     defined_names = {node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)}

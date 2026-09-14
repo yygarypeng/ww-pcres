@@ -21,11 +21,12 @@ parameters:
   pin_memory: true
   prefetch_factor: 4
   loss_weights:
-    huber: 1.0
-    higgs_mass: 0.0004
+    w_fourvec: 1.0
+    higgs_fourvec: 0.06
+    higgs_mass: 0.025
     alpha_mmd: 1.0
-    mass_mmd: 1.0
-    w_mass_huber: 0.001
+    w_mass_mmd: 1.0
+    w_mass: 0.001
     angular_mmd: 10.0
     dmet: 10.0
 

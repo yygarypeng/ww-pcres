@@ -39,6 +39,7 @@ __pypackages__/
 .mypy_cache/
 .nox/
 .pytest_cache/
+.ruff_cache/
 .tox/
 .pyre/
 .pytype/
@@ -73,6 +74,7 @@ Figure/
 
 # Agent/editor local state
 .agents/
+.claude/
 .opencode/
 .superpowers/
 .worktrees/
