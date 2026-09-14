@@ -11,7 +11,7 @@ from data.preprocessing import (
     RAW_INPUT_DIM,
     neural_input_features_torch,
 )
-from model.layers import ResidualBlock, SelfAttentionBlock, Standardization, WBosonFourVectorLayer
+from model.layers import ResidualBlock, SelfAttentionBlock, Standardization, WConstraintsLayer
 from model.losses import (
     H_MASS_SCALE,
     _angular_mmd_with_valid_mask,
@@ -127,12 +127,12 @@ class WBosonRegressor(nn.Module):
             ResidualBlock(512, 256, hidden_dim=256, dropout=decoder_dropout),
             ResidualBlock(256, 128, hidden_dim=128, dropout=decoder_dropout),
         )
-        # Latent regression head1 layout: [delta_dinu_px, delta_dinu_py]
+        # Latent regression head1 layout: [nu0_px, nu0_py, nu1_px, nu1_py]
         self.nu_tran_head = nn.Sequential(
             nn.LayerNorm(128),
             nn.Linear(128, 32),
             nn.GELU(),
-            nn.Linear(32, 2),
+            nn.Linear(32, 4),
         )
         # Latent regression head2 layout: [nu0_pz, nu1_pz]
         self.nu_long_head = nn.Sequential(
@@ -141,16 +141,9 @@ class WBosonRegressor(nn.Module):
             nn.GELU(),
             nn.Linear(32, 2),
         )
-        # Latent regression head3 layout: [dmet_x, dmet_y]
-        self.nu_dmet_head = nn.Sequential(
-            nn.LayerNorm(128),
-            nn.Linear(128, 32),
-            nn.GELU(),
-            nn.Linear(32, 2),
-        )
 
         # W bosons decoder
-        self.w_layer = WBosonFourVectorLayer()
+        self.w_layer = WConstraintsLayer()
 
     def global_feature_aggregation(self, x):
         x_std = self.norm(neural_input_features_torch(x))
@@ -191,14 +184,25 @@ class WBosonRegressor(nn.Module):
         h = self.trunk(h)
         nu_tran_params = self.nu_tran_head(h)
         nu_long_params = self.nu_long_head(h)
-        dmet_params = self.nu_dmet_head(h)
-        nu_params = torch.cat([nu_tran_params, nu_long_params, dmet_params], dim=-1)
+        # the layer takes the two neutrino three-momenta, [nu0_p, nu1_p]
+        nu_params = torch.cat(
+            [
+                nu_tran_params[..., :2],
+                nu_long_params[..., :1],
+                nu_tran_params[..., 2:],
+                nu_long_params[..., 1:],
+            ],
+            dim=-1,
+        )
 
-        y_pred = self.w_layer(lep0, lep1, nu_params, met)
+        y_pred = self.w_layer(lep0, lep1, nu_params)
 
         if return_aux:
+            # the mass constraint rescales the neutrinos, so the MET correction
+            # has to be read back from the W four-vectors
+            dinu_pt = (y_pred[..., :2] - lep0[..., :2]) + (y_pred[..., 4:6] - lep1[..., :2])
             return y_pred, {
-                "dmet": dmet_params,
+                "dmet": met - dinu_pt,
                 "nu_params": nu_params,
             }
         return y_pred

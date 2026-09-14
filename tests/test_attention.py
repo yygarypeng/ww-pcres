@@ -5,7 +5,7 @@ import numpy as np
 import torch
 
 from data.preprocessing import neural_input_features_torch
-from model.layers import WBosonFourVectorLayer
+from model.layers import WBosonFourVectorLayer, WConstraintsLayer
 from model.model import WBosonRegressor
 
 
@@ -142,17 +142,37 @@ class FlattenedAggregationTest(unittest.TestCase):
         for actual, wanted in zip(captured, expected):
             torch.testing.assert_close(actual, wanted)
 
-    def test_physics_layer_receives_raw_leptons_and_met(self):
+    def test_physics_layer_receives_raw_leptons(self):
         model = self.make_model().eval()
         inputs = self.make_inputs()
 
         with patch.object(model.w_layer, "forward", wraps=model.w_layer.forward) as w_layer:
             model(inputs)
 
-        lep0, lep1, _, met = w_layer.call_args.args
+        lep0, lep1, _ = w_layer.call_args.args
         torch.testing.assert_close(lep0, inputs[:, :4])
         torch.testing.assert_close(lep1, inputs[:, 4:8])
-        torch.testing.assert_close(met, inputs[:, 16:18])
+
+    def test_predicted_w_pair_sits_on_the_higgs_mass_shell(self):
+        model = self.make_model().eval()
+        inputs = self.make_inputs(batch_size=8)
+
+        y_pred = model(inputs)
+        higgs = y_pred[:, :4] + y_pred[:, 4:8]
+        mass2 = higgs[:, 3] ** 2 - higgs[:, :3].square().sum(dim=-1)
+
+        torch.testing.assert_close(
+            mass2.sqrt(), torch.full((8,), WConstraintsLayer.HIGGS_MASS), atol=1e-3, rtol=0.0
+        )
+
+    def test_dmet_aux_reports_the_constrained_neutrino_sum(self):
+        model = self.make_model().eval()
+        inputs = self.make_inputs(batch_size=8)
+
+        y_pred, aux = model(inputs, return_aux=True)
+        dinu_pt = (y_pred[:, :2] - inputs[:, :2]) + (y_pred[:, 4:6] - inputs[:, 4:6])
+
+        torch.testing.assert_close(aux["dmet"], inputs[:, 16:18] - dinu_pt)
 
     def test_empty_jet_embedding_values_are_masked_before_flattening(self):
         torch.manual_seed(3)
