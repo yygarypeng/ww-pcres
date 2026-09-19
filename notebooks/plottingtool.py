@@ -423,6 +423,12 @@ def plot_2d_hist(
     plt.show()
 
 
+def plot_pair(pred, truth, name, bins_edges, unit="GeV", log=True, vmax=2e3):
+    """The 1D comparison plus the 2D pred-vs-truth correlation, for one observable."""
+    plot_1d_hist(pred, truth, name, bins_edges=bins_edges, unit=unit)
+    plot_2d_hist(pred, truth, name, bins_edges=bins_edges, log=log, unit=unit, vmax=vmax)
+
+
 LOSS_COMPONENTS = [
     ("w_fourvec", r"$W$ 4-vec L1"),
     ("higgs_fourvec", r"$H$ 4-vec L1"),

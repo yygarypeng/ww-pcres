@@ -2,6 +2,7 @@ import numpy as np
 
 TOR = 1e-16
 HIGGS_MASS = 125.0
+W_MASS = 80.379
 
 
 def pt(px, py):
@@ -21,6 +22,16 @@ def invariant_mass2(fourvec):
     """Squared invariant mass of (..., 4) four-vectors ordered (px, py, pz, E)."""
     px, py, pz, energy = (fourvec[..., i] for i in range(4))
     return energy**2 - (px**2 + py**2 + pz**2)
+
+
+def invariant_mass(fourvec):
+    """Invariant mass; the absolute value keeps slightly spacelike four-vectors real."""
+    return np.sqrt(np.abs(invariant_mass2(fourvec)))
+
+
+def four_vector_pairs(block):
+    """An (events, 8) block as (events, {first, second}, {px, py, pz, E})."""
+    return np.asarray(block).reshape(-1, 2, 4)
 
 
 def deta(eta1, eta2):

@@ -436,3 +436,58 @@ def test_notebook_uses_exported_loss_curve_helpers():
         and node.func.id in {"plot_loss_curves", "plot_gradient_cosine_heatmaps"}
     ]
     assert len(loss_curve_calls) == 2
+
+
+def test_plot_pair_draws_the_1d_and_2d_views_of_one_observable(monkeypatch):
+    calls = {}
+    monkeypatch.setattr(
+        plottingtool, "plot_1d_hist", lambda *args, **kwargs: calls.setdefault("1d", (args, kwargs))
+    )
+    monkeypatch.setattr(
+        plottingtool, "plot_2d_hist", lambda *args, **kwargs: calls.setdefault("2d", (args, kwargs))
+    )
+    bins = np.linspace(0.0, 1.0, 5)
+
+    plottingtool.plot_pair([0.1], [0.2], "obs", bins, unit="null", log=False, vmax=7.0)
+
+    assert calls["1d"][0] == calls["2d"][0] == ([0.1], [0.2], "obs")
+    for key in ("1d", "2d"):
+        np.testing.assert_allclose(calls[key][1].pop("bins_edges"), bins)
+    assert calls["1d"][1] == {"unit": "null"}
+    assert calls["2d"][1] == {"log": False, "unit": "null", "vmax": 7.0}
+
+
+def test_notebook_reuses_physics_helpers_instead_of_redefining_them():
+    code = "\n\n".join(_notebook_code_cells())
+    tree = ast.parse(code)
+
+    defined_names = {node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)}
+    assert (
+        not {"mass", "mass2", "pt", "invariant_mass", "four_vector_pairs", "plot_pair"}
+        & defined_names
+    )
+
+    assignments = {
+        target.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        for target in node.targets
+        if isinstance(target, ast.Name)
+    }
+    assert "W_MASS" not in assignments
+
+    imports = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            imports.setdefault(node.module, set()).update(alias.name for alias in node.names)
+
+    assert {
+        "TOR",
+        "W_MASS",
+        "four_vector_pairs",
+        "invariant_mass",
+        "invariant_mass2",
+        "pt",
+    } <= imports["physics.physics"]
+    assert "lepton_p4" in imports["physics.selection"]
+    assert "plot_pair" in imports["notebooks.plottingtool"]

@@ -2,7 +2,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from physics import _diff_angle, _sum_angle
+from physics import W_MASS, _diff_angle, _sum_angle
 
 
 class _SafeAcos(torch.autograd.Function):
@@ -285,8 +285,8 @@ def _mock_inputs(batch=1024, device="cpu"):
     lep0_p3 = torch.randn(batch, 3, dtype=dtype, device=device) * 25.0
     lep1_p3 = torch.randn(batch, 3, dtype=dtype, device=device) * 25.0
 
-    w0_e = torch.sqrt(torch.sum(w0_p3 * w0_p3, dim=1, keepdim=True) + 80.379**2)
-    w1_e = torch.sqrt(torch.sum(w1_p3 * w1_p3, dim=1, keepdim=True) + 80.379**2)
+    w0_e = torch.sqrt(torch.sum(w0_p3 * w0_p3, dim=1, keepdim=True) + W_MASS**2)
+    w1_e = torch.sqrt(torch.sum(w1_p3 * w1_p3, dim=1, keepdim=True) + W_MASS**2)
     lep0_e = torch.sqrt(torch.sum(lep0_p3 * lep0_p3, dim=1, keepdim=True) + 0.105**2)
     lep1_e = torch.sqrt(torch.sum(lep1_p3 * lep1_p3, dim=1, keepdim=True) + 0.105**2)
 
