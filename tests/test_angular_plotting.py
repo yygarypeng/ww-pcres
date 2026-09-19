@@ -146,7 +146,7 @@ def test_plot_1d_histogram_call_computes_each_array_once(monkeypatch):
     try:
         plot_1d_hist(pred, truth, "x", bins_edges=bins)
 
-        assert plt.gcf().axes[0].get_title(loc="right") == "x  EMD = 0.17"
+        assert plt.gcf().axes[0].get_title(loc="right") == "x  (EMD = 0.17)"
         assert numpy_spy.histogram.call_count == 2
         pred_call, truth_call = numpy_spy.histogram.call_args_list
         np.testing.assert_array_equal(pred_call.args[0], pred)
@@ -177,7 +177,7 @@ def test_plot_angular_1d_grid_returns_histogram_and_raw_ratio_axes():
         np.testing.assert_allclose(ratio_line.get_ydata(), [0.5])
         assert ratio_axes[0, 0].get_ylim() == pytest.approx((0.5, 1.5))
         assert not any(label.get_visible() for label in hist_axes[0, 0].get_xticklabels())
-        assert hist_axes[0, 0].get_title() == "angle 0  EMD = 0.21"
+        assert hist_axes[0, 0].get_title() == "angle 0  (EMD = 0.21)"
         np.testing.assert_allclose(fig.get_size_inches(), [10, 10])
         fig.canvas.draw()
         assert all(
@@ -252,7 +252,7 @@ def test_plot_1d_hist_displays_na_when_either_emd_sample_has_no_finite_values(pr
     try:
         plot_1d_hist(pred, truth, "x", bins_edges=np.array([0.0, 0.5, 1.0]))
 
-        assert plt.gcf().axes[0].get_title(loc="right") == "x  EMD = n/a"
+        assert plt.gcf().axes[0].get_title(loc="right") == "x  (EMD = n/a)"
     finally:
         for figure_number in set(plt.get_fignums()) - figures_before:
             plt.close(figure_number)

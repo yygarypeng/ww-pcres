@@ -43,8 +43,8 @@ def _emd_title(label, pred, truth):
     pred = pred[np.isfinite(pred)]
     truth = truth[np.isfinite(truth)]
     if pred.size == 0 or truth.size == 0:
-        return f"{label}  EMD = n/a"
-    return f"{label}  EMD = {_fmt_metric(wasserstein_distance(pred, truth))}"
+        return f"{label}  (EMD = n/a)"
+    return f"{label}  (EMD = {_fmt_metric(wasserstein_distance(pred, truth))})"
 
 
 def _hist2d_kwargs(bins_edges, vmax, log):
