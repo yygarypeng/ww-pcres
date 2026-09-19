@@ -5,7 +5,8 @@ import numpy as np
 import torch
 
 from data.preprocessing import neural_input_features_torch
-from model.layers import WBosonFourVectorLayer, WConstraintsLayer
+from model.layers import WBosonFourVectorLayer
+from model.losses import H_MASS_SCALE
 from model.model import WBosonRegressor
 
 
@@ -46,13 +47,13 @@ class SymmetricFourVectorLayerTest(unittest.TestCase):
 
 class FlattenedAggregationTest(unittest.TestCase):
     @staticmethod
-    def make_model(input_dim=21, mean=None, scale=None):
+    def make_model(input_dim=18, mean=None, scale=None):
         return WBosonRegressor(
             input_dim=input_dim,
             d_model=8,
             num_heads=2,
-            std_mean_train=np.zeros(21, dtype=np.float32) if mean is None else mean,
-            std_scale_train=np.ones(21, dtype=np.float32) if scale is None else scale,
+            std_mean_train=np.zeros(18, dtype=np.float32) if mean is None else mean,
+            std_scale_train=np.ones(18, dtype=np.float32) if scale is None else scale,
             attention_blocks=1,
             attention_dropout=0.0,
             decoder_dropout=0.0,
@@ -60,7 +61,7 @@ class FlattenedAggregationTest(unittest.TestCase):
 
     @staticmethod
     def make_inputs(batch_size=2):
-        inputs = torch.randn(batch_size, 21)
+        inputs = torch.randn(batch_size, 18)
         for start in (0, 4, 8, 12):
             inputs[:, start + 3] = (
                 torch.linalg.vector_norm(inputs[:, start : start + 3], dim=1)
@@ -69,13 +70,12 @@ class FlattenedAggregationTest(unittest.TestCase):
             )
         return inputs
 
-    def test_model_contract_uses_three_hl_features_and_six_tokens(self):
+    def test_model_contract_uses_five_tokens(self):
         model = self.make_model()
 
-        self.assertEqual(model.norm.mean.numel(), 21)
-        self.assertEqual(model.norm.std.numel(), 21)
-        self.assertEqual(model.hl_embed.in_features, 3)
-        self.assertEqual(model.num_tokens, 6)
+        self.assertEqual(model.norm.mean.numel(), 18)
+        self.assertEqual(model.norm.std.numel(), 18)
+        self.assertEqual(model.num_tokens, 5)
         self.assertEqual(model(self.make_inputs()).shape, (2, 8))
 
     def test_model_contract_rejects_wrong_raw_or_neural_widths(self):
@@ -105,8 +105,8 @@ class FlattenedAggregationTest(unittest.TestCase):
             self.assertGreater(gradient.abs().sum().item(), 0.0)
 
     def test_embedding_inputs_use_shared_transform_then_normalization(self):
-        mean = np.linspace(-1.0, 1.0, 21, dtype=np.float32)
-        scale = np.linspace(1.0, 2.0, 21, dtype=np.float32)
+        mean = np.linspace(-1.0, 1.0, 18, dtype=np.float32)
+        scale = np.linspace(1.0, 2.0, 18, dtype=np.float32)
         model = self.make_model(mean=mean, scale=scale).eval()
         inputs = self.make_inputs()
         captured = []
@@ -120,7 +120,6 @@ class FlattenedAggregationTest(unittest.TestCase):
                 model.jet0_embed,
                 model.jet1_embed,
                 model.met_embed,
-                model.hl_embed,
             )
         ]
 
@@ -137,7 +136,6 @@ class FlattenedAggregationTest(unittest.TestCase):
             normalized[:, 8:12],
             normalized[:, 12:16],
             normalized[:, 16:18],
-            normalized[:, 18:21],
         ]
         for actual, wanted in zip(captured, expected):
             torch.testing.assert_close(actual, wanted)
@@ -162,7 +160,7 @@ class FlattenedAggregationTest(unittest.TestCase):
         mass2 = higgs[:, 3] ** 2 - higgs[:, :3].square().sum(dim=-1)
 
         torch.testing.assert_close(
-            mass2.sqrt(), torch.full((8,), WConstraintsLayer.HIGGS_MASS), atol=1e-3, rtol=0.0
+            mass2.sqrt(), torch.full((8,), H_MASS_SCALE), atol=1e-3, rtol=0.0
         )
 
     def test_dmet_aux_reports_the_constrained_neutrino_sum(self):
@@ -176,7 +174,7 @@ class FlattenedAggregationTest(unittest.TestCase):
 
     def test_empty_jet_embedding_values_are_masked_before_flattening(self):
         torch.manual_seed(3)
-        mean = np.full(21, 5.0, dtype=np.float32)
+        mean = np.full(18, 5.0, dtype=np.float32)
         model = self.make_model(mean=mean).eval()
         missing_jet = self.make_inputs()
         missing_jet[:, 8:12] = 0.0

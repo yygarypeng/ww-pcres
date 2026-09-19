@@ -170,7 +170,9 @@ def test_plot_angular_1d_grid_returns_histogram_and_raw_ratio_axes():
         assert hist_axes[0, 0].get_shared_y_axes().joined(hist_axes[0, 0], hist_axes[1, 1])
         assert not ratio_axes[0, 0].get_shared_y_axes().joined(ratio_axes[0, 0], hist_axes[0, 0])
 
-        ratio_line = next(line for line in ratio_axes[0, 0].lines if line.get_label() == "Pred/True")
+        ratio_line = next(
+            line for line in ratio_axes[0, 0].lines if line.get_label() == "Pred/True"
+        )
         np.testing.assert_allclose(ratio_line.get_xdata(), [1.5])
         np.testing.assert_allclose(ratio_line.get_ydata(), [0.5])
         assert ratio_axes[0, 0].get_ylim() == pytest.approx((0.5, 1.5))
@@ -188,9 +190,7 @@ def test_plot_angular_1d_grid_returns_histogram_and_raw_ratio_axes():
 
 
 def test_angular_1d_grid_separates_axis_labels_and_header_legend():
-    fig, (hist_axes, ratio_axes) = plot_angular_1d_grid(
-        _observables(), "Angular distributions"
-    )
+    fig, (hist_axes, ratio_axes) = plot_angular_1d_grid(_observables(), "Angular distributions")
 
     try:
         assert [ax.get_ylabel() for ax in hist_axes[:, 0]] == ["Events", "Events"]
@@ -207,9 +207,7 @@ def test_angular_1d_grid_separates_axis_labels_and_header_legend():
         renderer = fig.canvas.get_renderer()
         legend_bounds = legend.get_window_extent(renderer)
         title_bounds = fig._suptitle.get_window_extent(renderer)
-        panel_title_bounds = [
-            ax.title.get_window_extent(renderer) for ax in hist_axes[0]
-        ]
+        panel_title_bounds = [ax.title.get_window_extent(renderer) for ax in hist_axes[0]]
         assert legend_bounds.x0 + legend_bounds.width / 2 == pytest.approx(
             fig.bbox.width / 2, abs=2
         )
@@ -390,7 +388,15 @@ def test_visualize_notebook_compiles_and_uses_exported_angular_helpers():
         and isinstance(node.func, ast.Name)
         and node.func.id in {"plot_angular_1d_grid", "plot_angular_2d_grid"}
     ]
-    assert len(angular_calls) == 6
+    angular_grids = next(
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == "angular_grids" for target in node.targets)
+    )
+    assert len(angular_calls) == 2
+    assert isinstance(angular_grids, ast.List)
+    assert len(angular_grids.elts) == 3
 
 
 def test_notebook_uses_exported_loss_curve_helpers():

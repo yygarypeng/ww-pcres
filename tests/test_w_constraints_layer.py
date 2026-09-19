@@ -16,7 +16,6 @@ def mass(fourvec):
 
 
 def unconstrained_params(nu_params, met):
-    """The WBosonFourVectorLayer parameters describing the same neutrino pair."""
     nu0_3 = nu_params[..., 0:3]
     nu1_3 = nu_params[..., 3:6]
     return torch.cat(
@@ -34,7 +33,7 @@ def random_event(batch=512, dtype=torch.float64, seed=0):
     """Leptons and neutrino momenta at roughly the scales seen in data.
 
     Lepton pairs are kept below the Higgs mass, which is what the loader
-    guarantees through ``data.max_dilepton_mass``.
+    guarantees by dropping every event that reaches ``physics.HIGGS_MASS``.
     """
     generator = torch.Generator().manual_seed(seed)
 
@@ -86,10 +85,7 @@ class WConstraintsLayerTest(unittest.TestCase):
         layer = WConstraintsLayer()
         lep0, lep1, nu_params = random_event()
 
-        # the constraint undoes any common rescaling
-        torch.testing.assert_close(
-            layer(lep0, lep1, 3.0 * nu_params), layer(lep0, lep1, nu_params)
-        )
+        torch.testing.assert_close(layer(lep0, lep1, 3.0 * nu_params), layer(lep0, lep1, nu_params))
 
     def test_constraint_only_rescales_the_unconstrained_solution(self):
         unconstrained = WBosonFourVectorLayer()
@@ -117,7 +113,3 @@ class WConstraintsLayerTest(unittest.TestCase):
 
         self.assertTrue(bool(torch.isfinite(nu_params.grad).all()))
         self.assertGreater(float(nu_params.grad.abs().sum()), 0.0)
-
-
-if __name__ == "__main__":
-    unittest.main()

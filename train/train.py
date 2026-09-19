@@ -9,12 +9,13 @@ import numpy as np
 import torch
 import yaml
 from pytorch_lightning import Trainer, seed_everything
-from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
+from pytorch_lightning.callbacks import EarlyStopping, LearningRateMonitor, ModelCheckpoint
 from pytorch_lightning.loggers import CSVLogger, WandbLogger
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 DEFAULT_CONFIG = REPO_ROOT / "configs/config.yaml"
+DEFAULT_EXCLUDED_CPUS = (10, 11)
 
 
 from data import compute_neural_input_stats
@@ -32,7 +33,10 @@ def clean_training_output(saved_path):
     if saved_path is None or not str(saved_path).strip():
         raise ValueError("paths.saved_path must be a non-empty directory path")
     saved_path = resolve_repo_path(saved_path)
-    if saved_path.resolve() == Path(saved_path.anchor).resolve():
+    if saved_path.is_symlink():
+        raise ValueError(f"Refusing to delete symbolic link as paths.saved_path: {saved_path}")
+    resolved_path = saved_path.resolve()
+    if resolved_path == Path(resolved_path.anchor):
         raise ValueError("Refusing to delete filesystem root as paths.saved_path")
     if saved_path.exists():
         if not saved_path.is_dir():
@@ -41,6 +45,7 @@ def clean_training_output(saved_path):
         shutil.rmtree(saved_path)
     else:
         print("No existing checkpoint found, starting fresh...")
+    return resolved_path
 
 
 def load_config(config_path=DEFAULT_CONFIG):
@@ -80,12 +85,9 @@ def prime_csv_metric_header(csv_logger, model):
     writer.metrics_keys = sorted(existing_keys | metric_keys)
 
 
-def build_datamodule(cfg, data_path):
+def datamodule_from_splits(cfg, splits):
+    """Wrap six train/val/test arrays, returning the datamodule, input width, and input stats."""
     params = cfg["parameters"]
-    splits = data.load_presplit_data(
-        data_path,
-        data_cfg=cfg.get("data", {}),
-    )
     X_train, Y_train, X_val, Y_val, X_test, Y_test = (split.astype(np.float32) for split in splits)
 
     dm = WBosonDataModule(
@@ -102,9 +104,12 @@ def build_datamodule(cfg, data_path):
         pin_memory=params.get("pin_memory", torch.cuda.is_available()),
         prefetch_factor=params.get("prefetch_factor", 2),
     )
-    dm.setup()
-    standardization = compute_neural_input_stats(X_train)
-    return dm, X_train.shape[1], standardization
+    return dm, X_train.shape[1], compute_neural_input_stats(X_train)
+
+
+def build_datamodule(cfg, data_path):
+    splits = data.load_presplit_data(data_path, data_cfg=cfg.get("data", {}))
+    return datamodule_from_splits(cfg, splits)
 
 
 def create_loggers(cfg, model, saved_path, use_wandb):
@@ -126,19 +131,6 @@ def create_loggers(cfg, model, saved_path, use_wandb):
     return [csv_logger, wandb_logger], wandb_logger
 
 
-class DeferredEarlyStopping(EarlyStopping):
-    def __init__(self, start_epoch, **kwargs):
-        if start_epoch < 0:
-            raise ValueError("start_epoch must be a non-negative integer")
-        super().__init__(**kwargs)
-        self.start_epoch = int(start_epoch)
-
-    def _run_early_stopping_check(self, trainer):
-        if trainer.current_epoch < self.start_epoch:
-            return
-        super()._run_early_stopping_check(trainer)
-
-
 def build_training_callbacks(params):
     return [
         ModelCheckpoint(
@@ -149,14 +141,14 @@ def build_training_callbacks(params):
             every_n_epochs=1,
             filename="reg-{epoch:02d}-{val_loss:.2f}",
         ),
-        DeferredEarlyStopping(
-            start_epoch=params.get("angular_mmd_ramp_epochs", 0),
+        EarlyStopping(
             monitor="val_loss",
             patience=params.get("early_stopping_patience", 32),
             min_delta=params.get("early_stopping_min_delta", 0.0),
             mode="min",
             verbose=False,
         ),
+        LearningRateMonitor(logging_interval="epoch"),
     ]
 
 
@@ -180,7 +172,6 @@ def run_training(
         weight_decay=params.get("weight_decay", 1e-4),
         loss_weights=params["loss_weights"],
         mmd_config=cfg.get("mmd", {}),
-        angular_mmd_ramp_epochs=params.get("angular_mmd_ramp_epochs", 0),
         adaptive_loss_weights=params.get("adaptive_loss_weights", False),
         log_loss_gradient_cosines=params.get("log_loss_gradient_cosines", False),
         d_model=params["d_model"],
@@ -188,18 +179,20 @@ def run_training(
         attention_blocks=params.get("attention_blocks", 4),
         attention_dropout=params.get("attention_dropout", 0.1),
         decoder_dropout=params.get("decoder_dropout", 0.1),
+        lr_plateau_factor=params.get("lr_plateau_factor", 1.0),
+        lr_plateau_patience=params.get("lr_plateau_patience", 8),
     )
 
     callbacks = build_training_callbacks(params)
     ckpt = callbacks[0]
     steps_per_epoch = max(1, len(dm.train_dataloader()))
-    saved_path = resolve_repo_path(saved_path).resolve()
-    clean_training_output(saved_path)
+    saved_path = clean_training_output(saved_path)
     loggers, wandb_logger = create_loggers(cfg, model, saved_path, use_wandb)
+    accelerator = "gpu" if torch.cuda.is_available() else "cpu"
 
     trainer = Trainer(
         max_epochs=params["epochs"],
-        accelerator="gpu" if torch.cuda.is_available() else "cpu",
+        accelerator=accelerator,
         devices=1,
         callbacks=callbacks,
         logger=loggers,
@@ -211,7 +204,7 @@ def run_training(
     if dm.test_ds is not None and len(dm.test_ds) > 0:
         print("Running test evaluation with best checkpoint...")
         test_trainer = Trainer(
-            accelerator="gpu" if torch.cuda.is_available() else "cpu",
+            accelerator=accelerator,
             devices=1,
             logger=False,
             enable_checkpointing=False,
@@ -229,8 +222,8 @@ def run_training(
         wandb_logger.experiment.finish()
 
 
-def parse_args():
-    parser = argparse.ArgumentParser()
+def add_common_arguments(parser):
+    """Flags shared by train.py and k_fold_train.py."""
     parser.add_argument(
         "--config",
         "-c",
@@ -244,32 +237,56 @@ def parse_args():
         choices=[0, 1],
         help="Which physical GPU to use (sets CUDA_VISIBLE_DEVICES)",
     )
-    return parser.parse_args()
+    return parser
+
+
+def parse_args():
+    return add_common_arguments(argparse.ArgumentParser()).parse_args()
+
+
+def apply_cpu_affinity(params):
+    """Keep the process off this host's unstable CPUs; [] disables the guard."""
+    excluded = params.get("excluded_cpus", DEFAULT_EXCLUDED_CPUS)
+    if not excluded or not hasattr(os, "sched_setaffinity"):
+        return
+    available = os.sched_getaffinity(0)
+    allowed = available - set(excluded)
+    if not allowed:
+        print(f"Refusing to exclude every available CPU {sorted(available)}; leaving affinity as is")
+        return
+    if allowed != available:
+        os.sched_setaffinity(0, allowed)
+        print(f"CPU affinity: excluded {sorted(set(excluded) & available)}, using {sorted(allowed)}")
+
+
+def configure_runtime(params, gpu=None):
+    """Pin CPUs, select the GPU, cap thread pools, and seed the process."""
+    apply_cpu_affinity(params)
+
+    if gpu is not None:
+        os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu)
+        print(f"Using GPU {gpu} (CUDA_VISIBLE_DEVICES={os.environ['CUDA_VISIBLE_DEVICES']})")
+
+    num_threads = str(params.get("num_workers", 0))
+    for variable in (
+        "OMP_NUM_THREADS",
+        "MKL_NUM_THREADS",
+        "OPENBLAS_NUM_THREADS",
+        "NUMEXPR_NUM_THREADS",
+    ):
+        os.environ[variable] = num_threads
+
+    seed_everything(params.get("seed", 114), workers=True)
+    torch.set_default_dtype(torch.float32)
+    torch.set_float32_matmul_precision("medium")
 
 
 def main(train=True, arg=None, config_path=DEFAULT_CONFIG):
     if arg is not None and hasattr(arg, "config"):
         config_path = arg.config
     cfg = load_config(config_path)
-    params = cfg["parameters"]
 
-    if arg is not None and getattr(arg, "gpu", None) is not None:
-        os.environ["CUDA_VISIBLE_DEVICES"] = str(arg.gpu)
-        print(f"Using GPU {arg.gpu} (CUDA_VISIBLE_DEVICES={os.environ['CUDA_VISIBLE_DEVICES']})")
-
-    num_threads = str(params.get("num_workers", 0))
-    thread_variables = (
-        "OMP_NUM_THREADS",
-        "MKL_NUM_THREADS",
-        "OPENBLAS_NUM_THREADS",
-        "NUMEXPR_NUM_THREADS",
-    )
-    for variable in thread_variables:
-        os.environ[variable] = num_threads
-
-    seed_everything(params.get("seed", 114), workers=True)
-    torch.set_default_dtype(torch.float32)
-    torch.set_float32_matmul_precision("medium")
+    configure_runtime(cfg["parameters"], getattr(arg, "gpu", None))
 
     data_path = resolve_repo_path(cfg["paths"]["data_path"])
     dm, input_dim, standardization = build_datamodule(cfg, data_path)
@@ -277,14 +294,13 @@ def main(train=True, arg=None, config_path=DEFAULT_CONFIG):
         print("Evaluation mode, returning datamodule...")
         return dm
 
-    saved_path = resolve_repo_path(cfg["paths"]["saved_path"])
     run_training(
         cfg,
         dm,
         input_dim,
         standardization,
-        saved_path,
-        arg.wandb if arg is not None else False,
+        cfg["paths"]["saved_path"],
+        getattr(arg, "wandb", False),
     )
 
 

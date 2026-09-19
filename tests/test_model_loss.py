@@ -1,7 +1,5 @@
 import math
 import unittest
-from fractions import Fraction
-from types import SimpleNamespace
 from unittest.mock import patch
 
 import numpy as np
@@ -10,6 +8,7 @@ import torch
 from model import LightningWBoson
 from model import losses as loss_module
 from model.losses import dmet_loss, w_fourvec_loss
+from model.model import resolve_mmd_config
 from physics.torchBoost import Booster, _mock_inputs, safe_acos, safe_atan2
 
 
@@ -177,8 +176,6 @@ def _reference_angles(lep, wboson):
 
 
 def _pathological_rows():
-    """Deterministic rows that the validity mask must reject."""
-
     def w_row(w0_px, w0_py, w0_pz, w0_e):
         w1_e = math.sqrt(80.379**2 + 100.0)
         return torch.tensor([[w0_px, w0_py, w0_pz, w0_e, 0.0, 0.0, 0.0, w1_e]])
@@ -204,6 +201,17 @@ def _pathological_rows():
 
 
 class BoosterAngleRegressionTest(unittest.TestCase):
+    def test_theta_zeroes_gradient_for_out_of_range_cosine(self):
+        leptons = torch.zeros((1, 8))
+        w_bosons = torch.zeros((1, 8))
+        p4 = torch.tensor([[0.0, 0.0, 1.0001, 1.0]], requires_grad=True)
+        booster = Booster(leptons, w_bosons)
+
+        with patch.object(booster, "_norm", return_value=torch.ones(1)):
+            booster._theta(p4).backward()
+
+        torch.testing.assert_close(p4.grad, torch.zeros_like(p4))
+
     def test_booster_angles_unchanged_after_dedupe(self):
         torch.manual_seed(0)
         lep, wboson = _mock_inputs(batch=256)  # massive, finite W's by construction
@@ -231,9 +239,9 @@ class BoosterAngleRegressionTest(unittest.TestCase):
         valid, angles = Booster(leptons, actual_w).lep_theta_phi_with_validity()
         reference_valid, reference_angles = _reference_angles(leptons, reference_w)
         actual_grad = torch.autograd.grad(angles[valid].sum(), actual_w)[0]
-        reference_grad = torch.autograd.grad(
-            reference_angles[reference_valid].sum(), reference_w
-        )[0]
+        reference_grad = torch.autograd.grad(reference_angles[reference_valid].sum(), reference_w)[
+            0
+        ]
 
         torch.testing.assert_close(valid, reference_valid)
         torch.testing.assert_close(actual_grad, reference_grad, atol=1e-6, rtol=1e-5)
@@ -271,7 +279,7 @@ class HiggsFourVectorLossTest(unittest.TestCase):
 
 class DmetLossTest(unittest.TestCase):
     def test_loss_uses_raw_dmet_components(self):
-        features = torch.zeros((1, 21))
+        features = torch.zeros((1, 18))
         features[:, :2] = torch.tensor([[1.0, 2.0]])
         features[:, 4:6] = torch.tensor([[-3.0, 4.0]])
         features[:, 16:18] = torch.tensor([[20.0, 30.0]])
@@ -357,11 +365,11 @@ class HiggsMassLossTest(unittest.TestCase):
 class LightningModelLossTest(unittest.TestCase):
     def _basic_model(self, **kwargs):
         return LightningWBoson(
-            input_dim=21,
+            input_dim=18,
             d_model=8,
             num_heads=2,
-            std_mean_train=np.zeros(21, dtype=np.float32),
-            std_scale_train=np.ones(21, dtype=np.float32),
+            std_mean_train=np.zeros(18, dtype=np.float32),
+            std_scale_train=np.ones(18, dtype=np.float32),
             **kwargs,
         )
 
@@ -377,18 +385,18 @@ class LightningModelLossTest(unittest.TestCase):
         truth = torch.tensor([[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 0.0, 0.0]])
         prediction = torch.tensor([[3.0, 3.0, 3.0, 3.0, 1.0, 1.0, 1.0, 1.0]])
 
-        total, losses = model._compute_losses(torch.zeros((1, 21)), truth, prediction)
+        total, losses = model._compute_losses(torch.zeros((1, 18)), truth, prediction)
 
         torch.testing.assert_close(losses["higgs_fourvec"], torch.tensor(5.0))
         torch.testing.assert_close(total, torch.tensor(10.0))
 
-    def _ramp_model(self, angular_mmd_ramp_epochs=80):
+    def _weighted_model(self):
         return LightningWBoson(
-            input_dim=21,
+            input_dim=18,
             d_model=8,
             num_heads=2,
-            std_mean_train=np.zeros(21, dtype=np.float32),
-            std_scale_train=np.ones(21, dtype=np.float32),
+            std_mean_train=np.zeros(18, dtype=np.float32),
+            std_scale_train=np.ones(18, dtype=np.float32),
             loss_weights={
                 "w_fourvec": 2.0,
                 "higgs_mass": 6.0,
@@ -398,97 +406,26 @@ class LightningModelLossTest(unittest.TestCase):
                 "angular_mmd": 5.0,
                 "dmet": 8.0,
             },
-            angular_mmd_ramp_epochs=angular_mmd_ramp_epochs,
         )
 
-    def test_angular_mmd_weight_uses_cosine_ramp(self):
-        model = self._ramp_model(angular_mmd_ramp_epochs=80)
-        expected = {
-            0: 0.0,
-            20: 5.0 * (1.0 - math.cos(math.pi * 0.25)) / 2.0,
-            40: 2.5,
-            60: 5.0 * (1.0 - math.cos(math.pi * 0.75)) / 2.0,
-            80: 5.0,
-            100: 5.0,
-        }
-
-        for epoch, expected_angular_weight in expected.items():
-            with self.subTest(epoch=epoch):
-                model.trainer = SimpleNamespace(current_epoch=epoch)
-                weights = model._effective_loss_weights()
-
-                self.assertAlmostEqual(weights["angular_mmd"], expected_angular_weight)
-                self.assertEqual(weights["alpha_mmd"], 3.0)
-                self.assertEqual(weights["w_mass_mmd"], 4.0)
-
-    def test_logged_loss_weights_use_effective_angular_mmd_ramp_weight(self):
-        model = self._ramp_model(angular_mmd_ramp_epochs=80)
-        model.trainer = SimpleNamespace(current_epoch=40)
+    def test_logged_loss_weights_report_the_configured_weights(self):
+        model = self._weighted_model()
 
         with patch.object(model, "log") as log:
             model._log_loss_weights()
 
         logged_weights = {call.args[0]: call.args[1] for call in log.call_args_list}
-        self.assertAlmostEqual(logged_weights["loss_weight/angular_mmd"], 2.5)
+        self.assertEqual(logged_weights["loss_weight/angular_mmd"], 5.0)
         self.assertEqual(logged_weights["loss_weight/alpha_mmd"], 3.0)
         self.assertEqual(logged_weights["loss_weight/w_mass_mmd"], 4.0)
 
-    def test_gradient_rest_uses_effective_angular_mmd_ramp_weight(self):
-        model = self._ramp_model(angular_mmd_ramp_epochs=80)
-        model.trainer = SimpleNamespace(current_epoch=40)
-        parameter = next(model.parameters())
-        angular_loss = parameter.sum()
-        total = 2.5 * angular_loss
-
-        stats = model._compute_loss_gradient_stats(
-            {"angular_mmd": angular_loss},
-            total,
-        )
-
-        torch.testing.assert_close(stats["angular_mmd"]["rest"], torch.tensor(0.0))
-
-    def test_zero_angular_mmd_ramp_applies_full_weight_at_epoch_zero(self):
-        model = self._ramp_model(angular_mmd_ramp_epochs=0)
-        model.trainer = SimpleNamespace(current_epoch=0)
-
-        self.assertEqual(model._effective_loss_weights()["angular_mmd"], 5.0)
-
-    def test_angular_mmd_ramp_defaults_to_zero(self):
-        model = self._basic_model(loss_weights={"angular_mmd": 5.0})
-        model.trainer = SimpleNamespace(current_epoch=0)
-
-        self.assertEqual(model.angular_mmd_ramp_epochs, 0)
-        self.assertEqual(dict(model.hparams)["angular_mmd_ramp_epochs"], 0)
-        self.assertEqual(model._effective_loss_weights()["angular_mmd"], 5.0)
-
-    def test_rejects_invalid_angular_mmd_ramp_epochs(self):
-        for value in (
-            True,
-            -1,
-            1.5,
-            float("inf"),
-            float("nan"),
-            Fraction(10**10000, 3),
-        ):
-            with self.subTest(value=value):
-                with self.assertRaisesRegex(ValueError, "angular_mmd_ramp_epochs"):
-                    self._ramp_model(angular_mmd_ramp_epochs=value)
-
-    def test_preserves_exact_huge_integral_angular_mmd_ramp_epochs(self):
-        ramp_epochs = 10**10000
-
-        model = self._ramp_model(angular_mmd_ramp_epochs=ramp_epochs)
-
-        self.assertEqual(model.angular_mmd_ramp_epochs, ramp_epochs)
-        self.assertEqual(dict(model.hparams)["angular_mmd_ramp_epochs"], ramp_epochs)
-
     def test_weight_decay_is_forwarded_to_optimizer(self):
         model = LightningWBoson(
-            input_dim=21,
+            input_dim=18,
             d_model=8,
             num_heads=2,
-            std_mean_train=np.zeros(21, dtype=np.float32),
-            std_scale_train=np.ones(21, dtype=np.float32),
+            std_mean_train=np.zeros(18, dtype=np.float32),
+            std_scale_train=np.ones(18, dtype=np.float32),
             weight_decay=0.0123,
         )
 
@@ -518,14 +455,18 @@ class LightningModelLossTest(unittest.TestCase):
             {"kernel": "imq", "bandwidths": [0.05, 0.5, 5.0]},
         )
 
+    def test_still_rejects_a_misspelled_mmd_key(self):
+        with self.assertRaisesRegex(ValueError, "unsupported MMD config key"):
+            resolve_mmd_config({"angular": {"kernel": "imq", "bandwidths": [1.0], "featurs": "x"}})
+
     def test_rejects_invalid_mmd_config_at_model_construction(self):
         with self.assertRaisesRegex(ValueError, "finite and positive"):
             LightningWBoson(
-                input_dim=21,
+                input_dim=18,
                 d_model=8,
                 num_heads=2,
-                std_mean_train=np.zeros(21, dtype=np.float32),
-                std_scale_train=np.ones(21, dtype=np.float32),
+                std_mean_train=np.zeros(18, dtype=np.float32),
+                std_scale_train=np.ones(18, dtype=np.float32),
                 mmd_config={"alpha": {"bandwidths": [0.0]}},
             )
 
@@ -557,7 +498,7 @@ class LightningModelLossTest(unittest.TestCase):
             ),
         ):
             total, losses = model._compute_losses(
-                torch.zeros((1, 21)),
+                torch.zeros((1, 18)),
                 torch.zeros((1, 10)),
                 torch.zeros((1, 8)),
             )
@@ -572,11 +513,11 @@ class LightningModelLossTest(unittest.TestCase):
             with self.subTest(key=key):
                 with self.assertRaisesRegex(ValueError, f"unsupported loss_weights key.*{key}"):
                     LightningWBoson(
-                        input_dim=21,
+                        input_dim=18,
                         d_model=8,
                         num_heads=2,
-                        std_mean_train=np.zeros(21, dtype=np.float32),
-                        std_scale_train=np.ones(21, dtype=np.float32),
+                        std_mean_train=np.zeros(18, dtype=np.float32),
+                        std_scale_train=np.ones(18, dtype=np.float32),
                         loss_weights={key: 1.0},
                     )
 
@@ -585,7 +526,7 @@ class SharedValidMaskTest(unittest.TestCase):
     @staticmethod
     def _small_batch_with_invalid_rows():
         batch = 6
-        x = torch.zeros(batch, 21)
+        x = torch.zeros(batch, 18)
         x[:, 3] = 10.0
         x[:, 7] = 20.0
         w0 = torch.tensor([30.0, 5.0, 40.0, 100.0])
@@ -602,11 +543,11 @@ class SharedValidMaskTest(unittest.TestCase):
 
     def _model(self):
         return LightningWBoson(
-            input_dim=21,
+            input_dim=18,
             d_model=8,
             num_heads=2,
-            std_mean_train=np.zeros(21, dtype=np.float32),
-            std_scale_train=np.ones(21, dtype=np.float32),
+            std_mean_train=np.zeros(18, dtype=np.float32),
+            std_scale_train=np.ones(18, dtype=np.float32),
             loss_weights={
                 "w_fourvec": 0.0,
                 "higgs_mass": 0.0,
@@ -671,14 +612,12 @@ class NoHighLevelFeaturesTest(unittest.TestCase):
             )
         return inputs
 
-    def test_forward_without_high_level_features(self):
+    def test_forward_builds_the_w_pair_from_five_tokens(self):
         model = self._make_model().eval()
 
         predictions = model(self._valid_inputs())
 
         self.assertEqual(predictions.shape, (4, 8))
-        self.assertIsNone(model.model.hl_embed)
-        self.assertEqual(model.model.hl_input_dim, 0)
         self.assertEqual(model.model.num_tokens, 5)
 
     def test_rejects_unsupported_input_width(self):
@@ -693,7 +632,7 @@ class NoHighLevelFeaturesTest(unittest.TestCase):
 
 
 class AngularMMDTest(unittest.TestCase):
-    def test_feature_order_is_w_plus_then_w_minus(self):
+    def test_features_are_linear_theta_then_the_azimuth_pairs_per_lepton(self):
         angles = torch.tensor(
             [[0.0, -torch.pi / 2.0, torch.pi, torch.pi]],
         )
@@ -703,9 +642,54 @@ class AngularMMDTest(unittest.TestCase):
         expected = torch.tensor([[-1.0, -1.0, 0.0, 1.0, 0.0, -1.0]])
         torch.testing.assert_close(features, expected, atol=1.0e-6, rtol=0.0)
 
+    def test_pi_shift_is_not_collapsed(self):
+        """Per-lepton azimuths prevent opposite pi shifts from becoming a free direction."""
+        angles = torch.tensor([[0.7, -1.2, 2.1, 0.4]])
+        shifted = angles.clone()
+        shifted[..., 1] += torch.pi
+        shifted[..., 3] -= torch.pi
+
+        self.assertFalse(
+            torch.allclose(
+                loss_module.angular_mmd_features(angles),
+                loss_module.angular_mmd_features(shifted),
+                atol=1.0e-5,
+            )
+        )
+
+    def test_a_full_turn_leaves_the_features_alone(self):
+        """A 2 pi shift is the same physical direction, so it must cost nothing."""
+        angles = torch.tensor([[0.7, -1.2, 2.1, 0.4]])
+        turned = angles.clone()
+        turned[..., 1] += 2.0 * torch.pi
+
+        torch.testing.assert_close(
+            loss_module.angular_mmd_features(angles),
+            loss_module.angular_mmd_features(turned),
+            atol=1.0e-5,
+            rtol=0.0,
+        )
+
+    def test_every_angular_direction_reaches_the_features(self):
+        """A direction missing from the features is one the model can drift along."""
+        base = torch.tensor([[0.7, -torch.pi / 2.0, 2.1, 0.4]])
+
+        for index, angle in enumerate(("theta_pos", "phi_pos", "theta_neg", "phi_neg")):
+            with self.subTest(angle=angle):
+                moved = base.clone()
+                moved[..., index] += 0.3
+                self.assertFalse(
+                    torch.allclose(
+                        loss_module.angular_mmd_features(base),
+                        loss_module.angular_mmd_features(moved),
+                        atol=1.0e-6,
+                    ),
+                    msg=f"the feature map does not see {angle}",
+                )
+
     def test_public_loss_sanitizes_nonfinite_predictions(self):
         leptons, w_bosons = _mock_inputs(batch=4)
-        inputs = torch.zeros(4, 21)
+        inputs = torch.zeros(4, 18)
         inputs[:, :8] = leptons
         targets = torch.cat([w_bosons, torch.full((4, 2), 80.4)], dim=-1)
         predictions = w_bosons.clone()
@@ -734,17 +718,17 @@ class WMassLossTest(unittest.TestCase):
 class GradientCosineLoggingTest(unittest.TestCase):
     def test_fixed_loss_weights_are_logged_once_per_epoch(self):
         model = LightningWBoson(
-            input_dim=21,
+            input_dim=18,
             d_model=8,
             num_heads=2,
-            std_mean_train=np.zeros(21, dtype=np.float32),
-            std_scale_train=np.ones(21, dtype=np.float32),
+            std_mean_train=np.zeros(18, dtype=np.float32),
+            std_scale_train=np.ones(18, dtype=np.float32),
             loss_weights={"w_fourvec": 1.0},
         )
         parameter = next(model.parameters())
         total = parameter.square().sum()
         losses = {"w_fourvec": total}
-        batch = (torch.zeros(2, 21), torch.zeros(2, 10))
+        batch = (torch.zeros(2, 18), torch.zeros(2, 10))
 
         with (
             patch.object(model, "_compute_batch_losses", return_value=(total, losses)),
@@ -758,11 +742,11 @@ class GradientCosineLoggingTest(unittest.TestCase):
 
     def test_logging_only_mode_emits_cosines_without_changing_weights(self):
         model = LightningWBoson(
-            input_dim=21,
+            input_dim=18,
             d_model=8,
             num_heads=2,
-            std_mean_train=np.zeros(21, dtype=np.float32),
-            std_scale_train=np.ones(21, dtype=np.float32),
+            std_mean_train=np.zeros(18, dtype=np.float32),
+            std_scale_train=np.ones(18, dtype=np.float32),
             loss_weights={"w_fourvec": 1.0, "higgs_mass": 2.0},
             adaptive_loss_weights=False,
             log_loss_gradient_cosines=True,
@@ -776,7 +760,7 @@ class GradientCosineLoggingTest(unittest.TestCase):
             "higgs_mass": parameter.sum(),
         }
         total = losses["w_fourvec"] + 2.0 * losses["higgs_mass"]
-        inputs = torch.randn(2, 21)
+        inputs = torch.randn(2, 18)
         for start in (0, 4, 8, 12):
             inputs[:, start + 3] = (
                 torch.linalg.vector_norm(inputs[:, start : start + 3], dim=1) + torch.rand(2) + 0.1
@@ -797,11 +781,11 @@ class GradientCosineLoggingTest(unittest.TestCase):
     def test_gradient_norm_records_the_weighted_contribution(self):
         """The logged norm must be |weight * dLoss/dtheta|, not the unweighted one."""
         model = LightningWBoson(
-            input_dim=21,
+            input_dim=18,
             d_model=8,
             num_heads=2,
-            std_mean_train=np.zeros(21, dtype=np.float32),
-            std_scale_train=np.ones(21, dtype=np.float32),
+            std_mean_train=np.zeros(18, dtype=np.float32),
+            std_scale_train=np.ones(18, dtype=np.float32),
             loss_weights={"w_fourvec": 1.0, "higgs_mass": 3.0},
             log_loss_gradient_cosines=True,
             attention_blocks=1,
@@ -833,7 +817,3 @@ class GradientCosineLoggingTest(unittest.TestCase):
                 "grad_norm/higgs_mass",
             },
         )
-
-
-if __name__ == "__main__":
-    unittest.main()

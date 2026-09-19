@@ -144,7 +144,7 @@ class HiggsConstraintEvaluationTest(unittest.TestCase):
 
         def noisy_load_data(*_args, **_kwargs):
             print("loader chatter")
-            return np.ones((1, 21)), np.ones((1, 10)), None, None
+            return np.ones((1, 18)), np.ones((1, 10))
 
         def noisy_evaluate_checkpoint(*_args, **_kwargs):
             print("model chatter")
@@ -165,7 +165,7 @@ class HiggsConstraintEvaluationTest(unittest.TestCase):
                 higgs_script.torch,
                 "load",
                 return_value={"hyper_parameters": {"batch_size": 8}},
-            ),
+            ) as checkpoint_loader,
             patch.object(
                 higgs_script,
                 "evaluate_checkpoint",
@@ -180,6 +180,7 @@ class HiggsConstraintEvaluationTest(unittest.TestCase):
         self.assertEqual(len(stdout.getvalue().splitlines()), 1)
         self.assertIn("loader chatter", stderr.getvalue())
         self.assertIn("model chatter", stderr.getvalue())
+        checkpoint_loader.assert_not_called()
 
     def test_help_warns_that_checkpoints_must_be_trusted(self):
         stdout = io.StringIO()
@@ -197,7 +198,3 @@ class HiggsConstraintEvaluationTest(unittest.TestCase):
     def test_rejects_empty_aggregation(self):
         with self.assertRaisesRegex(ValueError, "empty split"):
             aggregate_metrics([])
-
-
-if __name__ == "__main__":
-    unittest.main()

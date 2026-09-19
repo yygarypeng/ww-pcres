@@ -2,16 +2,13 @@ import numpy as np
 import torch
 from sklearn.preprocessing import StandardScaler
 
-BASE_INPUT_DIM = 18  # w/o high-level features
-RAW_INPUT_DIM = 21  # w/ high-level features
-NEURAL_INPUT_DIM = 21
+BASE_INPUT_DIM = 18  # both leptons, two jet slots, then MET
 
 
 def _require_raw_input_shape(features):
-    if features.ndim != 2 or features.shape[1] not in (BASE_INPUT_DIM, RAW_INPUT_DIM):
+    if features.ndim != 2 or features.shape[1] != BASE_INPUT_DIM:
         raise ValueError(
-            f"Raw input features must have shape (N, {BASE_INPUT_DIM}) or (N, {RAW_INPUT_DIM}), "
-            f"got {features.shape}"
+            f"Raw input features must have shape (N, {BASE_INPUT_DIM}), got {features.shape}"
         )
 
 
@@ -59,10 +56,9 @@ def neural_input_features_numpy(features: np.ndarray) -> np.ndarray:
 
 
 def neural_input_features_torch(features: torch.Tensor) -> torch.Tensor:
-    if features.ndim != 2 or features.shape[1] not in (BASE_INPUT_DIM, RAW_INPUT_DIM):
+    if features.ndim != 2 or features.shape[1] != BASE_INPUT_DIM:
         raise ValueError(
-            f"Raw input features must have shape (N, {BASE_INPUT_DIM}) or (N, {RAW_INPUT_DIM}), "
-            f"got {tuple(features.shape)}"
+            f"Raw input features must have shape (N, {BASE_INPUT_DIM}), got {tuple(features.shape)}"
         )
     if not features.is_floating_point():
         features = features.to(torch.get_default_dtype())
@@ -99,7 +95,4 @@ def compute_neural_input_stats(features: np.ndarray) -> tuple[np.ndarray, np.nda
             mean[neural_start : neural_start + 4] = 0.0
             scale[neural_start : neural_start + 4] = 1.0
 
-    if features.shape[1] == RAW_INPUT_DIM:
-        mean[20] = 0.0
-        scale[20] = 1.0
     return mean, scale

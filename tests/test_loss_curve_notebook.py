@@ -113,9 +113,7 @@ def test_logged_weights_override_static_config_and_use_last_duplicate():
 
     pd.testing.assert_series_equal(
         data["weights"]["w_fourvec"],
-        pd.Series(
-            [1.5, 2.0, 4.0], index=pd.Index([0, 1, 2], name="epoch"), name="w_fourvec"
-        ),
+        pd.Series([1.5, 2.0, 4.0], index=pd.Index([0, 1, 2], name="epoch"), name="w_fourvec"),
     )
     pd.testing.assert_series_equal(
         data["weights"]["dmet"],
@@ -195,9 +193,7 @@ def test_metric_series_keeps_last_value_for_duplicate_epoch():
 
     pd.testing.assert_series_equal(
         result,
-        pd.Series(
-            [2.0, 3.0], index=pd.Index([0, 1], name="epoch"), name="w_fourvec_loss"
-        ),
+        pd.Series([2.0, 3.0], index=pd.Index([0, 1], name="epoch"), name="w_fourvec_loss"),
     )
 
 
@@ -386,6 +382,34 @@ def test_plot_gradient_norms_shows_magnitude_and_share(capsys):
     out = capsys.readouterr().out
     assert "Gradient budget at epoch 2" in out
     assert "75.0%" in out  # higgs_mass 0.03 of 0.04 at the last epoch
+    plt.close("all")
+
+
+def test_plot_gradient_norms_uses_one_readable_shared_legend():
+    df = pd.DataFrame(
+        {
+            "epoch": [0, 1],
+            "grad_norm/angular_mmd": [0.03, 0.02],
+            "grad_norm/higgs_mass": [0.01, 0.02],
+        }
+    )
+
+    fig = plot_gradient_norms(df)
+
+    magnitude, budget = fig.axes
+    assert magnitude.get_legend() is None
+    assert budget.get_legend() is None
+    assert len(fig.legends) == 1
+    legend = fig.legends[0]
+    assert {text.get_text() for text in legend.get_texts()} == {"angular_mmd", "higgs_mass"}
+    assert all(text.get_fontsize() >= 11 for text in legend.get_texts())
+
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    legend_box = legend.get_window_extent(renderer)
+    assert legend_box.y1 < min(axis.get_window_extent(renderer).y0 for axis in fig.axes)
+    assert len({round(text.get_window_extent(renderer).x0) for text in legend.get_texts()}) > 1
+    assert budget.yaxis.get_major_formatter()(0.5) == "50%"
     plt.close("all")
 
 

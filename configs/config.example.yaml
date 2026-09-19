@@ -7,7 +7,6 @@ parameters:
   early_stopping_patience: 32
   early_stopping_min_delta: 0.0
   checkpoint_save_top_k: 3
-  angular_mmd_ramp_epochs: 80
   gradient_clip_val: 1.0
   adaptive_loss_weights: false
   log_loss_gradient_cosines: false
@@ -42,10 +41,9 @@ mmd:
     bandwidths: [0.05, 0.5, 5.0]
 
 data:
-  categories: null
-  # Drop events whose measured dilepton mass reaches this bound, in GeV.
-  # WConstraintsLayer needs a value below 125; null applies no bound.
-  max_dilepton_mass: null
+  # Splits are the fixed ggF_train / ggF_val / ggF_test HDF5 groups.
+  # max_events_per_category optionally caps the events read from each group.
+  # max_events_per_category: 100000
 
 paths:
   saved_path: "outputs/run"

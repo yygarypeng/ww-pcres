@@ -1,317 +1,172 @@
 import h5py
 import numpy as np
-from sklearn.preprocessing import StandardScaler
 
 from data.preprocessing import valid_input_energy_rows
+from physics.physics import HIGGS_MASS
+
+SPLITS = ("train", "val", "test")
+
+# Danning's splitting policy: each split is one fixed top-level HDF5 group.
+PRESPLIT_CATEGORIES = {split: f"ggF_{split}" for split in SPLITS}
+
+# Keys accepted in the config ``data:`` section. Anything else is a typo or a
+# leftover from a removed split policy, so it is rejected instead of ignored.
+DATA_CONFIG_KEYS = frozenset({"max_events_per_category"})
+
+FOUR_VECTOR = ("px", "py", "pz", "energy")
+JET_SLOTS = 2
+LEPTONS = ("pos_lep", "neg_lep")
+
+# HDF5 fields read from every selected category; anything else in the file is ignored.
+CATEGORY_FIELDS = {
+    "pos_lep": FOUR_VECTOR,
+    "neg_lep": FOUR_VECTOR,
+    "jets": FOUR_VECTOR,
+    "met": ("px", "py"),
+    "truth_pos_w": FOUR_VECTOR + ("m",),
+    "truth_neg_w": FOUR_VECTOR + ("m",),
+}
 
 
-def select_categories(available_categories, categories=None):
-    """Select HDF5 categories. None means load all categories."""
+def select_categories(available_categories, categories):
+    """Validate that every requested HDF5 category exists in the file."""
     available = list(available_categories)
-    if categories:
-        missing = sorted(set(categories) - set(available))
-        if missing:
-            raise ValueError(
-                f"Requested HDF5 categories not found: {missing}. Available: {available}"
-            )
-        selected = list(categories)
-    else:
-        selected = available
+    selected = list(categories)
 
+    missing = sorted(set(selected) - set(available))
+    if missing:
+        raise ValueError(f"Requested HDF5 categories not found: {missing}. Available: {available}")
     if not selected:
         raise ValueError(f"No HDF5 categories selected. Available: {available}")
 
     return selected
 
 
-def split_categories(data_cfg, split):
-    explicit_categories = data_cfg.get(f"{split}_categories")
-    if explicit_categories is not None:
-        return explicit_categories
-
-    categories = data_cfg.get("categories")
-    if categories:
-        split_suffix = f"_{split}"
-        selected_categories = []
-        for category in categories:
-            category = str(category)
-            if category.endswith(("_train", "_val", "_test")):
-                if category.endswith(split_suffix):
-                    selected_categories.append(category)
-            else:
-                selected_categories.append(f"{category}{split_suffix}")
-
-        if not selected_categories:
-            raise ValueError(f"No categories selected for {split} split from data.categories")
-        return selected_categories
-
-    return [f"ggF_{split}"]
+def load_particles_from_h5(filename, categories, max_events=None):
+    """Read the fields of CATEGORY_FIELDS from each selected category of an HDF5 file."""
+    with h5py.File(filename, "r") as f:
+        return {
+            category: {
+                group: {field: f[category][group][field][:max_events] for field in fields}
+                for group, fields in CATEGORY_FIELDS.items()
+            }
+            for category in select_categories(f.keys(), categories=categories)
+        }
 
 
-def compute_standardization_stats(train_obj, target_obj=None, train_indices=None):
-    """Fit standardization statistics, optionally on a training subset only."""
-    feature_source = train_obj if train_indices is None else train_obj[train_indices]
-    feature_scaler = StandardScaler().fit(feature_source)
-    feature_stats = (feature_scaler.mean_, feature_scaler.scale_)
-
-    if target_obj is None:
-        return feature_stats, None
-
-    target_source = target_obj if train_indices is None else target_obj[train_indices]
-    target_scaler = StandardScaler().fit(target_source)
-    target_stats = (target_scaler.mean_, target_scaler.scale_)
-    return feature_stats, target_stats
+def _pack_inputs(category):
+    """Pack 18 raw input columns: both leptons, two jet slots, then MET, all in GeV."""
+    columns = [category[lepton][field] for lepton in LEPTONS for field in FOUR_VECTOR]
+    columns += [
+        category["jets"][field][:, slot] for slot in range(JET_SLOTS) for field in FOUR_VECTOR
+    ]
+    columns += [category["met"][field] for field in ("px", "py")]
+    return np.column_stack(columns)
 
 
-def _read_dataset(dataset, max_events=None):
-    if max_events is not None and dataset.shape and dataset.shape[0] > max_events:
-        return dataset[:max_events]
-    return dataset[:]
+def _pack_targets(category):
+    """Pack 10 target columns: both truth W four-vectors, then the two truth W masses."""
+    bosons = ("truth_pos_w", "truth_neg_w")
+    columns = [category[boson][field] for boson in bosons for field in FOUR_VECTOR]
+    columns += [category[boson]["m"] for boson in bosons]
+    return np.column_stack(columns)
 
 
 def _valid_truth_w_rows(target_obj):
+    """Rows whose truth W bosons are finite, timelike, and consistent with their stored mass."""
     truth = np.asarray(target_obj, dtype=np.float64)
-    pos_px, pos_py, pos_pz, pos_energy = truth[:, :4].T
-    neg_px, neg_py, neg_pz, neg_energy = truth[:, 4:8].T
-    pos_mass, neg_mass = truth[:, 8:10].T
+    momenta = truth[:, :8].reshape(-1, 2, 4)  # (event, W boson, (px, py, pz, energy))
+    masses = truth[:, 8:10]
 
-    valid = np.ones(len(truth), dtype=bool)
-    for px, py, pz, energy, mass in (
-        (pos_px, pos_py, pos_pz, pos_energy, pos_mass),
-        (neg_px, neg_py, neg_pz, neg_energy, neg_mass),
-    ):
-        raw_m2 = energy**2 - px**2 - py**2 - pz**2
-        delta = raw_m2 - mass**2
-        scale = energy**2 + px**2 + py**2 + pz**2 + mass**2
-        valid &= (
-            np.isfinite(np.column_stack((px, py, pz, energy, mass))).all(axis=1)
-            & (energy > 0.0)
-            & (mass >= 0.0)
-            & (raw_m2 > 0.0)
-            & (np.abs(delta) <= 1.0e-6 + 1.0e-6 * scale)
-        )
+    px, py, pz, energy = momenta.transpose(2, 0, 1)
+    momentum2 = px**2 + py**2 + pz**2
+    mass2 = energy**2 - momentum2
+    tolerance = 1.0e-6 + 1.0e-6 * (energy**2 + momentum2 + masses**2)
+    valid = (
+        np.isfinite(momenta).all(axis=2)
+        & np.isfinite(masses)
+        & (energy > 0.0)
+        & (masses >= 0.0)
+        & (mass2 > 0.0)
+        & (np.abs(mass2 - masses**2) <= tolerance)
+    ).all(axis=1)
 
-    pair_m2 = (
-        (pos_energy + neg_energy) ** 2
-        - (pos_px + neg_px) ** 2
-        - (pos_py + neg_py) ** 2
-        - (pos_pz + neg_pz) ** 2
-    )
-    return valid & np.isfinite(pair_m2) & (pair_m2 > 0.0)
+    pair = momenta.sum(axis=1)
+    pair_mass2 = pair[:, 3] ** 2 - (pair[:, :3] ** 2).sum(axis=1)
+    return valid & np.isfinite(pair_mass2) & (pair_mass2 > 0.0)
 
 
-def _valid_dilepton_mass_rows(train_obj, max_dilepton_mass):
-    """Rows whose measured dilepton mass stays below the bound, in GeV.
+def _valid_dilepton_mass_rows(train_obj):
+    """Rows whose measured dilepton mass stays below the Higgs mass, in GeV.
 
     Adding massless neutrinos can only raise an invariant mass, so an event
     whose two leptons already reach the Higgs mass can never be put on the Higgs
-    mass shell. The bound is therefore an event selection on measured leptons,
-    decidable before the model runs, and it has to be applied to every split.
+    mass shell, and WConstraintsLayer has no physical solution for it. The bound
+    is therefore an event selection on measured leptons, decidable before the
+    model runs, and it applies to every split.
     """
     leptons = np.asarray(train_obj[:, :8], dtype=np.float64)
     px, py, pz, energy = (leptons[:, i] + leptons[:, i + 4] for i in range(4))
     mass2 = energy**2 - px**2 - py**2 - pz**2
-    return np.isfinite(mass2) & (mass2 < float(max_dilepton_mass) ** 2)
+    return np.isfinite(mass2) & (mass2 < HIGGS_MASS**2)
 
 
-def load_particles_from_h5(filename, categories=None, max_events=None):
-    result = {}
+def _row_masks(train_obj, target_obj):
+    """The two row masks load_data applies, as (valid, kept).
 
-    with h5py.File(filename, "r") as f:
-        selected_categories = select_categories(f.keys(), categories=categories)
-        # For each category (ggF_train, ggF_test, VBF_train, etc.)
-        for category_name in selected_categories:
-            category_data = {}
-
-            # For each particle/object group within the category
-            for group_name in f[category_name].keys():
-                group_data = {}
-
-                # Load datasets (numpy arrays)
-                if isinstance(f[category_name][group_name], h5py.Group):
-                    for dataset_name in f[category_name][group_name].keys():
-                        group_data[dataset_name] = _read_dataset(
-                            f[category_name][group_name][dataset_name],
-                            max_events=max_events,
-                        )
-
-                    # Load attributes (scalars)
-                    for attr_name, attr_value in f[category_name][group_name].attrs.items():
-                        group_data[attr_name] = attr_value
-                else:
-                    # Handle case where it's a dataset directly
-                    group_data = _read_dataset(f[category_name][group_name], max_events=max_events)
-
-                category_data[group_name] = group_data
-
-            result[category_name] = category_data
-
-    return result
-
-
-def _load_filtered_arrays(data_path, categories, max_events, max_dilepton_mass=None):
-    """Load + row-filter raw train/target arrays without fitting scalers."""
-    data = load_particles_from_h5(
-        data_path,
-        categories=categories,
-        max_events=max_events,
+    `valid` drops unusable kinematics and `kept` additionally applies the dilepton mass
+    bound to the survivors, so `kept` selects exactly the rows load_data returns.
+    """
+    valid = (
+        np.isfinite(train_obj).all(axis=1)
+        & valid_input_energy_rows(train_obj)
+        & _valid_truth_w_rows(target_obj)
     )
+    kept = valid.copy()
+    kept[valid] = _valid_dilepton_mass_rows(train_obj[valid])
+    return valid, kept
 
-    def col(a):
-        return a.reshape(a.shape[0], -1)
 
-    # Collect all training and target objects from all categories
-    all_train_objs = []
-    all_target_objs = []
+def load_data(data_path, categories, max_events_per_category=None):
+    """Load the raw input and target arrays of the selected categories, dropping unusable rows."""
+    data = load_particles_from_h5(data_path, categories, max_events_per_category)
+    print("Using HDF5 categories:", ", ".join(data))
 
-    selected_categories = list(data.keys())
-    print("Using HDF5 categories:", ", ".join(selected_categories))
-
-    # Iterate through selected categories (ggF_train, VBF_train, etc.)
-    for category in selected_categories:
-        category_data = data[category]
-
-        # training features
-        lep_pos_px = category_data["pos_lep"]["px"]
-        lep_pos_py = category_data["pos_lep"]["py"]
-        lep_pos_pz = category_data["pos_lep"]["pz"]
-        lep_pos_energy = category_data["pos_lep"]["energy"]
-        lep_neg_px = category_data["neg_lep"]["px"]
-        lep_neg_py = category_data["neg_lep"]["py"]
-        lep_neg_pz = category_data["neg_lep"]["pz"]
-        lep_neg_energy = category_data["neg_lep"]["energy"]
-
-        met_px = category_data["met"]["px"]
-        met_py = category_data["met"]["py"]
-
-        jet_px = category_data["jets"]["px"][:, 0:2]
-        jet_py = category_data["jets"]["py"][:, 0:2]
-        jet_pz = category_data["jets"]["pz"][:, 0:2]
-        jet_energy = category_data["jets"]["energy"][:, 0:2]
-
-        # pack them
-        # all training mass-like objects are in GeV unit
-
-        train_obj = np.concatenate(
-            [
-                col(lep_pos_px),  # 0
-                col(lep_pos_py),  # 1
-                col(lep_pos_pz),  # 2
-                col(lep_pos_energy),  # 3
-                col(lep_neg_px),  # 4
-                col(lep_neg_py),  # 5
-                col(lep_neg_pz),  # 6
-                col(lep_neg_energy),  # 7
-                col(jet_px[:, 0]),  # 8
-                col(jet_py[:, 0]),  # 9
-                col(jet_pz[:, 0]),  # 10
-                col(jet_energy[:, 0]),  # 11
-                col(jet_px[:, 1]),  # 12
-                col(jet_py[:, 1]),  # 13
-                col(jet_pz[:, 1]),  # 14
-                col(jet_energy[:, 1]),  # 15
-                col(met_px),  # 16
-                col(met_py),  # 17
-            ],
-            axis=-1,
-        )
-
-        # target objects
-        target_obj = np.concatenate(
-            [
-                col(category_data["truth_pos_w"]["px"]),
-                col(category_data["truth_pos_w"]["py"]),
-                col(category_data["truth_pos_w"]["pz"]),
-                col(category_data["truth_pos_w"]["energy"]),
-                col(category_data["truth_neg_w"]["px"]),
-                col(category_data["truth_neg_w"]["py"]),
-                col(category_data["truth_neg_w"]["pz"]),
-                col(category_data["truth_neg_w"]["energy"]),
-                col(category_data["truth_pos_w"]["m"]),
-                col(category_data["truth_neg_w"]["m"]),
-            ],
-            axis=-1,
-        )
-
-        all_train_objs.append(train_obj)
-        all_target_objs.append(target_obj)
-
-    # Concatenate all categories
-    train_obj = np.concatenate(all_train_objs, axis=0)
-    target_obj = np.concatenate(all_target_objs, axis=0)
-
+    train_obj = np.concatenate([_pack_inputs(category) for category in data.values()])
+    target_obj = np.concatenate([_pack_targets(category) for category in data.values()])
     print("Training objects shape:", train_obj.shape)
     print("Target objects shape:", target_obj.shape)
 
-    # Remove rows with non-finite values or invalid truth W kinematics
-    valid_train = np.isfinite(train_obj).all(axis=1)
-    valid_target = np.isfinite(target_obj).all(axis=1)
-    valid_physics = _valid_truth_w_rows(target_obj)
-    valid_input_energy = valid_input_energy_rows(train_obj)
-    valid_idx = valid_train & valid_target & valid_physics & valid_input_energy
-
-    train_obj = train_obj[valid_idx]
-    target_obj = target_obj[valid_idx]
-
+    valid, kept = _row_masks(train_obj, target_obj)
     print(
         "Removed",
-        (~valid_idx).sum(),
+        (~valid).sum(),
         "rows with non-finite values, invalid input energies, or invalid truth W kinematics",
     )
-
-    if max_dilepton_mass is not None:
-        below_bound = _valid_dilepton_mass_rows(train_obj, max_dilepton_mass)
-        train_obj = train_obj[below_bound]
-        target_obj = target_obj[below_bound]
-        print(
-            "Removed",
-            (~below_bound).sum(),
-            f"rows with a dilepton mass of {max_dilepton_mass} GeV or more",
-        )
-
-    return train_obj, target_obj
-
-
-def load_data(
-    data_path,
-    categories=None,
-    max_events_per_category=None,
-    max_dilepton_mass=None,
-):
-    train_obj, target_obj = _load_filtered_arrays(
-        data_path, categories, max_events_per_category, max_dilepton_mass
+    print(
+        "Removed",
+        (valid & ~kept).sum(),
+        f"rows with a dilepton mass of {HIGGS_MASS} GeV or more",
     )
-    (std_mean_train, std_scale_train), (std_mean_target, std_scale_target) = (
-        compute_standardization_stats(train_obj, target_obj)
-    )
-    return (
-        train_obj,
-        target_obj,
-        (std_mean_train, std_scale_train),
-        (std_mean_target, std_scale_target),
-    )
+
+    return train_obj[kept], target_obj[kept]
 
 
 def load_presplit_data(data_path, data_cfg=None):
-    """Load train/val/test arrays from HDF5 groups that are already split."""
-    if data_cfg is None:
-        data_cfg = {}
-
-    train_categories = split_categories(data_cfg, "train")
-    val_categories = split_categories(data_cfg, "val")
-    test_categories = split_categories(data_cfg, "test")
+    """Load train/val/test arrays from the fixed pre-split HDF5 groups."""
+    data_cfg = data_cfg or {}
+    unknown_keys = set(data_cfg) - DATA_CONFIG_KEYS
+    if unknown_keys:
+        names = ", ".join(sorted(unknown_keys))
+        raise ValueError(f"unsupported data config key(s): {names}")
 
     print("Using original pre-split HDF5 data")
-    print("Train categories:", ", ".join(train_categories))
-    print("Validation categories:", ", ".join(val_categories))
-    print("Test categories:", ", ".join(test_categories))
+    for split, category in PRESPLIT_CATEGORIES.items():
+        print(f"{split.capitalize()} category:", category)
 
     max_events = data_cfg.get("max_events_per_category")
-    max_dilepton_mass = data_cfg.get("max_dilepton_mass")
-    splits = (train_categories, val_categories, test_categories)
-    (X_train, Y_train), (X_val, Y_val), (X_test, Y_test) = (
-        _load_filtered_arrays(data_path, categories, max_events, max_dilepton_mass)
-        for categories in splits
+    return tuple(
+        array
+        for category in PRESPLIT_CATEGORIES.values()
+        for array in load_data(data_path, [category], max_events)
     )
-
-    return X_train, Y_train, X_val, Y_val, X_test, Y_test

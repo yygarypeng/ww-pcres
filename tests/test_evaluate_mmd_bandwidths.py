@@ -2,6 +2,7 @@ import io
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import numpy as np
@@ -24,26 +25,34 @@ from scripts.evaluate_mmd_bandwidths import (
 
 
 class BandwidthEvaluationTest(unittest.TestCase):
-    def test_batch_features_do_not_require_removed_condition_output(self):
-        class Model:
-            def __call__(self, features, return_aux=False):
-                assert not return_aux
-                return torch.zeros((len(features), 8))
+    def test_main_does_not_load_checkpoint_metadata_with_explicit_batch_size(self):
+        checkpoint = CheckpointInfo(Path("model.ckpt"), 2, 10)
+        args = SimpleNamespace(
+            checkpoint_dir=Path("checkpoints"),
+            data_path=Path("data.h5"),
+            split="ggF_val",
+            batch_size=4,
+        )
+        with (
+            patch.object(mmd_script, "parse_args", return_value=args),
+            patch.object(
+                mmd_script,
+                "discover_unique_checkpoints",
+                return_value=([checkpoint], {}),
+            ),
+            patch.object(
+                mmd_script,
+                "load_data",
+                return_value=(np.ones((1, 18)), np.ones((1, 10))),
+            ),
+            patch.object(mmd_script.torch, "load") as checkpoint_loader,
+            patch.object(mmd_script, "evaluate_checkpoint", return_value={}) as evaluate,
+            patch.object(mmd_script, "print_results"),
+        ):
+            mmd_script.main()
 
-            def _mmd_kwargs(self, _name):
-                return {"kernel": "imq", "bandwidths": [1.0]}
-
-        def capture(_loss_fn, *args, **_kwargs):
-            return args
-
-        with patch.object(mmd_script, "_capture_mmd_inputs", side_effect=capture):
-            captured = mmd_script._batch_feature_inputs(
-                Model(), torch.zeros((2, 21)), torch.zeros((2, 10))
-            )
-
-        self.assertEqual(len(captured["alpha"]), 3)
-        self.assertEqual(len(captured["mass"]), 3)
-        self.assertEqual(len(captured["angular"]), 3)
+        checkpoint_loader.assert_not_called()
+        assert evaluate.call_args.args[3] == 4
 
     def test_checkpoint_evaluation_applies_captured_valid_mask(self):
         class Model:
@@ -74,7 +83,7 @@ class BandwidthEvaluationTest(unittest.TestCase):
             del truth, kernel, bandwidths
             row_counts.append(len(prediction))
             zero = prediction.new_zeros(())
-            return [(zero, zero, zero, prediction.numel())]
+            return [(zero, zero, prediction.numel())]
 
         checkpoint = CheckpointInfo(Path("model.ckpt"), epoch=1, global_step=2)
         with (
@@ -84,7 +93,7 @@ class BandwidthEvaluationTest(unittest.TestCase):
         ):
             mmd_script.evaluate_checkpoint(
                 checkpoint,
-                np.zeros((2, 21)),
+                np.zeros((2, 18)),
                 np.zeros((2, 10)),
                 batch_size=2,
                 device=torch.device("cpu"),
@@ -110,16 +119,19 @@ class BandwidthEvaluationTest(unittest.TestCase):
     def test_weighted_mean_uses_valid_row_counts(self):
         self.assertEqual(weighted_mean([(2.0, 2), (8.0, 1)]), 4.0)
 
-    def test_single_bandwidth_mean_matches_feature_kernel_mixture(self):
+    def test_mixture_combines_single_bandwidths_before_the_square_root(self):
+        """The mixture is a quadratic mean; averaging MMDs would understate it."""
         prediction = torch.tensor([[0.0], [0.5], [1.0], [1.5]])
         truth = torch.tensor([[0.0], [0.25], [1.0], [2.0]])
         bandwidths = [0.01, 0.1, 1.0, 10.0, 100.0]
 
-        individual = per_bandwidth_mmd(
-            prediction,
-            truth,
-            kernel="imq",
-            bandwidths=bandwidths,
+        individual = torch.stack(
+            per_bandwidth_mmd(
+                prediction,
+                truth,
+                kernel="imq",
+                bandwidths=bandwidths,
+            )
         )
         mixed = compute_mmd(
             prediction,
@@ -128,7 +140,8 @@ class BandwidthEvaluationTest(unittest.TestCase):
             bandwidths=bandwidths,
         )
 
-        torch.testing.assert_close(torch.stack(individual).mean(), mixed)
+        torch.testing.assert_close(individual.square().mean().sqrt(), mixed)
+        self.assertLess(individual.mean().item(), mixed.item())
 
     def test_bandwidth_diagnostics_match_values_and_include_gradients(self):
         prediction = torch.tensor([[0.0], [0.5], [1.0], [1.5]])
@@ -141,17 +154,15 @@ class BandwidthEvaluationTest(unittest.TestCase):
         diagnostics = per_bandwidth_mmd_diagnostics(prediction, truth, **kwargs)
         values = per_bandwidth_mmd(prediction, truth, **kwargs)
 
-        for (mmd2, loss, gradient_squared_sum, gradient_elements), expected_value in zip(
+        for (mmd, gradient_squared_sum, gradient_elements), expected_value in zip(
             diagnostics, values
         ):
-            self.assertTrue(torch.isfinite(mmd2))
-            self.assertTrue(torch.isfinite(loss))
+            self.assertTrue(torch.isfinite(mmd))
             self.assertTrue(torch.isfinite(gradient_squared_sum))
             self.assertGreaterEqual(float(gradient_squared_sum), 0.0)
             self.assertEqual(gradient_elements, prediction.numel())
-            torch.testing.assert_close(mmd2, expected_value)
-            torch.testing.assert_close(loss, expected_value)
-        self.assertTrue(any(float(item[2]) > 0.0 for item in diagnostics))
+            torch.testing.assert_close(mmd, expected_value)
+        self.assertTrue(any(float(item[1]) > 0.0 for item in diagnostics))
 
     def test_bandwidth_diagnostics_remove_mean_reduction_gradient_scaling(self):
         prediction = torch.tensor([[0.0], [0.5], [1.0], [1.5]], requires_grad=True)
@@ -163,7 +174,7 @@ class BandwidthEvaluationTest(unittest.TestCase):
 
         value = per_bandwidth_mmd(prediction, truth, **kwargs)[0]
         expected_gradient = torch.autograd.grad(value, prediction)[0] * prediction.shape[0]
-        _, _, gradient_squared_sum, gradient_elements = per_bandwidth_mmd_diagnostics(
+        _, gradient_squared_sum, gradient_elements = per_bandwidth_mmd_diagnostics(
             prediction, truth, **kwargs
         )[0]
 
@@ -172,19 +183,20 @@ class BandwidthEvaluationTest(unittest.TestCase):
 
     def test_aggregate_bandwidth_diagnostics_uses_global_squared_rms(self):
         batches = [
-            (2.0, 1.0, 1.0, 1, 1),
-            (8.0, 3.0, 27.0, 3, 3),
+            (2.0, 1.0, 1, 1),
+            (8.0, 27.0, 3, 3),
         ]
 
-        mmd2, loss, gradient_rms = mmd_script.aggregate_bandwidth_diagnostics(batches)
+        mmd, gradient_rms = mmd_script.aggregate_bandwidth_diagnostics(batches)
 
-        self.assertEqual(mmd2, 6.5)
-        self.assertEqual(loss, 2.5)
+        self.assertEqual(mmd, 6.5)
         self.assertAlmostEqual(gradient_rms, 7.0**0.5)
         self.assertNotAlmostEqual(gradient_rms, 2.5)
 
-    def test_mixed_loss_equals_mean_mmd2(self):
-        diagnostics = [(0.0, 0.0, 0.0), (3.75, 3.75, 0.0)]
+    def test_mixed_mmd_is_the_quadratic_mean_of_the_bandwidths(self):
+        # compute_mmd mixes as sqrt(mean MMD^2), so 0 and 3.75 mix to 3.75/sqrt(2),
+        # not to their arithmetic mean of 1.875.
+        diagnostics = [(0.0, 0.0), (3.75, 0.0)]
         multipliers = {name: (1.0, 2.0) for name in ("alpha", "mass", "angular")}
         results = {name: diagnostics for name in multipliers}
 
@@ -192,26 +204,24 @@ class BandwidthEvaluationTest(unittest.TestCase):
             print_results({"epoch-1-step-2": (multipliers, results)})
 
         output = "\n".join(call.args[0] for call in mock_print.call_args_list)
-        self.assertIn("mixed_mmd2=1.875", output)
-        self.assertIn("mixed_loss=1.875", output)
+        self.assertIn(f"mixed_mmd={(3.75**2 / 2) ** 0.5:.8g}", output)
+        self.assertNotIn("mixed_mmd=1.875", output)
 
     def test_printed_results_label_values_and_gradients(self):
         multipliers = {name: (1.0, 2.0) for name in ("alpha", "mass", "angular")}
-        results = {name: [(0.25, 0.25, 0.125), (0.5, 0.5, 0.25)] for name in multipliers}
+        results = {name: [(0.25, 0.125), (0.5, 0.25)] for name in multipliers}
 
         with patch("builtins.print") as mock_print:
             print_results({"epoch-1-step-2": (multipliers, results)})
 
         output = "\n".join(call.args[0] for call in mock_print.call_args_list)
-        self.assertIn("mmd2=", output)
-        self.assertIn("loss=", output)
+        self.assertIn("mmd=", output)
         self.assertIn("prediction_gradient_rms=", output)
-        self.assertIn("mixed_mmd2=0.375", output)
-        self.assertIn("mixed_loss=0.375", output)
+        self.assertIn(f"mixed_mmd={((0.25**2 + 0.5**2) / 2) ** 0.5:.8g}", output)
         for line in output.splitlines()[1:]:
             self.assertNotIn(
                 "prediction_gradient_rms",
-                line.split("mixed_mmd2=", maxsplit=1)[1],
+                line.split("mixed_mmd=", maxsplit=1)[1],
             )
 
     def test_help_warns_that_checkpoints_must_be_trusted(self):
@@ -258,7 +268,3 @@ class BandwidthEvaluationTest(unittest.TestCase):
         mask = valid_mmd_rows(prediction, truth)
 
         torch.testing.assert_close(mask, torch.tensor([True, False, False]))
-
-
-if __name__ == "__main__":
-    unittest.main()

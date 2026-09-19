@@ -16,8 +16,8 @@ in `configs/config.yaml` as needed.
 
 ## Data
 
-The HDF5 file must contain pre-split top-level categories such as `ggF_train`,
-`ggF_val`, and `ggF_test`. Each selected category must contain:
+The HDF5 file must contain the three pre-split top-level groups `ggF_train`,
+`ggF_val`, and `ggF_test`. Each group must contain:
 
 | Group | Fields |
 | --- | --- |
@@ -26,10 +26,11 @@ The HDF5 file must contain pre-split top-level categories such as `ggF_train`,
 | `met` | `px`, `py` |
 | `truth_pos_w`, `truth_neg_w` | `px`, `py`, `pz`, `energy`, `m` |
 
-`data.categories: null` selects the three default `ggF` categories. A list such
-as `[ggF, VBF]` selects those stems for every split. Split-specific
-`train_categories`, `val_categories`, and `test_categories` override it;
-`max_events_per_category` optionally limits each category.
+Those three groups are the whole splitting policy and are read as-is. The
+`data:` config section accepts one optional key, `max_events_per_category`,
+which caps the events read from each group; any other key there is rejected
+rather than silently ignored. Cross-fitting on top of this split is provided by
+`train/k_fold_train.py` (see Training below).
 
 The loader removes invalid/non-finite kinematics and events with measured
 dilepton mass at least 125 GeV before training. Fold assignments described
@@ -51,19 +52,25 @@ GPU. The launcher requires Linux `taskset`, hard-codes CPU affinity
 ./train/run_train.sh
 ```
 
-Run both cross-fitting folds sequentially (the default), concurrently on one
-selected GPU, or individually:
+Run every cross-fitting fold, or just one of them:
 
 ```bash
-python train/two_fold_train.py --config configs/config.yaml
-python train/two_fold_train.py --config configs/config.yaml --parallel --gpu 0
-python train/two_fold_train.py --config configs/config.yaml --fold 0
-python train/two_fold_train.py --config configs/config.yaml --fold 1
+./train/run_k_fold_train.sh
+python train/k_fold_train.py --config configs/kfold_config.yaml
+python train/k_fold_train.py --config configs/kfold_config.yaml --fold 0
 ```
 
-Fold 0 trains and validates on odd filtered rows and tests on even rows; fold 1
-does the reverse. Their outputs go to `paths.saved_path/fold0` and
-`paths.saved_path/fold1`.
+Folds always run one after another: a single fold already holds the GPU at 100%
+and peaks near 9.5 GiB of this card's 16 GiB, so there is nothing for a
+concurrent fold to reclaim and no room to hold it.
+
+`parameters.folds` sets the fold count; the config ships with 8 folds. Training
+concatenates the pre-split train and validation groups, cuts them into N residue
+classes, and rotates the validation fold through them. Each model trains on
+(N-1)/N of the pool, while the complete test group remains held out and is scored
+by every fold.
+
+Fold outputs go to `paths.saved_path/fold<i>`.
 
 Training writes checkpoints and Lightning CSV logs below `paths.saved_path`.
 Every fresh run deletes its entire target output directory after data and model

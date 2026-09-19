@@ -24,11 +24,15 @@ OUTPUT_NAMES = (
 
 
 def find_latest_checkpoint(saved_path):
-    candidates = list(Path(saved_path).expanduser().glob("**/checkpoints/*.ckpt"))
-    if not candidates:
+    latest = max(
+        Path(saved_path).expanduser().glob("**/checkpoints/*.ckpt"),
+        key=lambda path: path.stat().st_mtime,
+        default=None,
+    )
+    if latest is None:
         raise FileNotFoundError(f"No checkpoint files found under {saved_path}")
 
-    return max(candidates, key=lambda path: path.stat().st_mtime)
+    return latest
 
 
 def plot_pcres_io(npz_path, max_scatter_points=50_000):
@@ -110,7 +114,7 @@ def main():
     test_loader = dm.test_dataloader()
     if test_loader is None:
         raise RuntimeError(
-            "No test dataloader available. Check data.test_categories or data.categories."
+            "No test dataloader available. Check that the HDF5 file has a ggF_test group."
         )
 
     model = LightningWBoson.load_from_checkpoint(

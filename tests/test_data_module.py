@@ -63,19 +63,34 @@ def test_presplit_shape_validation(split, split_x, split_y, message):
         WBosonDataModule(X, Y, **kwargs)
 
 
-def test_presplit_validation_is_checked_before_test_validation():
-    with pytest.raises(
-        ValueError,
-        match=r"^Y and Y_val must have matching target dimensions, got \(2,\) and \(1,\)$",
-    ):
-        WBosonDataModule(
-            X,
-            Y,
-            X_val=np.zeros((3, 3)),
-            Y_val=np.zeros((3, 1)),
-            X_test=np.zeros((3, 3)),
-            Y_test=np.zeros((2, 2)),
-        )
+@pytest.mark.parametrize("loader_name", ["val_dataloader", "test_dataloader"])
+def test_evaluation_splits_preserve_source_order(loader_name):
+    features = np.arange(12, dtype=np.float32).reshape(-1, 1)
+    targets = features + 100.0
+    datamodule = WBosonDataModule(
+        features[:4],
+        targets[:4],
+        X_val=features[4:8],
+        Y_val=targets[4:8],
+        X_test=features[8:],
+        Y_test=targets[8:],
+        batch_size=2,
+        seed=73,
+        num_workers=0,
+        pin_memory=False,
+    )
+
+    batches = list(getattr(datamodule, loader_name)())
+    loaded_features = torch.cat([batch_features for batch_features, _ in batches])
+    loaded_targets = torch.cat([batch_targets for _, batch_targets in batches])
+    start = 4 if loader_name == "val_dataloader" else 8
+
+    torch.testing.assert_close(
+        loaded_features[:, 0], torch.arange(start, start + 4, dtype=torch.float32)
+    )
+    torch.testing.assert_close(
+        loaded_targets[:, 0], torch.arange(start + 100, start + 104, dtype=torch.float32)
+    )
 
 
 def test_training_shuffle_continues_from_restored_generator_state():

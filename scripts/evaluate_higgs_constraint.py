@@ -117,7 +117,7 @@ def evaluate_checkpoint(checkpoint, features, batch_size, device):
         .eval()
         .to(device)
     )
-    weight = model._effective_loss_weights()["higgs_mass"]
+    weight = model.loss_weights["higgs_mass"]
     batches = []
     with torch.no_grad():
         for start in range(0, len(features), batch_size):
@@ -162,14 +162,15 @@ def main():
         )
 
     with redirect_stdout(sys.stderr):
-        features, _, _, _ = load_data(args.data_path, categories=[args.split])
+        features, _ = load_data(args.data_path, categories=[args.split])
     if len(features) == 0:
         raise ValueError("cannot evaluate an empty split")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     for checkpoint in checkpoints:
-        checkpoint_data = torch.load(checkpoint.path, map_location="cpu", weights_only=False)
-        default_batch_size = int(checkpoint_data["hyper_parameters"].get("batch_size", 512))
-        batch_size = args.batch_size or default_batch_size
+        batch_size = args.batch_size
+        if batch_size is None:
+            checkpoint_data = torch.load(checkpoint.path, map_location="cpu", weights_only=False)
+            batch_size = int(checkpoint_data["hyper_parameters"].get("batch_size", 512))
         if batch_size <= 0:
             raise ValueError("batch size must be positive")
         with redirect_stdout(sys.stderr):

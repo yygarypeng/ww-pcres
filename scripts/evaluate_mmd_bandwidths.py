@@ -67,13 +67,11 @@ def per_bandwidth_mmd_diagnostics(
     truth = truth.detach()
     diagnostics = []
     with torch.enable_grad():
-        for mmd2 in per_bandwidth_mmd(prediction, truth, **kwargs):
-            loss = mmd2
-            gradient = torch.autograd.grad(loss, prediction)[0] * prediction.shape[0]
+        for mmd in per_bandwidth_mmd(prediction, truth, **kwargs):
+            gradient = torch.autograd.grad(mmd, prediction)[0] * prediction.shape[0]
             diagnostics.append(
                 (
-                    mmd2.detach(),
-                    loss.detach(),
+                    mmd.detach(),
                     gradient.square().sum().detach(),
                     gradient.numel(),
                 )
@@ -82,11 +80,10 @@ def per_bandwidth_mmd_diagnostics(
 
 
 def aggregate_bandwidth_diagnostics(batches):
-    mmd2 = weighted_mean([(raw_value, rows) for raw_value, _, _, _, rows in batches])
-    loss = weighted_mean([(value, rows) for _, value, _, _, rows in batches])
-    gradient_squared_sum = sum(squared_sum for _, _, squared_sum, _, _ in batches)
-    gradient_elements = sum(elements for _, _, _, elements, _ in batches)
-    return mmd2, loss, (gradient_squared_sum / gradient_elements) ** 0.5
+    mmd = weighted_mean([(value, rows) for value, _, _, rows in batches])
+    gradient_squared_sum = sum(squared_sum for _, squared_sum, _, _ in batches)
+    gradient_elements = sum(elements for _, _, elements, _ in batches)
+    return mmd, (gradient_squared_sum / gradient_elements) ** 0.5
 
 
 def _checkpoint_metadata(path):
@@ -199,13 +196,10 @@ def evaluate_checkpoint(checkpoint, features, targets, batch_size, device):
                 **kwargs,
             )
             row_count = prediction.shape[0]
-            for index, (mmd2, loss, gradient_squared_sum, gradient_elements) in enumerate(
-                diagnostics
-            ):
+            for index, (mmd, gradient_squared_sum, gradient_elements) in enumerate(diagnostics):
                 accumulated[name][index].append(
                     (
-                        float(mmd2),
-                        float(loss),
+                        float(mmd),
                         float(gradient_squared_sum),
                         gradient_elements,
                         row_count,
@@ -225,13 +219,13 @@ def print_results(all_results):
         for name in ("alpha", "mass", "angular"):
             diagnostics = results[name]
             pairs = "  ".join(
-                f"{bandwidth:g}:mmd2={mmd2:.8g},loss={loss:.8g},"
-                f"prediction_gradient_rms={gradient_rms:.8g}"
-                for bandwidth, (mmd2, loss, gradient_rms) in zip(bandwidths[name], diagnostics)
+                f"{bandwidth:g}:mmd={mmd:.8g},prediction_gradient_rms={gradient_rms:.8g}"
+                for bandwidth, (mmd, gradient_rms) in zip(bandwidths[name], diagnostics)
             )
-            mixed_mmd2 = sum(mmd2 for mmd2, _, _ in diagnostics) / len(diagnostics)
-            mixed_loss = mixed_mmd2
-            print(f"  {name:<7} {pairs}  mixed_mmd2={mixed_mmd2:.8g},mixed_loss={mixed_loss:.8g}")
+            # compute_mmd mixes bandwidths as sqrt(mean MMD^2), so the summary uses the
+            # same quadratic mean rather than averaging the per-bandwidth MMDs.
+            mixed_mmd = (sum(mmd**2 for mmd, _ in diagnostics) / len(diagnostics)) ** 0.5
+            print(f"  {name:<7} {pairs}  mixed_mmd={mixed_mmd:.8g}")
 
 
 def parse_args():
@@ -256,13 +250,14 @@ def main():
     for duplicate, canonical in sorted(duplicates.items()):
         print(f"Skipping duplicate checkpoint {duplicate.name} ({canonical.name})")
 
-    features, targets, _, _ = load_data(args.data_path, categories=[args.split])
+    features, targets = load_data(args.data_path, categories=[args.split])
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     all_results = {}
     for checkpoint in checkpoints:
-        checkpoint_data = torch.load(checkpoint.path, map_location="cpu", weights_only=False)
-        default_batch_size = int(checkpoint_data["hyper_parameters"].get("batch_size", 512))
-        batch_size = args.batch_size or default_batch_size
+        batch_size = args.batch_size
+        if batch_size is None:
+            checkpoint_data = torch.load(checkpoint.path, map_location="cpu", weights_only=False)
+            batch_size = int(checkpoint_data["hyper_parameters"].get("batch_size", 512))
         label = result_label(checkpoint)
         print(f"Evaluating {label} on {device} with batch size {batch_size}...")
         all_results[label] = evaluate_checkpoint(

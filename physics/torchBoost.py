@@ -4,10 +4,6 @@ import torch.nn as nn
 
 from physics import _diff_angle, _sum_angle
 
-#######################
-# Auxiliary Functions #
-#######################
-
 
 class _SafeAcos(torch.autograd.Function):
     @staticmethod
@@ -48,11 +44,6 @@ def safe_atan2(y, x, eps=1e-6):
     return _SafeAtan2.apply(y, x, eps)
 
 
-#######################
-# Main bossting codes #
-#######################
-
-
 class Booster(nn.Module):
     """
     Torch W-rest-frame booster.
@@ -73,10 +64,6 @@ class Booster(nn.Module):
         w0, w1 = wboson[..., :4], wboson[..., 4:8]
         lep0, lep1 = lep[..., :4], lep[..., 4:8]
         self.particles = torch.cat([w0, lep0, w1, lep1], dim=-1)
-
-    #############
-    # Utilities #
-    #############
 
     def _eps(self, x):
         return max(self.eps, torch.finfo(x.dtype).eps)
@@ -151,10 +138,6 @@ class Booster(nn.Module):
             & (transverse_fraction > eps**0.5)
         )
 
-    ###################
-    # Boost functions #
-    ###################
-
     def _boost_parameters(self, beta, like):
         eps = self._eps(like)
         beta = torch.nan_to_num(beta, nan=0.0, posinf=0.0, neginf=0.0)
@@ -195,10 +178,6 @@ class Booster(nn.Module):
         )
         return self._boost(p4, -beta)
 
-    ######################
-    # Basis construction #
-    ######################
-
     def _basis(self, w_axis):
         k = w_axis[..., 0:3] / self._norm(w_axis[..., 0:3])
 
@@ -211,10 +190,6 @@ class Booster(nn.Module):
         r = (beam - y * k) / transverse
         n = torch.cross(beam, k, dim=-1) / transverse
         return n, r, k
-
-    ###############
-    # Projections #
-    ###############
 
     @staticmethod
     def _project(p4, n, r, k):
@@ -229,10 +204,6 @@ class Booster(nn.Module):
         )
         return torch.cat([p3_projected, p4[..., 3:4]], dim=-1)
 
-    ######################
-    # Feature extraction #
-    ######################
-
     def _theta(self, p4):
         p = self._norm(p4[..., 0:3], keepdim=False)
         cos_theta = torch.clamp(p4[..., 2] / p, -1.0, 1.0)
@@ -241,10 +212,6 @@ class Booster(nn.Module):
     @staticmethod
     def _phi(p4):
         return safe_atan2(p4[..., 1], p4[..., 0])
-
-    ##################
-    # Main functions #
-    ##################
 
     def lep_4_in_w_rest(self, particles=None):
         """

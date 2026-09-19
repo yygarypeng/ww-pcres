@@ -1,0 +1,56 @@
+parameters:
+  seed: 2330
+  folds: 8
+  loss_weights:
+    w_fourvec: 0.3
+    higgs_fourvec: 0.0
+    higgs_mass: 0.0
+    alpha_mmd: 0.0
+    w_mass_mmd: 5.0
+    w_mass: 0.0
+    angular_mmd: 20.0
+    dmet: 0.05
+  batch_size: 8192
+  epochs: 200
+  learning_rate: 0.0004
+  weight_decay: 0.03
+  lr_plateau_factor: 0.5
+  lr_plateau_patience: 8
+  early_stopping_patience: 15
+  early_stopping_min_delta: 0.001
+  gradient_clip_val: 30.0
+  adaptive_loss_weights: false
+  log_loss_gradient_cosines: false
+  d_model: 216
+  n_heads: 8
+  attention_blocks: 3
+  attention_dropout: 0.1
+  decoder_dropout: 0.2
+  num_workers: 4
+  persistent_workers: true
+  pin_memory: true
+  prefetch_factor: 2
+  checkpoint_save_top_k: 1
+mmd:
+  alpha:
+    kernel: imq
+    bandwidths:
+    - 2.0
+    - 4.0
+    - 8.0
+  mass:
+    kernel: imq
+    bandwidths:
+    - 0.02
+    - 0.05
+    - 0.1
+  angular:
+    kernel: imq
+    bandwidths:
+    - 0.6
+    - 1.2
+    - 2.4
+
+paths:
+  saved_path: "/root/work/ww-pcres/fold_meta"
+  data_path: "/root/data/danning_h5/ypeng/mc20_qe_v61_recotruth_merged.h5"

@@ -1,31 +1,12 @@
-"""Loss terms for the physics-constrained W regressor.
-
-Two conventions keep the configured weights meaningful:
-
-* Pointwise terms are a mean absolute error in GeV. Every residual is reduced to
-  a GeV-valued quantity first, so equal weights mean equal cost per GeV and the
-  logged values read directly as physical errors.
-* MMD terms compare distributions through bounded, O(1) feature maps. The kernel
-  bandwidths are fixed absolute numbers, so a feature map that leaves its natural
-  units in place would put every pair far outside every bandwidth and collapse
-  the kernel.
-"""
-
-import math
-
 import torch
 import torch.nn.functional as F
 
+from physics.physics import HIGGS_MASS
 from physics.torchBoost import Booster
 
 TOR = 1e-16
 W_MASS_SCALE = 80.4
-H_MASS_SCALE = 125.0
-
-##################
-# Shared helpers #
-##################
-
+H_MASS_SCALE = HIGGS_MASS
 
 def invariant_mass2(fourvec):
     px, py, pz, E = fourvec[..., 0], fourvec[..., 1], fourvec[..., 2], fourvec[..., 3]
@@ -33,12 +14,6 @@ def invariant_mass2(fourvec):
 
 
 def mass_residual(fourvec, target_mass2, reference_mass):
-    """Mass residual in GeV, linearized as (m^2 - m_target^2) / (2 m_ref).
-
-    This equals m - m_target to first order around the reference mass and takes no
-    square root, so it stays finite and differentiable when a prediction goes
-    spacelike instead of folding that case onto the timelike side.
-    """
     return (invariant_mass2(fourvec) - target_mass2) / (2.0 * reference_mass)
 
 
@@ -51,17 +26,10 @@ def _valid_kinematic_rows(x_batch, y_true, y_pred):
 
 
 def _sanitized_rows(tensor, keep):
-    """Zero invalid rows before differentiable operations to prevent NaN gradients."""
     return torch.where(keep.unsqueeze(-1), tensor, torch.zeros_like(tensor))
 
 
 def mass_mmd_features(w_fourvecs):
-    """Bounded mass features for the fixed-bandwidth kernels.
-
-    asinh is monotonic in m^2 and defined for spacelike values, and dividing by
-    m_W^2 first maps the whole off-shell spectrum into an O(1) range that the
-    configured bandwidths can resolve.
-    """
     mass2 = torch.stack(
         [invariant_mass2(w_fourvecs[..., :4]), invariant_mass2(w_fourvecs[..., 4:8])],
         dim=-1,
@@ -70,48 +38,24 @@ def mass_mmd_features(w_fourvecs):
 
 
 def angular_mmd_features(angles):
-    theta_pos = angles[..., 0]
-    phi_pos = angles[..., 1]
-    theta_neg = angles[..., 2]
-    phi_neg = angles[..., 3]
-
     return torch.stack(
         [
-            2.0 * theta_pos / torch.pi - 1.0,
-            torch.sin(phi_pos),
-            torch.cos(phi_pos),
-            2.0 * theta_neg / torch.pi - 1.0,
-            torch.sin(phi_neg),
-            torch.cos(phi_neg),
+            2.0 * angles[..., 0] / torch.pi - 1.0,
+            torch.sin(angles[..., 1]),
+            torch.cos(angles[..., 1]),
+            2.0 * angles[..., 2] / torch.pi - 1.0,
+            torch.sin(angles[..., 3]),
+            torch.cos(angles[..., 3]),
         ],
         dim=-1,
     )
 
 
-####################
-# Pointwise losses #
-####################
-
-
 def w_fourvec_loss(y_true, y_pred):
-    """Mean L1 loss on raw W components in GeV."""
     return F.l1_loss(y_pred, y_true[..., :8])
 
 
-def higgs_fourvec_loss(y_true, y_pred):
-    """Mean L1 loss on the summed W four-vectors in GeV."""
-    higgs_true = y_true[..., :4] + y_true[..., 4:8]
-    higgs_pred = y_pred[..., :4] + y_pred[..., 4:8]
-    return F.l1_loss(higgs_pred, higgs_true)
-
-
 def w_mass_loss(y_true, y_pred):
-    """Mean L1 loss on the two W mass residuals in GeV.
-
-    The truth W mass reaches far off shell, so the fixed W scale is used as the
-    linearization reference instead of the per-event target, whose reciprocal
-    would blow up as that target approaches zero.
-    """
     residuals = torch.stack(
         [
             mass_residual(y_pred[..., :4], y_true[..., 8] ** 2, W_MASS_SCALE),
@@ -122,14 +66,7 @@ def w_mass_loss(y_true, y_pred):
     return residuals.abs().mean()
 
 
-def higgs_mass_loss(y_pred, target_mass=H_MASS_SCALE):
-    """Mean L1 loss on the Higgs mass residual in GeV."""
-    higgs = y_pred[..., :4] + y_pred[..., 4:8]
-    return mass_residual(higgs, target_mass**2, target_mass).abs().mean()
-
-
 def dmet_loss(x_batch, y_true, dmet):
-    """Mean L1 loss on raw MET corrections in GeV."""
     true_w0 = y_true[..., :4]
     true_w1 = y_true[..., 4:8]
     true_nu0 = true_w0 - x_batch[..., :4]
@@ -138,11 +75,6 @@ def dmet_loss(x_batch, y_true, dmet):
     dmet_target = x_batch[..., 16:18] - true_dinu_pxpy
 
     return F.l1_loss(dmet, dmet_target)
-
-
-##############
-# Global MMD #
-##############
 
 
 def compute_mmd(x, y, *, kernel="imq", bandwidths=(0.1, 1.0, 10.0), valid_mask=None):
@@ -184,12 +116,11 @@ def compute_mmd(x, y, *, kernel="imq", bandwidths=(0.1, 1.0, 10.0), valid_mask=N
     mmd = x.new_zeros(())
     for bandwidth in bandwidths:
         # Keep the constant y-y value while excluding it from the autograd graph.
-        with torch.no_grad():
-            dyy_term = kernel_mean(dyy, bandwidth)
+        dyy_term = kernel_mean(dyy, bandwidth)
         mmd = mmd + kernel_mean(dxx, bandwidth) + dyy_term
         mmd = mmd - 2.0 * kernel_mean(dxy, bandwidth)
 
-    return (mmd / len(bandwidths)).clamp_min(0.0)
+    return torch.sqrt((mmd / len(bandwidths)).clamp_min(TOR))
 
 
 def alpha_mmd(x_batch, y_true, y_pred, valid_mask=None, **mmd_kwargs):
@@ -281,147 +212,14 @@ def angular_mmd(x_batch, y_true, y_pred, **mmd_kwargs):
     )
 
 
-###################
-# Local MMD (WIP) #
-###################
+def higgs_fourvec_loss(y_true, y_pred):
+    """Mean L1 loss on the summed W four-vectors in GeV."""
+    higgs_true = y_true[..., :4] + y_true[..., 4:8]
+    higgs_pred = y_pred[..., :4] + y_pred[..., 4:8]
+    return F.l1_loss(higgs_pred, higgs_true)
 
 
-def _positive_median_pairwise_distance(values):
-    if values.shape[0] < 2:
-        return values.new_tensor(1.0)
-
-    distances = torch.pdist(values, p=2)
-    distances = distances[torch.isfinite(distances) & (distances > 0.0)]
-
-    if distances.numel() == 0:
-        return values.new_tensor(1.0)
-
-    return torch.median(distances)
-
-
-def _validate_bandwidth_multipliers(values, name):
-    multipliers = tuple(float(value) for value in values)
-
-    if not multipliers:
-        raise ValueError(f"{name} must contain at least one value")
-    if not all(math.isfinite(value) and value > 0.0 for value in multipliers):
-        raise ValueError(f"{name} values must be finite and positive")
-
-    return multipliers
-
-
-def compute_local_mmd(
-    x,
-    y,
-    cond,
-    *,
-    local=True,
-    feature_kernel="imq",
-    condition_kernel="rbf",
-    feature_bandwidth_multipliers=(0.25, 0.5, 1.0, 2.0),
-    condition_bandwidth_multipliers=(0.5, 1.0, 2.0),
-    feature_bandwidths=None,
-    estimator="u",
-):
-    """Compute optionally conditional MMD with configurable U/V estimators."""
-    if not isinstance(local, bool):
-        raise ValueError("local must be a boolean")
-    if estimator not in ("u", "v"):
-        raise ValueError("estimator must be 'u' or 'v'")
-    if feature_bandwidths is None:
-        feature_bandwidth_multipliers = _validate_bandwidth_multipliers(
-            feature_bandwidth_multipliers,
-            "feature_bandwidth_multipliers",
-        )
-    else:
-        feature_bandwidths = _validate_bandwidth_multipliers(
-            feature_bandwidths,
-            "feature_bandwidths",
-        )
-    if local:
-        condition_bandwidth_multipliers = _validate_bandwidth_multipliers(
-            condition_bandwidth_multipliers,
-            "condition_bandwidth_multipliers",
-        )
-
-    x = x.reshape(x.shape[0], -1)
-    y = y.reshape(y.shape[0], -1)
-    cond = cond.reshape(cond.shape[0], -1)
-
-    if x.shape[0] != y.shape[0] or x.shape[0] != cond.shape[0]:
-        raise ValueError("x, y, and cond must have the same number of paired rows")
-
-    # Filter paired rows before constructing any pairwise kernel matrix.
-    finite_mask = torch.isfinite(x).all(dim=1) & torch.isfinite(y).all(dim=1)
-    if local:
-        finite_mask = finite_mask & torch.isfinite(cond).all(dim=1)
-    x = x[finite_mask]
-    y = y[finite_mask]
-    cond = cond[finite_mask]
-
-    if x.shape[0] == 0 or (estimator == "u" and x.shape[0] < 2):
-        return (
-            torch.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0).sum()
-            + torch.nan_to_num(y, nan=0.0, posinf=0.0, neginf=0.0).sum()
-            + torch.nan_to_num(cond, nan=0.0, posinf=0.0, neginf=0.0).sum()
-        ) * 0.0
-
-    with torch.no_grad():
-        if feature_bandwidths is None:
-            feature_scale = _positive_median_pairwise_distance(y)
-            feature_bandwidths = [value * feature_scale for value in feature_bandwidth_multipliers]
-        if local:
-            condition_scale = _positive_median_pairwise_distance(cond)
-            condition_bandwidths = [
-                value * condition_scale for value in condition_bandwidth_multipliers
-            ]
-
-    def pairwise_squared_distances(x, y):
-        xx, yy, xy = torch.mm(x, x.t()), torch.mm(y, y.t()), torch.mm(x, y.t())
-        rx = xx.diag().unsqueeze(0).expand_as(xx)
-        ry = yy.diag().unsqueeze(0).expand_as(yy)
-        dxx = rx.t() + rx - 2.0 * xx
-        dyy = ry.t() + ry - 2.0 * yy
-        dxy = rx.t() + ry - 2.0 * xy
-        dxx = dxx.clamp_min(0.0)
-        dyy = dyy.clamp_min(0.0)
-        dxy = dxy.clamp_min(0.0)
-
-        return dxx, dyy, dxy
-
-    dxx, dyy, dxy = pairwise_squared_distances(x, y)
-
-    def rbf_kernel(a, d):
-        return torch.exp(-0.5 * d / (a**2 + TOR))
-
-    def imq_kernel(a, d):
-        return a**2 / (a**2 + d + TOR)
-
-    kernels = {"rbf": rbf_kernel, "imq": imq_kernel}
-    if feature_kernel not in kernels:
-        raise ValueError(f"Unsupported feature kernel: {feature_kernel}")
-    if local and condition_kernel not in kernels:
-        raise ValueError(f"Unsupported condition kernel: {condition_kernel}")
-
-    def mixed_kernel(kind, bandwidths, distances):
-        kernel_fn = kernels[kind]
-        return torch.stack(
-            [kernel_fn(bandwidth, distances) for bandwidth in bandwidths],
-            dim=0,
-        ).mean(dim=0)
-
-    kernel_xx = mixed_kernel(feature_kernel, feature_bandwidths, dxx)
-    kernel_yy = mixed_kernel(feature_kernel, feature_bandwidths, dyy)
-    kernel_xy = mixed_kernel(feature_kernel, feature_bandwidths, dxy)
-    if local:
-        cond_dxx, _, _ = pairwise_squared_distances(cond, cond)
-        cond_matrix = mixed_kernel(condition_kernel, condition_bandwidths, cond_dxx)
-        kernel_xx = kernel_xx * cond_matrix
-        kernel_yy = kernel_yy * cond_matrix
-        kernel_xy = kernel_xy * cond_matrix
-
-    h = kernel_xx + kernel_yy - kernel_xy - kernel_xy.T
-    if estimator == "v":
-        return h.mean().clamp_min(0.0)
-    off_diagonal = ~torch.eye(h.shape[0], dtype=torch.bool, device=h.device)
-    return h[off_diagonal].mean()
+def higgs_mass_loss(y_pred, target_mass=HIGGS_MASS):
+    """Mean L1 loss on the Higgs mass residual in GeV."""
+    higgs = y_pred[..., :4] + y_pred[..., 4:8]
+    return mass_residual(higgs, target_mass**2, target_mass).abs().mean()

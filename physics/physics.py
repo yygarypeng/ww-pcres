@@ -1,6 +1,9 @@
 import numpy as np
 
 TOR = 1e-16
+# SM Higgs mass in GeV. The loader drops lepton pairs that reach it and the on-shell
+# constraint puts the predicted W pair on it, so both must use the same value.
+HIGGS_MASS = 125.0
 
 
 def pt(px, py):
@@ -39,6 +42,3 @@ def dphi(phi1, phi2):
 def sphi(phi1, phi2):
     return _sum_angle(phi1, phi2)
 
-
-def dr(deta, dphi):
-    return np.sqrt(deta**2 + dphi**2)

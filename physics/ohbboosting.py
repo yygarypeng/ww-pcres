@@ -26,7 +26,6 @@ class Booster:
         r_length = np.sqrt(1 - y * y + 1e-16)
         r = (1 / r_length) * (p - y * k)
         n = (1 / r_length) * (p.Cross(k))
-        # print("Norm of basis vectors:", np.sum(np.array(n)**2, axis=-1), np.sum(np.array(r)**2, axis=-1), np.sum(np.array(k)**2, axis=-1))
         return n, r, k
 
     @staticmethod
@@ -46,20 +45,17 @@ class Booster:
         WpLepton = TLorentzVector(*part[4:8])
         WnBoson = TLorentzVector(*part[8:12])
         WnLepton = TLorentzVector(*part[12:16])
-        # Step 1: Construct Higgs 4-vector and boost all particles to Higgs rest frame
+        # Boost all particles to the Higgs rest frame.
         Higgs = WpBoson + WnBoson
-        Beam_p = TLorentzVector(0, 0, 1, 1)  # dummy time and assign beam direction along +z
+        Beam_p = TLorentzVector(0, 0, 1, 1)  # Beam direction is +z; time is arbitrary.
         self._boost_to_rest_frame([WpBoson, WpLepton, WnBoson, WnLepton], Higgs.BoostVector())
 
-        # Step 2: Construct orthogonal basis (k, r, n)
-        # k along W+ momentum, r in the plane of W+ and beam, n orthogonal to both
+        # k follows W-, r lies in the W-/beam plane, and n is orthogonal to both.
         n, r, k = self._construct_basis(WnBoson, Beam_p)
 
-        # Step 3: Boost to W+ and W- rest frames
+        # Boost the leptons to their W rest frames and map them to (n, r, k).
         self._boost_to_rest_frame([WpLepton], WpBoson.BoostVector())
         self._boost_to_rest_frame([WnLepton], WnBoson.BoostVector())
-
-        # Step 4: Map leptons to (n, r, k) basis
         WpLp_k = self._map_to_basis(WpLepton, n, r, k)
         WnLp_k = self._map_to_basis(WnLepton, n, r, k)
 
@@ -74,9 +70,7 @@ class Booster:
         return w_rest_WpLepton, w_rest_WnLepton
 
     def setup(self):
-        # results = [self.w_rest_booster(p) for p in self.particles]
         with multiprocessing.Pool(8) as pool:
-            # Retrieve the output from the pool
             results = list(pool.map(self.w_rest_booster, self.particles))
         w_rest_lp, w_rest_ln = zip(*results)
         self.w_rest_lp, self.w_rest_ln = np.concatenate(w_rest_lp), np.concatenate(w_rest_ln)
@@ -86,14 +80,12 @@ class Booster:
 
     def lep_theta_phi_in_w_rest(self):
 
-        @staticmethod
         def theta(p4):
             p3_mag = np.sqrt(np.sum(np.square(p4[:, 0:3]), axis=1))
             pz = p4[:, 2]
             _clamped = np.clip(np.divide(pz, p3_mag), -1.0, 1.0)
             return np.arccos(_clamped)
 
-        @staticmethod
         def phi(p4):
             return np.arctan2(p4[:, 1], p4[:, 0])
 
@@ -102,16 +94,15 @@ class Booster:
         neg_theta = theta(self.w_rest_ln)
         neg_phi = phi(self.w_rest_ln)
 
-        # return (pos_theta, np.sin(pos_phi), np.cos(pos_phi)), (neg_theta, np.sin(neg_phi), np.cos(neg_phi))
         return (pos_theta, pos_phi), (neg_theta, neg_phi)
 
     def lep_xi_in_w_rest(self):
 
-        @staticmethod
         def xi(p4):
-            xi_n = p4[:, 0] / np.linalg.norm(p4[:, :3], axis=1)
-            xi_r = p4[:, 1] / np.linalg.norm(p4[:, :3], axis=1)
-            xi_k = p4[:, 2] / np.linalg.norm(p4[:, :3], axis=1)
+            momentum_norm = np.linalg.norm(p4[:, :3], axis=1)
+            xi_n = p4[:, 0] / momentum_norm
+            xi_r = p4[:, 1] / momentum_norm
+            xi_k = p4[:, 2] / momentum_norm
             return xi_n, xi_r, xi_k
 
         xi_pos = xi(self.w_rest_lp)

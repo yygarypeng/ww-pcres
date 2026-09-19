@@ -5,7 +5,7 @@ from matplotlib import colormaps
 from matplotlib import pyplot as plt
 from matplotlib.colors import LogNorm
 from matplotlib.lines import Line2D
-from matplotlib.ticker import FormatStrFormatter
+from matplotlib.ticker import FormatStrFormatter, PercentFormatter
 from scipy.stats import wasserstein_distance
 
 hep.style.use(hep.style.ATLAS)
@@ -351,7 +351,6 @@ def plot_1d_hist(
         gridspec_kw={"height_ratios": [3.5, 1.0], "hspace": 0.1},
     )
 
-    # Top panel: truth and prediction histograms
     pred_counts, _ = np.histogram(pred, bins=bins_edges)
     truth_counts, _ = np.histogram(truth, bins=bins_edges)
 
@@ -398,7 +397,7 @@ def plot_2d_hist(
     savepath=None,
 ):
     err = 0.2
-    cor_mask = np.abs(_rel_err_func(pred, truth)) <= err  # set 20% relative error cut
+    cor_mask = np.abs(_rel_err_func(pred, truth)) <= err
     fig, ax = plt.subplots()
     ax.hist2d(pred, truth, **_hist2d_kwargs(bins_edges, vmax, log))
 
@@ -418,30 +417,6 @@ def plot_2d_hist(
     ax.set_xlim(x_min, x_max + x_margin)
     ax.set_ylim(y_min, y_max)
 
-    fig.colorbar(ax.collections[0], ax=ax, label="Events")
-    if savepath is not None:
-        fig.savefig(savepath, bbox_inches="tight")
-    plt.show()
-
-
-def plot_2d_res_hist(
-    pred,
-    truth,
-    name_pos,
-    name_neg,
-    bins_edges=np.linspace(-200, 200, 51),
-    log=False,
-    unit="GeV",
-    color="black",
-    vmax=5e3,
-    savepath=None,
-):
-    fig, ax = plt.subplots()
-    ax.hist2d(pred, truth, **_hist2d_kwargs(bins_edges, vmax, log))
-    ax.set_xlabel(rf"$\Delta_\text{{res}}${name_pos} [{unit}]")
-    ax.set_ylabel(rf"$\Delta_\text{{res}}${name_neg} [{unit}]")
-    _apply_atlas_label(ax, color, loc=0, text="   " + ATLAS_LABEL_TEXT)
-    _set_square_ticks(ax, bins_edges)
     fig.colorbar(ax.collections[0], ax=ax, label="Events")
     if savepath is not None:
         fig.savefig(savepath, bbox_inches="tight")
@@ -851,12 +826,6 @@ def plot_gradient_cosine_heatmaps(df):
 
 
 def plot_gradient_norms(df):
-    """Plot how hard each loss term pulls: absolute magnitude and share of the total.
-
-    The cosine panels show gradient direction; these show magnitude. A term can
-    hold a negligible share of the loss value and still dominate the update, so
-    the share panel is the one that says who is actually steering training.
-    """
     norm_cols = sorted(col for col in df.columns if col.startswith("grad_norm/"))
     if norm_cols:
         populated = df[norm_cols].notna().sum()
@@ -883,15 +852,22 @@ def plot_gradient_norms(df):
         for index, name in enumerate(norms.columns)
     }
 
-    fig, axes = plt.subplots(1, 2, figsize=(16, 6), constrained_layout=True)
+    fig, axes = plt.subplots(1, 2, figsize=(16, 7))
     for name in norms.columns:
         color, dash = styles[name]
-        axes[0].plot(norms.index, norms[name], label=name, color=color, linestyle=dash)
+        axes[0].plot(
+            norms.index,
+            norms[name],
+            label=name,
+            color=color,
+            linestyle=dash,
+            linewidth=2,
+        )
     axes[0].set_yscale("log")
     axes[0].set_xlabel(x_col.capitalize())
     axes[0].set_ylabel(r"$\|w\,\nabla_{\theta} L\|$")
-    axes[0].set_title("Weighted gradient magnitude per loss term")
-    axes[0].legend(fontsize=8)
+    axes[0].set_title("Weighted gradient per loss")
+    axes[0].grid(alpha=0.2, which="both")
 
     axes[1].stackplot(
         shares.index,
@@ -904,13 +880,22 @@ def plot_gradient_norms(df):
     axes[1].set_ylim(0.0, 1.0)
     axes[1].set_xlabel(x_col.capitalize())
     axes[1].set_ylabel("Share of total gradient")
-    axes[1].set_title("Gradient budget: which term steers the update")
-    # Outside the axes and top-down, so the legend matches the stacking order
-    # instead of covering the bands it describes.
-    handles, labels = axes[1].get_legend_handles_labels()
-    axes[1].legend(
-        handles[::-1], labels[::-1], fontsize=8, loc="center left", bbox_to_anchor=(1.01, 0.5)
+    axes[1].set_title("Gradient budget")
+    axes[1].yaxis.set_major_formatter(PercentFormatter(xmax=1.0, decimals=0))
+    axes[1].grid(axis="y", alpha=0.2)
+
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.legend(
+        handles,
+        labels,
+        loc="lower center",
+        bbox_to_anchor=(0.5, 0.01),
+        ncols=min(4, len(labels)),
+        fontsize=16,
+        frameon=False,
+        handlelength=3,
     )
+    fig.tight_layout(rect=(0, 0.13, 1, 1))
     plt.show()
 
     latest = shares.iloc[-1].sort_values(ascending=False)
