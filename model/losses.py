@@ -1,16 +1,11 @@
 import torch
 import torch.nn.functional as F
 
-from physics.physics import HIGGS_MASS
+from physics.physics import HIGGS_MASS, TOR, invariant_mass2
 from physics.torchBoost import Booster
 
-TOR = 1e-16
 W_MASS_SCALE = 80.4
 H_MASS_SCALE = HIGGS_MASS
-
-def invariant_mass2(fourvec):
-    px, py, pz, E = fourvec[..., 0], fourvec[..., 1], fourvec[..., 2], fourvec[..., 3]
-    return E**2 - (px**2 + py**2 + pz**2)
 
 
 def mass_residual(fourvec, target_mass2, reference_mass):

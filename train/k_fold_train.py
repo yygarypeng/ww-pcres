@@ -13,21 +13,25 @@ from train import train as base_training  # noqa: E402
 DEFAULT_FOLDS = 2
 
 
-def _select_rows(X, Y, mask, split_name, fold):
-    if X.shape[0] != Y.shape[0]:
-        raise ValueError(
-            f"{split_name} features and targets must have matching rows, "
-            f"got {X.shape[0]} and {Y.shape[0]}"
-        )
+def _fold_index(value):
+    """argparse type for --fold: a fold index, or the literal 'all'."""
+    if value == "all":
+        return value
+    try:
+        return int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"--fold must be an integer or 'all', got {value}")
 
+
+def _select_rows(X, Y, mask, split_name, fold):
     if not mask.any():
         raise ValueError(f"Fold {fold} {split_name.lower()} split is empty")
     return X[mask], Y[mask]
 
 
-def resolve_folds(cfg=None):
+def resolve_folds(cfg):
     """Number of cross-fitting folds, from parameters.folds, then the default."""
-    value = (cfg or {}).get("parameters", {}).get("folds", DEFAULT_FOLDS)
+    value = cfg.get("parameters", {}).get("folds", DEFAULT_FOLDS)
     if isinstance(value, bool) or not isinstance(value, (int, np.integer)):
         raise ValueError(f"folds must be an integer, got {value!r}")
     folds = int(value)
@@ -51,6 +55,11 @@ def select_fold_splits(splits, fold, folds=DEFAULT_FOLDS):
     X_train, Y_train, X_val, Y_val, X_test, Y_test = splits
     X_pool = np.concatenate([X_train, X_val])
     Y_pool = np.concatenate([Y_train, Y_val])
+    if X_pool.shape[0] != Y_pool.shape[0]:
+        raise ValueError(
+            f"Pooled features and targets must have matching rows, "
+            f"got {X_pool.shape[0]} and {Y_pool.shape[0]}"
+        )
     held_out = np.arange(X_pool.shape[0]) % folds == fold
 
     X_fit, Y_fit = _select_rows(X_pool, Y_pool, ~held_out, "Training", fold)
@@ -88,15 +97,10 @@ def parse_args(argv=None):
     parser.add_argument(
         "--fold",
         default="all",
+        type=_fold_index,
         help="Fold index, or 'all' to train every fold in turn (default)",
     )
-    args = parser.parse_args(argv)
-    if args.fold != "all":
-        try:
-            int(args.fold)
-        except ValueError:
-            parser.error(f"--fold must be an integer or 'all', got {args.fold}")
-    return args
+    return parser.parse_args(argv)
 
 
 def main(argv=None):
@@ -109,7 +113,7 @@ def main(argv=None):
     folds = resolve_folds(cfg)
 
     # One fold saturates the GPU, so folds run in turn rather than concurrently.
-    selected = range(folds) if args.fold == "all" else (int(args.fold),)
+    selected = range(folds) if args.fold == "all" else (args.fold,)
     for fold in selected:
         base_training.configure_runtime(cfg["parameters"], args.gpu)
         run_fold(cfg, fold, args.wandb, folds)

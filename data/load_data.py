@@ -2,7 +2,7 @@ import h5py
 import numpy as np
 
 from data.preprocessing import valid_input_energy_rows
-from physics.physics import HIGGS_MASS
+from physics.physics import HIGGS_MASS, invariant_mass2
 
 SPLITS = ("train", "val", "test")
 
@@ -78,9 +78,9 @@ def _valid_truth_w_rows(target_obj):
     momenta = truth[:, :8].reshape(-1, 2, 4)  # (event, W boson, (px, py, pz, energy))
     masses = truth[:, 8:10]
 
-    px, py, pz, energy = momenta.transpose(2, 0, 1)
-    momentum2 = px**2 + py**2 + pz**2
-    mass2 = energy**2 - momentum2
+    energy = momenta[..., 3]
+    momentum2 = (momenta[..., :3] ** 2).sum(axis=-1)
+    mass2 = invariant_mass2(momenta)
     tolerance = 1.0e-6 + 1.0e-6 * (energy**2 + momentum2 + masses**2)
     valid = (
         np.isfinite(momenta).all(axis=2)
@@ -91,40 +91,8 @@ def _valid_truth_w_rows(target_obj):
         & (np.abs(mass2 - masses**2) <= tolerance)
     ).all(axis=1)
 
-    pair = momenta.sum(axis=1)
-    pair_mass2 = pair[:, 3] ** 2 - (pair[:, :3] ** 2).sum(axis=1)
+    pair_mass2 = invariant_mass2(momenta.sum(axis=1))
     return valid & np.isfinite(pair_mass2) & (pair_mass2 > 0.0)
-
-
-def _valid_dilepton_mass_rows(train_obj):
-    """Rows whose measured dilepton mass stays below the Higgs mass, in GeV.
-
-    Adding massless neutrinos can only raise an invariant mass, so an event
-    whose two leptons already reach the Higgs mass can never be put on the Higgs
-    mass shell, and WConstraintsLayer has no physical solution for it. The bound
-    is therefore an event selection on measured leptons, decidable before the
-    model runs, and it applies to every split.
-    """
-    leptons = np.asarray(train_obj[:, :8], dtype=np.float64)
-    px, py, pz, energy = (leptons[:, i] + leptons[:, i + 4] for i in range(4))
-    mass2 = energy**2 - px**2 - py**2 - pz**2
-    return np.isfinite(mass2) & (mass2 < HIGGS_MASS**2)
-
-
-def _row_masks(train_obj, target_obj):
-    """The two row masks load_data applies, as (valid, kept).
-
-    `valid` drops unusable kinematics and `kept` additionally applies the dilepton mass
-    bound to the survivors, so `kept` selects exactly the rows load_data returns.
-    """
-    valid = (
-        np.isfinite(train_obj).all(axis=1)
-        & valid_input_energy_rows(train_obj)
-        & _valid_truth_w_rows(target_obj)
-    )
-    kept = valid.copy()
-    kept[valid] = _valid_dilepton_mass_rows(train_obj[valid])
-    return valid, kept
 
 
 def load_data(data_path, categories, max_events_per_category=None):
@@ -137,7 +105,15 @@ def load_data(data_path, categories, max_events_per_category=None):
     print("Training objects shape:", train_obj.shape)
     print("Target objects shape:", target_obj.shape)
 
-    valid, kept = _row_masks(train_obj, target_obj)
+    valid = (
+        np.isfinite(train_obj).all(axis=1)
+        & valid_input_energy_rows(train_obj)
+        & _valid_truth_w_rows(target_obj)
+    )
+    # Massless neutrinos can only raise an invariant mass, so a lepton pair already at
+    # the Higgs mass has no on-shell solution for WConstraintsLayer to find.
+    dilepton_mass2 = invariant_mass2(train_obj[:, :4] + train_obj[:, 4:8])
+    kept = valid & np.isfinite(dilepton_mass2) & (dilepton_mass2 < HIGGS_MASS**2)
     print(
         "Removed",
         (~valid).sum(),

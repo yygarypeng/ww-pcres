@@ -3,12 +3,7 @@ from unittest.mock import patch
 
 import numpy as np
 
-from data.load_data import (
-    _valid_dilepton_mass_rows,
-    _valid_truth_w_rows,
-    load_data,
-    load_presplit_data,
-)
+from data.load_data import _valid_truth_w_rows, load_data, load_presplit_data
 
 
 class ValidTruthWRowsTest(unittest.TestCase):
@@ -23,25 +18,36 @@ class ValidTruthWRowsTest(unittest.TestCase):
         np.testing.assert_array_equal(_valid_truth_w_rows(target), [False])
 
 
-class ValidDileptonMassRowsTest(unittest.TestCase):
+class DileptonMassBoundTest(unittest.TestCase):
+    """The m_ll bound load_data applies, exercised through the public loader."""
+
     @staticmethod
-    def _train_obj(*lepton_energies):
-        """Back-to-back massless lepton pairs, so m_ll is twice the energy."""
-        rows = np.zeros((len(lepton_energies), 18))
-        for row, energy in enumerate(lepton_energies):
-            rows[row, :4] = (energy, 0.0, 0.0, energy)
-            rows[row, 4:8] = (-energy, 0.0, 0.0, energy)
-        return rows
+    def _kept_lepton_energies(*lepton_energies):
+        """Load back-to-back massless lepton pairs, so m_ll is twice the energy."""
+        count = len(lepton_energies)
+        energies = np.asarray(lepton_energies)
+        zeros = np.zeros(count)
+        truth = dict(
+            px=zeros, py=zeros, pz=zeros, energy=np.full(count, 12.0), m=np.full(count, 12.0)
+        )
+        category = {
+            "pos_lep": dict(px=energies, py=zeros, pz=zeros, energy=energies),
+            "neg_lep": dict(px=-energies, py=zeros, pz=zeros, energy=energies),
+            "met": dict(px=zeros, py=zeros),
+            "jets": {field: np.zeros((count, 2)) for field in ("px", "py", "pz", "energy")},
+            "truth_pos_w": truth,
+            "truth_neg_w": truth,
+        }
+        with patch("data.load_data.load_particles_from_h5", return_value={"sample": category}):
+            train_obj, _ = load_data("unused.h5", ["sample"])
+        return list(train_obj[:, 3])
 
     def test_keeps_rows_below_the_higgs_mass(self):
-        train_obj = self._train_obj(50.0, 62.0)
-
-        np.testing.assert_array_equal(_valid_dilepton_mass_rows(train_obj), [True, True])
+        self.assertEqual(self._kept_lepton_energies(50.0, 62.0), [50.0, 62.0])
 
     def test_rejects_rows_at_or_above_the_higgs_mass(self):
-        train_obj = self._train_obj(62.5, 70.0)
-
-        np.testing.assert_array_equal(_valid_dilepton_mass_rows(train_obj), [False, False])
+        # 62.5 GeV each puts m_ll exactly on the 125 GeV bound, which the cut excludes
+        self.assertEqual(self._kept_lepton_energies(62.5, 70.0), [])
 
 
 class TestInputEnergyValidation(unittest.TestCase):
@@ -53,12 +59,8 @@ class TestInputEnergyValidation(unittest.TestCase):
             return {name: np.asarray(value, dtype=np.float64) for name, value in values.items()}
 
         category = {
-            "pos_lep": group(
-                px=[3, 3], py=[0, 0], pz=[0, 0], energy=[5, 5]
-            ),
-            "neg_lep": group(
-                px=[-2, -2], py=[0, 0], pz=[0, 0], energy=[5, 5]
-            ),
+            "pos_lep": group(px=[3, 3], py=[0, 0], pz=[0, 0], energy=[5, 5]),
+            "neg_lep": group(px=[-2, -2], py=[0, 0], pz=[0, 0], energy=[5, 5]),
             "met": group(px=[0, 0], py=[0, 0]),
             "jets": {
                 "px": np.array([[0, 0], [1, 0]], dtype=np.float64),

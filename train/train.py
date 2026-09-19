@@ -75,9 +75,10 @@ def prime_csv_metric_header(csv_logger, model):
         metric_keys.add(f"{prefix}loss")
         metric_keys.update(f"{prefix}{name}_loss" for name in loss_names)
     if model.log_loss_gradient_cosines:
-        metric_keys.update(f"grad_cos/{name}__total" for name in model.adaptive_loss_names)
-        metric_keys.update(f"grad_cos/{name}__rest" for name in model.adaptive_loss_names)
-        metric_keys.update(f"grad_norm/{name}" for name in model.adaptive_loss_names)
+        for name in model.adaptive_loss_names:
+            metric_keys.update(
+                (f"grad_cos/{name}__total", f"grad_cos/{name}__rest", f"grad_norm/{name}")
+            )
     metric_keys.update(f"loss_weight/{name}" for name in loss_names)
 
     writer = csv_logger.experiment
@@ -152,6 +153,26 @@ def build_training_callbacks(params):
     ]
 
 
+def evaluate_best_checkpoint(model, dm, checkpoint, accelerator):
+    """Score the best checkpoint on the test split, when the datamodule has one."""
+    if dm.test_ds is None or len(dm.test_ds) == 0:
+        print("No test split available, skipping test evaluation.")
+        return
+
+    print("Running test evaluation with best checkpoint...")
+    Trainer(
+        accelerator=accelerator,
+        devices=1,
+        logger=False,
+        enable_checkpointing=False,
+    ).test(
+        model=model,
+        datamodule=dm,
+        ckpt_path=checkpoint.best_model_path,
+        weights_only=False,
+    )
+
+
 def run_training(
     cfg,
     dm,
@@ -184,7 +205,6 @@ def run_training(
     )
 
     callbacks = build_training_callbacks(params)
-    ckpt = callbacks[0]
     steps_per_epoch = max(1, len(dm.train_dataloader()))
     saved_path = clean_training_output(saved_path)
     loggers, wandb_logger = create_loggers(cfg, model, saved_path, use_wandb)
@@ -201,22 +221,8 @@ def run_training(
     )
     trainer.fit(model, datamodule=dm)
 
-    if dm.test_ds is not None and len(dm.test_ds) > 0:
-        print("Running test evaluation with best checkpoint...")
-        test_trainer = Trainer(
-            accelerator=accelerator,
-            devices=1,
-            logger=False,
-            enable_checkpointing=False,
-        )
-        test_trainer.test(
-            model=model,
-            datamodule=dm,
-            ckpt_path=ckpt.best_model_path,
-            weights_only=False,
-        )
-    else:
-        print("No test split available, skipping test evaluation.")
+    checkpoint = callbacks[0]
+    evaluate_best_checkpoint(model, dm, checkpoint, accelerator)
 
     if wandb_logger is not None:
         wandb_logger.experiment.finish()
@@ -252,11 +258,15 @@ def apply_cpu_affinity(params):
     available = os.sched_getaffinity(0)
     allowed = available - set(excluded)
     if not allowed:
-        print(f"Refusing to exclude every available CPU {sorted(available)}; leaving affinity as is")
+        print(
+            f"Refusing to exclude every available CPU {sorted(available)}; leaving affinity as is"
+        )
         return
     if allowed != available:
         os.sched_setaffinity(0, allowed)
-        print(f"CPU affinity: excluded {sorted(set(excluded) & available)}, using {sorted(allowed)}")
+        print(
+            f"CPU affinity: excluded {sorted(set(excluded) & available)}, using {sorted(allowed)}"
+        )
 
 
 def configure_runtime(params, gpu=None):
@@ -282,11 +292,8 @@ def configure_runtime(params, gpu=None):
 
 
 def main(train=True, arg=None, config_path=DEFAULT_CONFIG):
-    if arg is not None and hasattr(arg, "config"):
-        config_path = arg.config
-    cfg = load_config(config_path)
-
-    configure_runtime(cfg["parameters"], getattr(arg, "gpu", None))
+    cfg = load_config(arg.config if arg is not None else config_path)
+    configure_runtime(cfg["parameters"], arg.gpu if arg is not None else None)
 
     data_path = resolve_repo_path(cfg["paths"]["data_path"])
     dm, input_dim, standardization = build_datamodule(cfg, data_path)
@@ -300,7 +307,7 @@ def main(train=True, arg=None, config_path=DEFAULT_CONFIG):
         input_dim,
         standardization,
         cfg["paths"]["saved_path"],
-        getattr(arg, "wandb", False),
+        arg.wandb if arg is not None else False,
     )
 
 

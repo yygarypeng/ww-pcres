@@ -64,11 +64,7 @@ class WBosonDataModule(L.LightningDataModule):
         self.seed = int(seed)
         self.train_ds = TensorDataset(X, Y)
         self.val_ds = _as_split(X, Y, X_val, Y_val, "val")
-        self.test_ds = (
-            None
-            if X_test is None
-            else _as_split(X, Y, X_test, Y_test, "test")
-        )
+        self.test_ds = None if X_test is None else _as_split(X, Y, X_test, Y_test, "test")
 
         self.batch_size = int(batch_size)
         if self.batch_size <= 0:
@@ -96,9 +92,6 @@ class WBosonDataModule(L.LightningDataModule):
         else:
             print(f"Test split: {len(self.test_ds)} samples")
         print(f"Feature dims: {tuple(X.shape[1:])}, target dims: {tuple(Y.shape[1:])}")
-
-    def setup(self, stage=None):
-        """The splits are built in __init__, so there is nothing left to do per stage."""
 
     def state_dict(self):
         return {"train_generator_state": self._train_generator.get_state()}

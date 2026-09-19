@@ -1,13 +1,6 @@
-"""Analysis selection on the raw 18-column PCRes inputs.
-
-The cuts live here rather than in the notebook so they can be unit tested and reused
-by the evaluation scripts. They are applied after inference: one pass over the test
-set feeds every selection, and a cut can be retuned without re-running the model.
-"""
-
 import numpy as np
 
-from physics.physics import dphi, phi, pt
+from physics.physics import dphi, invariant_mass2, phi, pt
 
 # Raw input layout: lep+ 0:4, lep- 4:8, jet0 8:12, jet1 12:16, MET 16:18, with every
 # four-vector ordered (px, py, pz, E) in GeV. Padding jets are all-zero rows.
@@ -23,6 +16,7 @@ MET_MIN = 20.0  # GeV
 DILEPTON_DPHI_MAX = 2.0  # rad
 DILEPTON_MET_DPHI_MIN = 1.57  # rad
 
+
 def _leptons(features):
     """The lepton block as (events, {+, -}, {px, py, pz, E})."""
     return np.asarray(features)[:, LEPTON_COLUMNS].reshape(-1, 2, 4)
@@ -37,8 +31,7 @@ def lepton_pts(features):
 
 def dilepton_mass(features):
     """Invariant mass of the lepton pair; the absolute value keeps rounding real."""
-    dilepton = _leptons(features).sum(axis=1)
-    mass2 = dilepton[:, 3] ** 2 - np.sum(dilepton[:, :3] ** 2, axis=-1)
+    mass2 = invariant_mass2(_leptons(features).sum(axis=1))
     return np.sqrt(np.abs(mass2))
 
 

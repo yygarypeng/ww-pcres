@@ -392,7 +392,9 @@ def test_visualize_notebook_compiles_and_uses_exported_angular_helpers():
         node.value
         for node in ast.walk(tree)
         if isinstance(node, ast.Assign)
-        and any(isinstance(target, ast.Name) and target.id == "angular_grids" for target in node.targets)
+        and any(
+            isinstance(target, ast.Name) and target.id == "angular_grids" for target in node.targets
+        )
     )
     assert len(angular_calls) == 2
     assert isinstance(angular_grids, ast.List)

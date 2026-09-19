@@ -15,7 +15,7 @@ def component_calibration(prediction, truth):
         )
 
     metrics = {
-        name: np.full(prediction.shape[1], np.nan, dtype=np.float64)
+        name: np.full(prediction.shape[1], np.nan)
         for name in ("bias", "width_ratio", "correlation", "slope", "intercept", "rmse")
     }
     for index in range(prediction.shape[1]):

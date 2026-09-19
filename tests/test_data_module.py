@@ -108,7 +108,6 @@ def test_training_shuffle_continues_from_restored_generator_state():
             num_workers=0,
             pin_memory=False,
         )
-        datamodule.setup()
         return datamodule
 
     def epoch_order(datamodule):

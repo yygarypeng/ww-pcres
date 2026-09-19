@@ -110,7 +110,6 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     dm = train.main(train=False, config_path=config_path)
-    dm.setup(stage="test")
     test_loader = dm.test_dataloader()
     if test_loader is None:
         raise RuntimeError(

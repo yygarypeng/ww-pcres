@@ -11,6 +11,7 @@ sys.path.append(str(REPO_ROOT))
 from convert_to_onnx import find_checkpoint, make_valid_raw_inputs
 
 from model import LightningWBoson
+from physics.physics import TOR
 from train import load_config
 
 
@@ -68,7 +69,7 @@ def main():
 
     diff = pytorch_output - ort_result
     max_abs_diff = float(np.max(np.abs(diff)))
-    max_rel_diff = float(np.max(np.abs(diff) / (np.abs(pytorch_output) + 1e-16)))
+    max_rel_diff = float(np.max(np.abs(diff) / (np.abs(pytorch_output) + TOR)))
     atol, rtol = 1e-3, 3e-3
     allclose = np.allclose(pytorch_output, ort_result, atol=atol, rtol=rtol)
 

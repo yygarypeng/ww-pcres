@@ -3,6 +3,8 @@ import multiprocessing
 import numpy as np
 from ROOT import TLorentzVector
 
+from physics.physics import TOR
+
 
 class Booster:
     def __init__(self, particles):
@@ -23,7 +25,7 @@ class Booster:
         k = WpBoson.Vect().Unit()
         p = Beam_p.Vect().Unit()
         y = p.Dot(k)
-        r_length = np.sqrt(1 - y * y + 1e-16)
+        r_length = np.sqrt(1 - y * y + TOR)
         r = (1 / r_length) * (p - y * k)
         n = (1 / r_length) * (p.Cross(k))
         return n, r, k
@@ -60,12 +62,8 @@ class Booster:
         WnLp_k = self._map_to_basis(WnLepton, n, r, k)
 
         # Keep a consistent 2D row shape for safe concatenation across all events.
-        w_rest_WpLepton = np.array(
-            [WpLp_k.Px(), WpLp_k.Py(), WpLp_k.Pz(), WpLp_k.E()], dtype=float
-        ).reshape(1, -1)
-        w_rest_WnLepton = np.array(
-            [WnLp_k.Px(), WnLp_k.Py(), WnLp_k.Pz(), WnLp_k.E()], dtype=float
-        ).reshape(1, -1)
+        w_rest_WpLepton = np.array([[WpLp_k.Px(), WpLp_k.Py(), WpLp_k.Pz(), WpLp_k.E()]])
+        w_rest_WnLepton = np.array([[WnLp_k.Px(), WnLp_k.Py(), WnLp_k.Pz(), WnLp_k.E()]])
 
         return w_rest_WpLepton, w_rest_WnLepton
 

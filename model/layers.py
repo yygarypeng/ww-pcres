@@ -1,7 +1,10 @@
 import torch
 import torch.nn as nn
 
+from physics.physics import HIGGS_MASS
+
 EPS = 1.0e-8
+
 
 class Standardization(nn.Module):
     def __init__(self, mean, std, eps=EPS):
@@ -100,7 +103,6 @@ class WBosonFourVectorLayer(nn.Module):
 
 
 class WConstraintsLayer(nn.Module):
-
     @staticmethod
     def _dot(a, b):
         return a[..., 3:4] * b[..., 3:4] - (a[..., :3] * b[..., :3]).sum(dim=-1, keepdim=True)
@@ -111,25 +113,30 @@ class WConstraintsLayer(nn.Module):
         return torch.cat([momentum, energy], dim=-1)
 
     def higgs_scale(self, dilep, dinu):
+        """Scale factor s putting the W pair on the Higgs mass shell.
+
+        The constraint (leplep + s * nunu)^2 = mH^2 expands to
+        leplep_dot + 2 * s * lepnu_dot + s^2 * nunu_dot = mH^2, whose positive root is
+        s = (-lepnu_dot + sqrt(lepnu_dot^2 + nunu_dot * delta)) / nunu_dot, with
+        delta = mH^2 - leplep_dot. The negative root is dropped as unphysical: it gives
+        a negative neutrino energy.
+
+        That root is evaluated in the equivalent form
+        s = delta / (lepnu_dot + sqrt(lepnu_dot^2 + nunu_dot * delta)),
+        which avoids the cancellation in the numerator and stays finite when nunu_dot
+        vanishes, as it physically can.
+
+        delta stays positive because load_data drops events whose measured m_ll already
+        reaches HIGGS_MASS.
         """
-        s is scale factor for SM Higgs mass shell constraint. The constraint is:
-        (leplep + s * nunu)^2 = leplep_dot + 2 * s * lepnu_dot + s^2 * nunu_dot = mH^2 = 125.0^2
-        Therefore, s = (-2 * lepnu_dot +- sqrt(4 * lepnu_dot^2 - 4 * nunu_dot * (leplep_dot - mH^2))) / (2 * nunu_dot)
-        
-        Drop negative solution since it is unphysical (it'll cause negative Enu). The positive solution is:
-        s = (-lepnu_dot + sqrt(lepnu_dot^2 + nunu_dot * (125.0^2 - leplep_dot))) / (nunu_dot)
-        
-        To stablize the solutions, avoiding cancellations and physical possible 0 nunu_dot ( thanks to Claude :) ):
-        s = (-lepnu_dot + sqrt(lepnu_dot^2 + nunu_dot * delta)) / (nunu_dot)
-          = delta / (lepnu_dot + sqrt(lepnu_dot^2 + nunu_dot * delta))
-        """
-        
         lepnu_dot = self._dot(dilep, dinu)
         nunu_dot = self._dot(dinu, dinu).clamp_min(0.0)
         leplep_dot = self._dot(dilep, dilep).clamp_min(0.0)
-        
-        delta = (125.0**2 - leplep_dot)# MUST ensure that the mll <= mH physically for the inputs (data.py)
-        denominator = (lepnu_dot + torch.sqrt(lepnu_dot * lepnu_dot + nunu_dot * delta)).clamp_min(EPS)
+
+        delta = HIGGS_MASS**2 - leplep_dot
+        denominator = (lepnu_dot + torch.sqrt(lepnu_dot * lepnu_dot + nunu_dot * delta)).clamp_min(
+            EPS
+        )
         return delta / denominator
 
     def forward(self, lep0, lep1, nu_params):

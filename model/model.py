@@ -184,7 +184,7 @@ class LightningWBoson(L.LightningModule):
         mmd_config=None,
         adaptive_loss_weights=False,
         log_loss_gradient_cosines=False,
-        higgs_mass_target=125.0,
+        higgs_mass_target=H_MASS_SCALE,
         attention_blocks=4,
         attention_dropout=0.1,
         decoder_dropout=0.1,

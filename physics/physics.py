@@ -1,8 +1,6 @@
 import numpy as np
 
 TOR = 1e-16
-# SM Higgs mass in GeV. The loader drops lepton pairs that reach it and the on-shell
-# constraint puts the predicted W pair on it, so both must use the same value.
 HIGGS_MASS = 125.0
 
 
@@ -17,6 +15,12 @@ def eta(px, py, pz):
 
 def phi(px, py):
     return np.arctan2(py, px)
+
+
+def invariant_mass2(fourvec):
+    """Squared invariant mass of (..., 4) four-vectors ordered (px, py, pz, E)."""
+    px, py, pz, energy = (fourvec[..., i] for i in range(4))
+    return energy**2 - (px**2 + py**2 + pz**2)
 
 
 def deta(eta1, eta2):
@@ -41,4 +45,3 @@ def dphi(phi1, phi2):
 
 def sphi(phi1, phi2):
     return _sum_angle(phi1, phi2)
-
