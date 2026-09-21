@@ -16,8 +16,8 @@ parameters:
   weight_decay: 0.03
   lr_plateau_factor: 0.5
   lr_plateau_patience: 8
-  early_stopping_patience: 15
-  early_stopping_min_delta: 0.001
+  early_stopping_patience: 24
+  early_stopping_min_delta: 0.0
   gradient_clip_val: 30.0
   adaptive_loss_weights: false
   log_loss_gradient_cosines: false
@@ -52,5 +52,5 @@ mmd:
     - 2.4
 
 paths:
-  saved_path: "/root/work/ww-pcres/fold_meta"
-  data_path: "/root/data/danning_h5/ypeng/mc20_qe_v61_recotruth_merged.h5"
+  saved_path: "/root/work/ww-pcres/fold_meta_ggF"
+  data_path: "/root/data/danning_h5/ypeng/mc20_qe_v61_recotruth_ggF_merged.h5"

@@ -25,6 +25,7 @@ The HDF5 file must contain the three pre-split top-level groups `ggF_train`,
 | `jets` | `px`, `py`, `pz`, `energy`, each shaped with at least two jet slots |
 | `met` | `px`, `py` |
 | `truth_pos_w`, `truth_neg_w` | `px`, `py`, `pz`, `energy`, `m` |
+| `event` | `eventNumber`, read only by `train/k_fold_train.py` |
 
 Those three groups are the whole splitting policy and are read as-is. The
 `data:` config section accepts one optional key, `max_events_per_category`,
@@ -33,8 +34,8 @@ rather than silently ignored. Cross-fitting on top of this split is provided by
 `train/k_fold_train.py` (see Training below).
 
 The loader removes invalid/non-finite kinematics and events with measured
-dilepton mass at least 125 GeV before training. Fold assignments described
-below use row indices after this filtering.
+dilepton mass at least 125 GeV before training. Fold assignments described below
+are unaffected by that filtering, because they are keyed on `eventNumber`.
 
 ## Training
 
@@ -65,10 +66,17 @@ and peaks near 9.5 GiB of this card's 16 GiB, so there is nothing for a
 concurrent fold to reclaim and no room to hold it.
 
 `parameters.folds` sets the fold count; the config ships with 8 folds. Training
-concatenates the pre-split train and validation groups, cuts them into N residue
-classes, and rotates the validation fold through them. Each model trains on
-(N-1)/N of the pool, while the complete test group remains held out and is scored
-by every fold.
+concatenates the pre-split train and validation groups and cuts them into N
+residue classes of the HWWFrames `eventNumber`: fold `i` holds out the events
+with `eventNumber % N == i` and trains on the rest, while the complete test group
+remains held out and is scored by every fold. Downstream code therefore selects
+the model for an event with the same `eventNumber % N` it was held out by, and
+fold membership survives regenerating or refiltering the HDF5. The residue
+classes are not exactly equal in size, because HWWFrames already splits
+train/validation/test by `eventNumber % 100` and 8 does not divide 100: on the
+`v6.1` ggF merged file the validation folds range from 153.6k to 161.2k rows,
+against 1.099M to 1.107M training rows and the same 140,565 test rows for every
+fold.
 
 Fold outputs go to `paths.saved_path/fold<i>`.
 

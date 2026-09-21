@@ -88,7 +88,6 @@ def compute_mmd(x, y, *, kernel="imq", bandwidths=(0.1, 1.0, 10.0), valid_mask=N
     pair_weight = row_weight * row_weight.T
     pair_total = pair_weight.sum().clamp_min(1.0)
 
-    # Weighting alone cannot prevent NaNs from entering pairwise distances.
     x = torch.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0) * row_weight
     y = torch.nan_to_num(y, nan=0.0, posinf=0.0, neginf=0.0) * row_weight
 
@@ -110,7 +109,6 @@ def compute_mmd(x, y, *, kernel="imq", bandwidths=(0.1, 1.0, 10.0), valid_mask=N
 
     mmd = x.new_zeros(())
     for bandwidth in bandwidths:
-        # Keep the constant y-y value while excluding it from the autograd graph.
         dyy_term = kernel_mean(dyy, bandwidth)
         mmd = mmd + kernel_mean(dxx, bandwidth) + dyy_term
         mmd = mmd - 2.0 * kernel_mean(dxy, bandwidth)
@@ -149,8 +147,7 @@ def alpha_mmd(x_batch, y_true, y_pred, valid_mask=None, **mmd_kwargs):
         & (total_true > TOR)
         & (total_pred > TOR)
     )
-    # Rows that carry no weight still go through the division, so keep their
-    # denominators finite instead of selecting the surviving rows out.
+
     safe_total_true = torch.where(alpha_valid, total_true, torch.ones_like(total_true))
     safe_total_pred = torch.where(alpha_valid, total_pred, torch.ones_like(total_pred))
 
@@ -180,8 +177,6 @@ def _angular_mmd_with_valid_mask(x_batch, y_true, y_pred, valid_mask, **mmd_kwar
         truth_valid, truth_angles = Booster(lep, y_true[..., :8]).lep_theta_phi_with_validity()
         truth_features = angular_mmd_features(truth_angles)
 
-    # The boost chain is only NaN-safe for finite inputs, and its gradient runs
-    # before the weighting in compute_mmd, so clean the rows up front.
     finite = valid_mask
     pred_valid, pred_angles = Booster(
         _sanitized_rows(lep, finite),

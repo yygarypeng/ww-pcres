@@ -63,6 +63,8 @@ def selection_masks(features, njets=None):
     """Per-cut boolean masks in cutflow order.
 
     `njets` of 0 / 1 / 2 keeps only that jet multiplicity; None keeps every event.
+    `pre_mll` is the lower edge of the `mll` window on its own, for studies that keep
+    the high-mass tail; it is an alternative to `mll`, not an extra cut on top of it.
     """
     features = np.asarray(features)
     lead_pt, sublead_pt = lepton_pts(features)
@@ -74,6 +76,7 @@ def selection_masks(features, njets=None):
         "l0_pt": lead_pt > LEAD_LEPTON_PT_MIN,
         "l1_pt": sublead_pt > SUBLEAD_LEPTON_PT_MIN,
         "mll": (mll > DILEPTON_MASS_MIN) & (mll < DILEPTON_MASS_MAX),
+        "pre_mll": (mll > DILEPTON_MASS_MIN),
         "met": missing_et(features) > MET_MIN,
         "dphi_ll": dilepton_dphi(features) < DILEPTON_DPHI_MAX,
         "dphi_ll_met": dilepton_met_dphi(features) > DILEPTON_MET_DPHI_MIN,

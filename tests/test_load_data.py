@@ -74,6 +74,19 @@ class TestInputEnergyValidation(unittest.TestCase):
         category["truth_neg_w"] = group(**truth)
         return category
 
+    def test_event_numbers_drop_the_same_rows_as_the_inputs(self):
+        category = self._category()
+        category["event"] = {"eventNumber": np.array([41, 42], dtype=np.uint64)}
+
+        with patch("data.load_data.load_particles_from_h5", return_value={"sample": category}):
+            train_obj, _, event_numbers = load_data(
+                "unused.h5", ["sample"], with_event_numbers=True
+            )
+
+        # The second row carries a negative jet energy, so only event 41 survives.
+        self.assertEqual(train_obj.shape, (1, 18))
+        np.testing.assert_array_equal(event_numbers, [41])
+
     def test_drops_rows_with_invalid_input_energies(self):
         with patch(
             "data.load_data.load_particles_from_h5", return_value={"sample": self._category()}
@@ -101,21 +114,29 @@ class TestInputEnergyValidation(unittest.TestCase):
 
 class LoadPresplitDataTest(unittest.TestCase):
     @staticmethod
-    def _arrays(_path, _categories, _max_events=None):
-        return np.zeros((1, 18)), np.zeros((1, 10))
+    def _arrays(_path, _categories, _max_events=None, with_event_numbers=False):
+        arrays = (np.zeros((1, 18)), np.zeros((1, 10)))
+        return arrays + (np.zeros(1, dtype=np.uint64),) if with_event_numbers else arrays
 
     def test_reads_the_fixed_ggf_groups_in_split_order(self):
         calls = []
 
-        def record(path, categories, max_events=None):
+        def record(path, categories, max_events=None, with_event_numbers=False):
             calls.append(list(categories))
-            return self._arrays(path, categories, max_events)
+            return self._arrays(path, categories, max_events, with_event_numbers)
 
         with patch("data.load_data.load_data", side_effect=record):
             splits = load_presplit_data("unused.h5")
 
         self.assertEqual(calls, [["ggF_train"], ["ggF_val"], ["ggF_test"]])
         self.assertEqual(len(splits), 6)
+
+    def test_returns_event_numbers_per_split_when_requested(self):
+        with patch("data.load_data.load_data", side_effect=self._arrays):
+            splits = load_presplit_data("unused.h5", with_event_numbers=True)
+
+        self.assertEqual(len(splits), 9)
+        self.assertEqual([split.shape for split in splits[:3]], [(1, 18), (1, 10), (1,)])
 
     def test_forwards_max_events_per_category(self):
         with patch("data.load_data.load_data", side_effect=self._arrays) as fake:

@@ -116,14 +116,25 @@ def test_training_a_single_fold_leaves_the_others_alone(monkeypatch):
 
 
 def _pooled_arrays():
+    """Nine split arrays whose pooled eventNumbers run 0..7 in row order."""
     return (
         np.arange(0, 8, dtype=np.float32).reshape(4, 2),
         np.arange(0, 4, dtype=np.float32).reshape(4, 1),
+        np.arange(0, 4, dtype=np.uint64),
         np.arange(100, 108, dtype=np.float32).reshape(4, 2),
         np.arange(100, 104, dtype=np.float32).reshape(4, 1),
+        np.arange(4, 8, dtype=np.uint64),
         np.arange(200, 208, dtype=np.float32).reshape(4, 2),
         np.arange(200, 204, dtype=np.float32).reshape(4, 1),
+        np.arange(200, 204, dtype=np.uint64),
     )
+
+
+def _with_pooled_event_numbers(event_numbers):
+    """The pooled arrays, relabelled with the given train+validation eventNumbers."""
+    splits = list(_pooled_arrays())
+    splits[2], splits[5] = np.split(np.asarray(event_numbers, dtype=np.uint64), 2)
+    return tuple(splits)
 
 
 def test_folds_rotate_validation_through_train_and_val():
@@ -137,6 +148,26 @@ def test_folds_rotate_validation_through_train_and_val():
     # Every pooled row is validated exactly once, and the pool spans both groups.
     assert sorted(seen[0] + seen[1]) == [0.0, 2.0, 4.0, 6.0, 100.0, 102.0, 104.0, 106.0]
     assert set(seen[0]).isdisjoint(seen[1])
+
+
+def test_folds_follow_event_numbers_rather_than_row_order():
+    # Row order says 0, 1, 2, ...; these eventNumbers put the last row of each group in fold 0.
+    splits = _with_pooled_event_numbers([1, 3, 5, 8, 9, 11, 13, 16])
+
+    X_fit, _, X_check, _, _, _ = k_fold_train.select_fold_splits(splits, 0, folds=2)
+
+    assert X_check[:, 0].tolist() == [6.0, 106.0]
+    assert X_fit[:, 0].tolist() == [0.0, 2.0, 4.0, 100.0, 102.0, 104.0]
+
+
+def test_rejects_negative_event_numbers():
+    with pytest.raises(ValueError, match="non-negative"):
+        k_fold_train.fold_of_event(np.array([1, -3], dtype=np.int64), 2)
+
+
+def test_rejects_splits_without_event_numbers():
+    with pytest.raises(ValueError, match="nine"):
+        k_fold_train.select_fold_splits(_pooled_arrays()[:6], 0, folds=2)
 
 
 def test_every_fold_keeps_the_whole_test_group():

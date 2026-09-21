@@ -27,6 +27,9 @@ CATEGORY_FIELDS = {
     "truth_neg_w": FOUR_VECTOR + ("m",),
 }
 
+# Read on demand, because older HDF5 files were written without the event group.
+EVENT_FIELDS = {"event": ("eventNumber",)}
+
 
 def select_categories(available_categories, categories):
     """Validate that every requested HDF5 category exists in the file."""
@@ -42,14 +45,22 @@ def select_categories(available_categories, categories):
     return selected
 
 
-def load_particles_from_h5(filename, categories, max_events=None):
-    """Read the fields of CATEGORY_FIELDS from each selected category of an HDF5 file."""
+def _read_category(source, fields, max_events, category):
+    """Read the requested groups of one HDF5 category, naming any group the file lacks."""
+    missing = sorted(set(fields) - set(source.keys()))
+    if missing:
+        raise ValueError(f"HDF5 category {category!r} is missing group(s): {missing}")
+    return {
+        group: {field: source[group][field][:max_events] for field in group_fields}
+        for group, group_fields in fields.items()
+    }
+
+
+def load_particles_from_h5(filename, categories, max_events=None, fields=CATEGORY_FIELDS):
+    """Read the given fields from each selected category of an HDF5 file."""
     with h5py.File(filename, "r") as f:
         return {
-            category: {
-                group: {field: f[category][group][field][:max_events] for field in fields}
-                for group, fields in CATEGORY_FIELDS.items()
-            }
+            category: _read_category(f[category], fields, max_events, category)
             for category in select_categories(f.keys(), categories=categories)
         }
 
@@ -95,9 +106,14 @@ def _valid_truth_w_rows(target_obj):
     return valid & np.isfinite(pair_mass2) & (pair_mass2 > 0.0)
 
 
-def load_data(data_path, categories, max_events_per_category=None):
-    """Load the raw input and target arrays of the selected categories, dropping unusable rows."""
-    data = load_particles_from_h5(data_path, categories, max_events_per_category)
+def load_data(data_path, categories, max_events_per_category=None, with_event_numbers=False):
+    """Load the raw input and target arrays of the selected categories, dropping unusable rows.
+
+    With ``with_event_numbers``, the surviving HWWFrames eventNumbers are returned as a third
+    array, aligned row for row with the kept inputs and targets.
+    """
+    fields = {**CATEGORY_FIELDS, **EVENT_FIELDS} if with_event_numbers else CATEGORY_FIELDS
+    data = load_particles_from_h5(data_path, categories, max_events_per_category, fields)
     print("Using HDF5 categories:", ", ".join(data))
 
     train_obj = np.concatenate([_pack_inputs(category) for category in data.values()])
@@ -125,11 +141,18 @@ def load_data(data_path, categories, max_events_per_category=None):
         f"rows with a dilepton mass of {HIGGS_MASS} GeV or more",
     )
 
-    return train_obj[kept], target_obj[kept]
+    if not with_event_numbers:
+        return train_obj[kept], target_obj[kept]
+
+    event_numbers = np.concatenate([category["event"]["eventNumber"] for category in data.values()])
+    return train_obj[kept], target_obj[kept], event_numbers[kept]
 
 
-def load_presplit_data(data_path, data_cfg=None):
-    """Load train/val/test arrays from the fixed pre-split HDF5 groups."""
+def load_presplit_data(data_path, data_cfg=None, with_event_numbers=False):
+    """Load train/val/test arrays from the fixed pre-split HDF5 groups.
+
+    Each split contributes its inputs and targets, plus its eventNumbers when they are requested.
+    """
     data_cfg = data_cfg or {}
     unknown_keys = set(data_cfg) - DATA_CONFIG_KEYS
     if unknown_keys:
@@ -144,5 +167,5 @@ def load_presplit_data(data_path, data_cfg=None):
     return tuple(
         array
         for category in PRESPLIT_CATEGORIES.values()
-        for array in load_data(data_path, [category], max_events)
+        for array in load_data(data_path, [category], max_events, with_event_numbers)
     )

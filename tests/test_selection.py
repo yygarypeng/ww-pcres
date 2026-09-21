@@ -89,6 +89,18 @@ def test_dilepton_mass_cut_is_a_window():
     assert (DILEPTON_MASS_MIN, DILEPTON_MASS_MAX) == (10.0, 55.0)
 
 
+def test_pre_dilepton_mass_cut_is_the_lower_edge_only():
+    features = make_features(
+        make_event(massless(30.0, 0.0), massless(30.0, 0.0)),  # m_ll = 0
+        back_to_back(4.0, 4.0),  # m_ll = 8 GeV, below the window
+        back_to_back(20.0, 20.0),  # m_ll = 40 GeV, inside
+        back_to_back(40.0, 40.0),  # m_ll = 80 GeV, above the window
+    )
+
+    # pre_mll drops the low-mass resonances but keeps everything above them.
+    assert selection_masks(features)["pre_mll"].tolist() == [False, False, True, True]
+
+
 def test_missing_et_cut_uses_the_met_two_vector():
     features = make_features(
         passing_event(met=(30.0, 40.0)),  # 50 GeV
@@ -164,6 +176,7 @@ def test_masks_are_returned_in_cutflow_order():
         "l0_pt",
         "l1_pt",
         "mll",
+        "pre_mll",
         "met",
         "dphi_ll",
         "dphi_ll_met",

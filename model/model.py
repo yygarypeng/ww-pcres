@@ -161,8 +161,6 @@ class WBosonRegressor(nn.Module):
         y_pred = self.w_layer(lep0, lep1, nu_params)
 
         if return_aux:
-            # the mass constraint rescales the neutrinos, so the MET correction
-            # has to be read back from the W four-vectors
             dinu_pt = (y_pred[..., :2] - lep0[..., :2]) + (y_pred[..., 4:6] - lep1[..., :2])
             return y_pred, {
                 "dmet": met - dinu_pt,
@@ -240,8 +238,6 @@ class LightningWBoson(L.LightningModule):
         self._gradient_analysis_batch = None
         self.mmd_config = mmd_config
         self.higgs_mass_target = higgs_mass_target
-        # A factor of 1.0 keeps the original fixed learning rate, so old
-        # checkpoints and configs without these keys behave exactly as before.
         self.lr_plateau_factor = float(lr_plateau_factor)
         self.lr_plateau_patience = int(lr_plateau_patience)
 
