@@ -97,6 +97,9 @@ each fold directory.
   evaluates each configured MMD feature bandwidth.
 - `onnx/README.md` documents checkpoint export and PyTorch/ONNX Runtime parity
   checks. Run its commands from `onnx/`.
+- `docs/checkpoint_manual.md` is the consumer-facing contract for the exported
+  models: input columns, fold selection by `eventNumber`, and a minimal ONNX
+  Runtime client.
 - `physics/ohbboosting.py` provides optional ROOT-based visualization checks and
   requires ROOT.
 

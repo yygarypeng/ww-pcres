@@ -1,6 +1,8 @@
 The configured model uses a 216-dimensional representation, 8 attention heads, and 3 attention blocks with 2-head trunk outputs.  It has ~2.83 M trainable parameters on the QE `v6.1` dataset with only DF and TCPT default selections.
 
-ONNX version: opset 11; IR 6
+ONNX version: opset 11; IR 6  
+Published at: `/eos/home-y/ypeng/qe/models/PCRes_260921`  
+Client contract: `docs/checkpoint_manual.md`
 
 Scored on the shared test split, per fold and averaged over the reported angular observables (theta* and phi* per lepton charge, plus their sums and differences).  `w_fourvec_rmse` is the RMSE over the eight W four-vector components against truth in GeV; the angular columns are in radians, with `ks` the two-sample KS statistic and `emd` the Wasserstein distance between the predicted and truth distributions.
 
