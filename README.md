@@ -27,15 +27,10 @@ The HDF5 file must contain the three pre-split top-level groups `ggF_train`,
 | `truth_pos_w`, `truth_neg_w` | `px`, `py`, `pz`, `energy`, `m` |
 | `event` | `eventNumber`, read only by `train/k_fold_train.py` |
 
-Those three groups are the whole splitting policy and are read as-is. The
-`data:` config section accepts one optional key, `max_events_per_category`,
-which caps the events read from each group; any other key there is rejected
-rather than silently ignored. Cross-fitting on top of this split is provided by
-`train/k_fold_train.py` (see Training below).
-
-The loader removes invalid/non-finite kinematics and events with measured
-dilepton mass at least 125 GeV before training. Fold assignments described below
-are unaffected by that filtering, because they are keyed on `eventNumber`.
+The groups are read as-is. The optional `data.max_events_per_category` caps the
+events read from each group; any other `data:` key is rejected. The loader drops
+events with invalid or non-finite kinematics and events with a dilepton mass of
+125 GeV or more.
 
 ## Training
 
@@ -45,49 +40,55 @@ Run one model:
 python train/train.py --config configs/config.yaml
 ```
 
-Add `--wandb` for Weights & Biases logging or `--gpu {0,1}` to select a physical
-GPU. The launcher requires Linux `taskset`, hard-codes CPU affinity
-`0-9,12-15`, backgrounds the process, and redirects stdout/stderr to `record.log`:
+Add `--wandb` for Weights & Biases logging or `--gpu {0,1}` to pick a GPU.
+`./train/run_train.sh` runs the same command in the background with CPU affinity
+`0-9,12-15` (Linux `taskset`) and writes its output to `record.log`.
+
+Cross-fitting trains one model per fold:
 
 ```bash
-./train/run_train.sh
+./train/run_k_fold_train.sh              # every fold of configs/kfold_config.yaml
+./train/run_k_fold_train.sh --fold 0     # one fold
+python train/k_fold_train.py --config configs/untuned_kfold_config.yaml --fold 0
 ```
 
-Run every cross-fitting fold, or just one of them:
+`configs/kfold_config.yaml` is the sweep-tuned configuration and
+`configs/untuned_kfold_config.yaml` the untuned baseline. The launcher runs in the
+background with W&B logging and appends to `record_k_fold.log`. It checks the
+config, data file, and GPU first, and refuses to overwrite an existing fold
+unless given `--overwrite`. Folds run one after another, because a single fold
+saturates the GPU.
+
+`parameters.folds` sets the fold count (8 in the shipped configs). Training pools
+the train and validation groups, and fold `i` holds out the events with
+`eventNumber % folds == i`; every fold is scored on the full test group.
+Consumers therefore select the model for an event by `eventNumber % folds`, and
+fold membership survives regenerating or refiltering the HDF5. Folds differ
+slightly in size, because HWWFrames already splits by `eventNumber % 100`.
+
+Each run writes checkpoints and Lightning CSV logs to `paths.saved_path`
+(`paths.saved_path/fold<i>` for folds), deleting that directory first, so use a
+new path to keep earlier runs. Keep `meta` in the directory name (for example
+`fold_meta_ggF_v3`) so run outputs stay out of Git.
+
+## Hyper-parameter Sweeps
+
+`sweep/` runs a constrained Optuna search on one fold, scoring each trial on a
+fixed ruler: W momentum bias in units of resolution, and total-variation
+distances on the lepton decay angles and their sums and differences.
 
 ```bash
-./train/run_k_fold_train.sh
-python train/k_fold_train.py --config configs/kfold_config.yaml
-python train/k_fold_train.py --config configs/kfold_config.yaml --fold 0
+./sweep/run_sweep.sh             # validate, then run in the background
+./sweep/run_sweep.sh --report    # print selection.json once finished
 ```
 
-Folds always run one after another: a single fold already holds the GPU at 100%
-and peaks near 9.5 GiB of this card's 16 GiB, so there is nothing for a
-concurrent fold to reclaim and no room to hold it.
-
-`parameters.folds` sets the fold count; the config ships with 8 folds. Training
-concatenates the pre-split train and validation groups and cuts them into N
-residue classes of the HWWFrames `eventNumber`: fold `i` holds out the events
-with `eventNumber % N == i` and trains on the rest, while the complete test group
-remains held out and is scored by every fold. Downstream code therefore selects
-the model for an event with the same `eventNumber % N` it was held out by, and
-fold membership survives regenerating or refiltering the HDF5. The residue
-classes are not exactly equal in size, because HWWFrames already splits
-train/validation/test by `eventNumber % 100` and 8 does not divide 100: on the
-`v6.1` ggF merged file the validation folds range from 153.6k to 161.2k rows,
-against 1.099M to 1.107M training rows and the same 140,565 test rows for every
-fold.
-
-Fold outputs go to `paths.saved_path/fold<i>`.
-
-Training writes checkpoints and Lightning CSV logs below `paths.saved_path`.
-Every fresh run deletes its entire target output directory after data and model
-setup, so use a new path to preserve existing runs. This applies separately to
-each fold directory.
+Outputs land under `sweep/outputs/`; nothing in `sweep/` writes to
+`paths.saved_path` or reads the test group. See `sweep/README.md`.
 
 ## Analysis And Export
 
-- `notebooks/visualize.ipynb` visualizes Lightning metrics.
+- `notebooks/visualize.ipynb` plots a run's metrics and predictions and saves each
+  figure as a PDF under `paths.saved_path/figure/`.
 - `python scripts/save_pcres_io.py --config configs/config.yaml` reloads a
   checkpoint, exports aligned test arrays, and creates parity/residual plots;
   see `docs/pcres_io.md` for its output schema.
@@ -107,6 +108,7 @@ each fold directory.
 
 ```bash
 ruff check .
+ruff format --check .
 pytest
 ```
 

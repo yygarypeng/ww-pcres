@@ -29,7 +29,7 @@ Scored on the shared test split, per fold and averaged over the reported angular
   - W-: `(px, py, pz, energy)`
 
 Energy inputs are transformed with `log1p` and all inputs are standardized
-using statistics from the training data internally.  **Do NOT transformed again!** Just use the RAW leptons, jets and MET as they are provided in the input tensor. Each standardization is the one fitted on that fold's own training rows, so the folds are not interchangeable.
+using statistics from the training data internally.  **Do not transform them again.** Just use the RAW leptons, jets and MET as they are provided in the input tensor. Each standardization is the one fitted on that fold's own training rows, so the folds are not interchangeable.
 
 Fold membership follows the ATLAS convention on the HWWFrames `eventNumber`: fold `i` was validated on the pooled train+validation (from Danning's HDF5) events with `eventNumber % 8 == i` and trained on the rest, so a consumer selects the model for an event with `eventNumber % 8` and always evaluates it on data the model never fitted.  The shared test split is untouched by the rotation and is the same 140565 events for every fold testing.
 

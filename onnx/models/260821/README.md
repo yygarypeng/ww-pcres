@@ -19,7 +19,7 @@ ONNX version: opset 11; IR 6
   - W-: `(px, py, pz, energy)`
 
 Energy inputs are transformed with `log1p` and all inputs are standardized
-using statistics from the training data internally.  **Do NOT transformed again!**
+using statistics from the training data internally.  **Do not transform them again.**
 Just use the RAW leptons, jets and MET as they are provided in the input tensor.
 
 > Note: Training currently uses one fold only. The same model is used for

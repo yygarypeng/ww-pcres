@@ -1,5 +1,12 @@
 # Local ONNX Models
 
-Store ONNX model binaries in this directory. Files matching `*.onnx` are ignored by Git so trained model artifacts remain local and are not removed during source cleanup.
+Each dated directory holds one export and a README describing it; the `*.onnx`
+binaries are gitignored and stay local.
 
-Current local models are the eight cross-fitting exports under `260921/`, which use the `eventNumber % 8` fold assignment and the ggF-only training input. The earlier `260919/` cross-fitting exports and the historical `260821/` export are superseded and kept for reference only. Check `model.graph.input[0]` before using historical models because their input schemas predate the current 18/21-column contracts.
+- `260921/`: current. Eight cross-fitting models selected by `eventNumber % 8`,
+  trained on the ggF-only input.
+- `260919/`: superseded. Row-index folds on a mixed ggF/VBF input.
+- `260821/`: historical single-fold model.
+
+All three take the 18-column input described in `onnx/README.md`; check
+`model.graph.input[0]` before using any other historical export.
