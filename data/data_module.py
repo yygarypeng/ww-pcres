@@ -1,10 +1,18 @@
 import os
 import random
+from functools import partial
 
 import numpy as np
 import pytorch_lightning as L
 import torch
 from torch.utils.data import DataLoader, TensorDataset
+
+
+def _seed_worker(worker_id, seed):
+    worker_seed = seed + worker_id
+    random.seed(worker_seed)
+    np.random.seed(worker_seed)
+    torch.manual_seed(worker_seed)
 
 
 def _as_tensor(array):
@@ -53,6 +61,7 @@ class WBosonDataModule(L.LightningDataModule):
         persistent_workers=False,
         pin_memory=True,
         prefetch_factor=2,
+        multiprocessing_context=None,
     ):
         super().__init__()
 
@@ -76,6 +85,7 @@ class WBosonDataModule(L.LightningDataModule):
         if num_workers is None:
             num_workers = max(1, int((os.cpu_count() or 1) * 0.8))
         self.num_workers = max(0, int(num_workers))
+        self.multiprocessing_context = multiprocessing_context if self.num_workers else None
         self.persistent_workers = bool(persistent_workers and self.num_workers > 0)
         # DataLoader only accepts a prefetch factor when it uses worker processes.
         self.prefetch_factor = (
@@ -99,12 +109,6 @@ class WBosonDataModule(L.LightningDataModule):
     def load_state_dict(self, state_dict):
         self._train_generator.set_state(state_dict["train_generator_state"])
 
-    def _worker_init_fn(self, worker_id):
-        worker_seed = self.seed + worker_id
-        random.seed(worker_seed)
-        np.random.seed(worker_seed)
-        torch.manual_seed(worker_seed)
-
     def _dataloader(self, dataset, shuffle):
         # Shuffling advances one long-lived generator, so a resumed run keeps its epoch order.
         generator = self._train_generator if shuffle else torch.Generator().manual_seed(self.seed)
@@ -116,8 +120,10 @@ class WBosonDataModule(L.LightningDataModule):
             pin_memory=self.pin_memory,
             persistent_workers=self.persistent_workers,
             prefetch_factor=self.prefetch_factor,
-            worker_init_fn=self._worker_init_fn,
+            # A bound method would pickle the datamodule and its trainer under spawn.
+            worker_init_fn=partial(_seed_worker, seed=self.seed),
             generator=generator,
+            multiprocessing_context=self.multiprocessing_context,
         )
 
     def train_dataloader(self):

@@ -131,6 +131,26 @@ class LoadPresplitDataTest(unittest.TestCase):
         self.assertEqual(calls, [["ggF_train"], ["ggF_val"], ["ggF_test"]])
         self.assertEqual(len(splits), 6)
 
+    def test_can_read_train_and_validation_without_opening_test(self):
+        calls = []
+
+        def record(path, categories, max_events=None, with_event_numbers=False):
+            calls.append(list(categories))
+            return self._arrays(path, categories, max_events, with_event_numbers)
+
+        with patch("data.load_data.load_data", side_effect=record):
+            arrays = load_presplit_data(
+                "unused.h5", with_event_numbers=True, splits=("train", "val")
+            )
+
+        self.assertEqual(calls, [["ggF_train"], ["ggF_val"]])
+        self.assertEqual(len(arrays), 6)
+
+    def test_rejects_unknown_or_duplicate_split_names(self):
+        for splits in (("train", "train"), ("train", "holdout")):
+            with self.subTest(splits=splits), self.assertRaises(ValueError):
+                load_presplit_data("unused.h5", splits=splits)
+
     def test_returns_event_numbers_per_split_when_requested(self):
         with patch("data.load_data.load_data", side_effect=self._arrays):
             splits = load_presplit_data("unused.h5", with_event_numbers=True)

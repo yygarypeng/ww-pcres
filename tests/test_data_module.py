@@ -1,4 +1,5 @@
 import re
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -8,6 +9,18 @@ from data.data_module import WBosonDataModule
 
 X = np.zeros((4, 3), dtype=np.float64)
 Y = np.zeros((4, 2), dtype=np.float64)
+
+
+def test_spawn_workers_do_not_serialize_the_attached_trainer():
+    datamodule = WBosonDataModule(
+        X, Y, X_val=X, Y_val=Y, num_workers=1, multiprocessing_context="spawn"
+    )
+    # Lightning attaches the live trainer before starting loaders. A local lambda
+    # cannot be pickled and stands in for state that must stay in the parent.
+    datamodule.trainer = SimpleNamespace(parent_only=lambda: None)
+    features, targets = next(iter(datamodule.val_dataloader()))
+    torch.testing.assert_close(features, torch.tensor(X, dtype=torch.float32))
+    torch.testing.assert_close(targets, torch.tensor(Y, dtype=torch.float32))
 
 
 @pytest.mark.parametrize(

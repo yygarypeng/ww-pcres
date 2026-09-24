@@ -148,8 +148,8 @@ def load_data(data_path, categories, max_events_per_category=None, with_event_nu
     return train_obj[kept], target_obj[kept], event_numbers[kept]
 
 
-def load_presplit_data(data_path, data_cfg=None, with_event_numbers=False):
-    """Load train/val/test arrays from the fixed pre-split HDF5 groups.
+def load_presplit_data(data_path, data_cfg=None, with_event_numbers=False, splits=SPLITS):
+    """Load requested arrays from the fixed pre-split HDF5 groups.
 
     Each split contributes its inputs and targets, plus its eventNumbers when they are requested.
     """
@@ -159,13 +159,22 @@ def load_presplit_data(data_path, data_cfg=None, with_event_numbers=False):
         names = ", ".join(sorted(unknown_keys))
         raise ValueError(f"unsupported data config key(s): {names}")
 
+    splits = tuple(splits)
+    if len(set(splits)) != len(splits):
+        raise ValueError(f"split names must be unique, got {splits}")
+    unknown_splits = set(splits) - set(SPLITS)
+    if unknown_splits:
+        names = ", ".join(sorted(unknown_splits))
+        raise ValueError(f"unsupported split name(s): {names}")
+
     print("Using original pre-split HDF5 data")
-    for split, category in PRESPLIT_CATEGORIES.items():
+    categories = [PRESPLIT_CATEGORIES[split] for split in splits]
+    for split, category in zip(splits, categories):
         print(f"{split.capitalize()} category:", category)
 
     max_events = data_cfg.get("max_events_per_category")
     return tuple(
         array
-        for category in PRESPLIT_CATEGORIES.values()
+        for category in categories
         for array in load_data(data_path, [category], max_events, with_event_numbers)
     )
