@@ -11,4 +11,5 @@ mplhep
 onnx
 onnxruntime
 wandb
+optuna
 ruff==0.16.2

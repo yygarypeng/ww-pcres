@@ -1,0 +1,61 @@
+name: constrained
+description: Joint constrained TPE search over production-supported loss, MMD, and optimizer settings.
+sampler: tpe
+axes:
+  parameters.fourvec_loss:
+    type: categorical
+    choices: [l1, huber, rmse]
+  parameters.huber_delta:
+    type: float
+    low: 5.0
+    high: 200.0
+    log: true
+    when:
+      parameters.fourvec_loss: huber
+  # A log axis cannot reach zero, so the untuned "off" point needs its own switch.
+  # Quoted because YAML 1.1 reads bare off/on as booleans.
+  sweep.bias_penalty:
+    type: categorical
+    choices: ["off", "on"]
+  parameters.loss_weights.fourvec_bias:
+    type: float
+    low: 0.001
+    high: 1000.0
+    log: true
+    when:
+      sweep.bias_penalty: "on"
+  parameters.loss_weights.angular_mmd:
+    type: float
+    low: 5.0
+    high: 400.0
+    log: true
+  parameters.loss_weights.w_mass_mmd:
+    type: float
+    low: 0.5
+    high: 20.0
+    log: true
+  parameters.loss_weights.dmet:
+    type: float
+    low: 0.01
+    high: 0.3
+    log: true
+  parameters.learning_rate:
+    type: float
+    low: 0.0001
+    high: 0.001
+    log: true
+  parameters.weight_decay:
+    type: float
+    low: 0.0001
+    high: 0.1
+    log: true
+  mmd.angular.kernel:
+    type: categorical
+    choices: [imq, rbf]
+  mmd.angular.bandwidths:
+    type: categorical
+    choices:
+      - [0.6, 1.2, 2.4]
+      - [1.0, 2.0, 4.0]
+      - [2.0, 4.0, 8.0]
+      - [0.5, 1.0, 2.0, 4.0, 8.0]

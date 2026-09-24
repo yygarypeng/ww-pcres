@@ -1,0 +1,49 @@
+name: constrained-v2
+description: >
+  Second pass, redrawn from the first study: widen the axes its best trials were
+  pressed against (w_mass_mmd, learning_rate, weight_decay), freeze the settled
+  ones (l1 loss, angular kernel and bandwidths, bias penalty on), and add
+  w_fourvec, which trades resolution against bias.
+sampler: tpe
+axes:
+  # Fixed at 0.3 in the first study.
+  parameters.loss_weights.w_fourvec:
+    type: float
+    low: 0.1
+    high: 1.0
+    log: true
+  # Feasible winners spanned 3.4 to 532; below 1 nothing was feasible.
+  parameters.loss_weights.fourvec_bias:
+    type: float
+    low: 1.0
+    high: 1000.0
+    log: true
+  # Was [5, 400]; winners fell between 19 and 89.
+  parameters.loss_weights.angular_mmd:
+    type: float
+    low: 10.0
+    high: 150.0
+    log: true
+  # Was [0.5, 20], pressed against the ceiling.
+  parameters.loss_weights.w_mass_mmd:
+    type: float
+    low: 5.0
+    high: 100.0
+    log: true
+  parameters.loss_weights.dmet:
+    type: float
+    low: 0.01
+    high: 0.15
+    log: true
+  # Was [1e-4, 1e-3], winners in the bottom quarter.
+  parameters.learning_rate:
+    type: float
+    low: 3.0e-5
+    high: 5.0e-4
+    log: true
+  # Was [1e-4, 0.1], winners near the floor.
+  parameters.weight_decay:
+    type: float
+    low: 1.0e-6
+    high: 3.0e-3
+    log: true

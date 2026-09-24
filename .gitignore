@@ -56,12 +56,18 @@ coverage.xml
 *.hdf5
 *.npz
 *.onnx
+*.db
 outputs/
 *meta*/
 artifacts/
 hww_pcres_regressor*/
 lightning_logs/
+version_*/
 wandb/
+
+# Sweep studies: every directory under sweep/ except the search spaces
+sweep/*/
+!sweep/spaces/
 
 # Logs, pid files, and generated plots
 *.log
