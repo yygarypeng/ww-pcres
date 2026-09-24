@@ -8,6 +8,7 @@ from torch.nn.utils import parameters_to_vector
 from data.preprocessing import BASE_INPUT_DIM, neural_input_features_torch
 from model.layers import ResidualBlock, SelfAttentionBlock, Standardization, WConstraintsLayer
 from model.losses import (
+    FOURVEC_LOSSES,
     H_MASS_SCALE,
     _angular_mmd_with_valid_mask,
     _valid_kinematic_rows,
@@ -15,6 +16,7 @@ from model.losses import (
     dmet_loss,
     higgs_fourvec_loss,
     higgs_mass_loss,
+    mean_residual_penalty,
     w_fourvec_loss,
     w_mass_loss,
     w_mass_mmd,
@@ -188,6 +190,8 @@ class LightningWBoson(L.LightningModule):
         decoder_dropout=0.1,
         lr_plateau_factor=1.0,
         lr_plateau_patience=8,
+        fourvec_loss="l1",
+        huber_delta=10.0,
     ):
         super().__init__()
 
@@ -196,6 +200,12 @@ class LightningWBoson(L.LightningModule):
             raise ValueError(f"higgs_mass_target is fixed at {H_MASS_SCALE:g} GeV")
 
         mmd_config = resolve_mmd_config(mmd_config)
+
+        if fourvec_loss not in FOURVEC_LOSSES:
+            raise ValueError(f"fourvec_loss must be one of {FOURVEC_LOSSES}, got {fourvec_loss!r}")
+        huber_delta = float(huber_delta)
+        if huber_delta <= 0.0:
+            raise ValueError(f"huber_delta must be positive, got {huber_delta}")
 
         self.save_hyperparameters()
 
@@ -212,6 +222,7 @@ class LightningWBoson(L.LightningModule):
         defaults = {
             # main loss
             "w_fourvec": 1.0,
+            "fourvec_bias": 0.0,
             "higgs_fourvec": 0.0,
             # mass losses
             "higgs_mass": 0.0,
@@ -237,6 +248,8 @@ class LightningWBoson(L.LightningModule):
         self.log_loss_gradient_cosines = bool(log_loss_gradient_cosines)
         self._gradient_analysis_batch = None
         self.mmd_config = mmd_config
+        self.fourvec_loss = fourvec_loss
+        self.huber_delta = huber_delta
         self.higgs_mass_target = higgs_mass_target
         self.lr_plateau_factor = float(lr_plateau_factor)
         self.lr_plateau_patience = int(lr_plateau_patience)
@@ -256,7 +269,11 @@ class LightningWBoson(L.LightningModule):
     def _compute_losses(self, x, y, y_pred, aux=None):
         losses = {}
         if self._loss_enabled("w_fourvec"):
-            losses["w_fourvec"] = w_fourvec_loss(y, y_pred)
+            losses["w_fourvec"] = w_fourvec_loss(
+                y, y_pred, kind=self.fourvec_loss, huber_delta=self.huber_delta
+            )
+        if self._loss_enabled("fourvec_bias"):
+            losses["fourvec_bias"] = mean_residual_penalty(y, y_pred)
         if self._loss_enabled("higgs_fourvec"):
             losses["higgs_fourvec"] = higgs_fourvec_loss(y, y_pred)
         if self._loss_enabled("higgs_mass"):

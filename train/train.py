@@ -202,6 +202,8 @@ def run_training(
         decoder_dropout=params.get("decoder_dropout", 0.1),
         lr_plateau_factor=params.get("lr_plateau_factor", 1.0),
         lr_plateau_patience=params.get("lr_plateau_patience", 8),
+        fourvec_loss=params.get("fourvec_loss", "l1"),
+        huber_delta=params.get("huber_delta", 10.0),
     )
 
     callbacks = build_training_callbacks(params)

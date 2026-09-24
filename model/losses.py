@@ -46,8 +46,30 @@ def angular_mmd_features(angles):
     )
 
 
-def w_fourvec_loss(y_true, y_pred):
-    return F.l1_loss(y_pred, y_true[..., :8])
+FOURVEC_LOSSES = ("l1", "huber", "rmse")
+
+
+def w_fourvec_loss(y_true, y_pred, kind="l1", huber_delta=10.0):
+    """Distance between the predicted and true W four-vectors, in GeV.
+
+    ``l1`` is median-seeking, so it biases the skewed energies low; ``rmse`` is
+    mean-seeking, and ``huber`` matches L1 above ``huber_delta``.
+    """
+    target = y_true[..., :8]
+    if kind == "l1":
+        return F.l1_loss(y_pred, target)
+    if kind == "huber":
+        return F.smooth_l1_loss(y_pred, target, beta=huber_delta)
+    if kind == "rmse":
+        return torch.sqrt(F.mse_loss(y_pred, target).clamp_min(TOR))
+    raise ValueError(f"fourvec_loss must be one of {FOURVEC_LOSSES}, got {kind!r}")
+
+
+def mean_residual_penalty(y_true, y_pred):
+    """Penalize a shared component offset in units of residual spread."""
+    residual = y_pred - y_true[..., :8]
+    scale = residual.detach().std(dim=0).clamp_min(TOR)
+    return torch.mean((residual.mean(dim=0) / scale) ** 2)
 
 
 def w_mass_loss(y_true, y_pred):

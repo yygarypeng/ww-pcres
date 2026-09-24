@@ -264,6 +264,21 @@ class WFourVectorLossTest(unittest.TestCase):
 
         self.assertTrue(torch.isfinite(loss))
 
+    def test_mean_residual_penalty_detects_scale_invariant_split_bias(self):
+        torch.manual_seed(2330)
+        truth = torch.randn(4096, 10) * 10.0
+        residual = torch.randn(4096, 8) * 4.0
+        shifted = residual.clone()
+        shifted[:, 0] += 5.0
+        shifted[:, 4] -= 5.0
+
+        base = loss_module.mean_residual_penalty(truth, truth[:, :8] + residual)
+        biased = loss_module.mean_residual_penalty(truth, truth[:, :8] + shifted)
+        scaled = loss_module.mean_residual_penalty(truth, truth[:, :8] + shifted * 20.0)
+
+        self.assertGreater(biased, base * 20.0)
+        torch.testing.assert_close(scaled, biased, rtol=0.05, atol=0.0)
+
 
 class HiggsFourVectorLossTest(unittest.TestCase):
     def test_loss_uses_sum_of_w_four_vectors(self):
@@ -389,6 +404,24 @@ class LightningModelLossTest(unittest.TestCase):
 
         torch.testing.assert_close(losses["higgs_fourvec"], torch.tensor(5.0))
         torch.testing.assert_close(total, torch.tensor(10.0))
+
+    def test_fourvec_bias_loss_is_weighted_once(self):
+        torch.manual_seed(2330)
+        truth = torch.randn(256, 10) * 10.0
+        prediction = truth[:, :8] + torch.randn(256, 8) * 4.0 + 3.0
+        off = self._basic_model(loss_weights={"w_fourvec": 1.0, "fourvec_bias": 0.0})
+        on = self._basic_model(loss_weights={"w_fourvec": 1.0, "fourvec_bias": 7.0})
+        on.load_state_dict(off.state_dict())
+
+        total_off, losses_off = off._compute_losses(None, truth, prediction)
+        total_on, losses_on = on._compute_losses(None, truth, prediction)
+
+        self.assertNotIn("fourvec_bias", losses_off)
+        self.assertIn("fourvec_bias", losses_on)
+        torch.testing.assert_close(
+            total_on,
+            total_off + 7.0 * losses_on["fourvec_bias"],
+        )
 
     def _weighted_model(self):
         return LightningWBoson(
