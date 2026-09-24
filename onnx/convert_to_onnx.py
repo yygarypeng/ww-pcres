@@ -65,8 +65,12 @@ def find_checkpoint(saved_path, checkpoint=None):
             raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")
         return ckpt_path
 
+    # Relative to the repository root, as in training, not to the working directory.
+    saved_path = Path(saved_path).expanduser()
+    if not saved_path.is_absolute():
+        saved_path = REPO_ROOT / saved_path
     candidates = sorted(
-        Path(saved_path).glob("**/checkpoints/*.ckpt"),
+        saved_path.glob("**/checkpoints/*.ckpt"),
         key=lambda path: path.stat().st_mtime,
         reverse=True,
     )
@@ -129,6 +133,7 @@ def main():
 
     example_input = make_valid_raw_inputs(args.batch_size, input_dim=model.hparams.input_dim)
     output_path = Path(args.output)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
 
     torch.onnx.export(
         model,

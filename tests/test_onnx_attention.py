@@ -142,3 +142,17 @@ class Opset11MultiheadAttentionTest(unittest.TestCase):
                 # to 1e-13. Use the same tolerance as the ONNX Runtime comparison below.
                 np.testing.assert_allclose(replacement_output, native_output, rtol=1e-4, atol=1e-5)
                 np.testing.assert_allclose(actual, native_output, rtol=1e-4, atol=1e-5)
+
+
+class FindCheckpointTest(unittest.TestCase):
+    def test_relative_saved_path_resolves_against_the_repository_root(self):
+        with tempfile.TemporaryDirectory() as root:
+            checkpoint = Path(root) / "run" / "fold0" / "logs" / "checkpoints" / "last.ckpt"
+            checkpoint.parent.mkdir(parents=True)
+            checkpoint.write_bytes(b"")
+            original_root = converter.REPO_ROOT
+            converter.REPO_ROOT = Path(root)
+            try:
+                self.assertEqual(converter.find_checkpoint("run"), checkpoint)
+            finally:
+                converter.REPO_ROOT = original_root
