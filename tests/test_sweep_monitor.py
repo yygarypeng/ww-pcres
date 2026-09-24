@@ -154,4 +154,8 @@ def test_the_launcher_is_told_which_output_directory_to_use(tmp_path, monkeypatc
     monitor.launch_driver(tmp_path, ("--study-name", "v2"))
 
     assert seen["env"]["SWEEP_OUTPUT_DIR"] == str(tmp_path.resolve())
-    assert seen["command"][-2:] == ["--study-name", "v2"]
+    assert seen["command"][-4:] == ["--study-name", "v2", "--output-dir", str(tmp_path.resolve())]
+
+    monitor.launch_driver(tmp_path, ("--output-dir", "elsewhere"))
+    assert seen["command"][-2:] == ["--output-dir", "elsewhere"]
+    assert seen["command"].count("--output-dir") == 1

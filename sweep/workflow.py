@@ -208,18 +208,21 @@ class ConvergenceStopper:
         self.no_feasible_limit = int(no_feasible_limit)
 
     def __call__(self, study, _trial):
+        if self.converged(study):
+            study.stop()
+
+    def converged(self, study):
+        """No feasible gain for ``patience`` trials, or no feasible trial at all."""
         if any(trial.state == optuna.trial.TrialState.WAITING for trial in study.trials):
-            return
+            return False
         completed = [
             trial for trial in study.trials if trial.state == optuna.trial.TrialState.COMPLETE
         ]
         feasible = [trial for trial in completed if _is_feasible_trial(trial)]
         if not feasible:
-            if len(completed) >= self.no_feasible_limit:
-                study.stop()
-            return
+            return len(completed) >= self.no_feasible_limit
         if len(completed) < self.min_trials:
-            return
+            return False
 
         best = math.inf
         last_improvement = -1
@@ -227,8 +230,7 @@ class ConvergenceStopper:
             if _is_feasible_trial(trial) and trial.value < best:
                 best = trial.value
                 last_improvement = index
-        if len(completed) - 1 - last_improvement >= self.patience:
-            study.stop()
+        return len(completed) - 1 - last_improvement >= self.patience
 
 
 class RepeatedFailureStopper:
@@ -477,16 +479,20 @@ def run_workflow(settings):
             f"confirmation runs reserved, {search_seconds / 3600.0:.1f} h left for the search. "
             "Optuna finishes the trial that is running when the clock runs out."
         )
-    study.optimize(
-        _objective(settings, thresholds),
-        n_trials=None,
-        timeout=search_seconds,
-        callbacks=[stopper, failure_stopper],
-        # A crashed trial is recorded as FAIL; KeyboardInterrupt still stops the driver.
-        catch=(Exception,),
-        # Collect after Optuna releases pruning/error tracebacks that retain the trainer.
-        gc_after_trial=True,
-    )
+    # Optuna forgets a previous stop on resume, so a converged study must not search again.
+    if stopper.converged(study):
+        print("The search has already converged; going straight to confirmation.")
+    else:
+        study.optimize(
+            _objective(settings, thresholds),
+            n_trials=None,
+            timeout=search_seconds,
+            callbacks=[stopper, failure_stopper],
+            # A crashed trial is recorded as FAIL; KeyboardInterrupt still stops the driver.
+            catch=(Exception,),
+            # Collect after Optuna releases pruning/error tracebacks that retain the trainer.
+            gc_after_trial=True,
+        )
     candidates = _candidate_records(study, settings.top_candidates)
     confirmations = confirm_candidates(settings, candidates)
     status, selected = select_configuration(settings.base_config, confirmations)

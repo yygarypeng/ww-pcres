@@ -101,8 +101,13 @@ def write_record(output_dir, record):
 
 
 def launch_driver(output_dir, args=()):
-    """Restart the driver through the launcher, with its pid and log in ``output_dir``."""
-    env = dict(os.environ, SWEEP_OUTPUT_DIR=str(Path(output_dir).resolve()))
+    """Restart the driver through the launcher, with its study, pid, and log in ``output_dir``."""
+    output_dir = str(Path(output_dir).resolve())
+    args = list(args)
+    # Without this a restart would resume the default study instead of the watched one.
+    if not any(arg == "--output-dir" or arg.startswith("--output-dir=") for arg in args):
+        args += ["--output-dir", output_dir]
+    env = dict(os.environ, SWEEP_OUTPUT_DIR=output_dir)
     return subprocess.run(
         ["bash", str(LAUNCHER), *args],
         capture_output=True,

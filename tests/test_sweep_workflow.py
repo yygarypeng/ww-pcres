@@ -325,12 +325,8 @@ def test_selection_falls_back_to_an_unchanged_untuned_config():
     assert base == original
 
 
-def test_run_workflow_end_to_end_selects_a_winner_that_beats_its_own_folds(tmp_path):
-    """One pass over the whole workflow with training stubbed out.
-
-    The stub makes fold 1 systematically worse than fold 0, so a winner picked
-    against the wrong fold's baseline would show up here as a wrong score.
-    """
+def _end_to_end_settings(tmp_path):
+    """Workflow settings with training stubbed out; fold 1 scores worse than fold 0."""
 
     def fake_run(cfg, trial_dir, **kwargs):
         value = cfg["parameters"]["learning_rate"] * 1000.0 + 0.1 * kwargs["fold"]
@@ -338,7 +334,7 @@ def test_run_workflow_end_to_end_selects_a_winner_that_beats_its_own_folds(tmp_p
         report["wall_seconds"] = 60.0
         return report
 
-    settings = workflow.WorkflowSettings(
+    return workflow.WorkflowSettings(
         base_config={"parameters": {"seed": 2330, "learning_rate": 0.0005}},
         sweep_space=space.load_space(
             _write_space(
@@ -369,7 +365,10 @@ def test_run_workflow_end_to_end_selects_a_winner_that_beats_its_own_folds(tmp_p
         run_trial=fake_run,
     )
 
-    selected_path = workflow.run_workflow(settings)
+
+def test_run_workflow_end_to_end_selects_a_winner_that_beats_its_own_folds(tmp_path):
+    """A winner picked against the wrong fold's baseline would show a wrong score."""
+    selected_path = workflow.run_workflow(_end_to_end_settings(tmp_path))
 
     selected = yaml.safe_load(selected_path.read_text())
     report = json.loads((tmp_path / "selection.json").read_text())
@@ -616,3 +615,15 @@ def test_a_search_that_only_fails_stops_instead_of_spending_the_budget(tmp_path)
 
     assert [trial.state.name for trial in study.trials] == ["FAIL"] * 3
     assert report["status"] == "untuned", "the untuned config stays selected when nothing wins"
+
+
+def test_resuming_a_converged_study_runs_no_new_search_trial(tmp_path):
+    settings = _end_to_end_settings(tmp_path)
+    workflow.run_workflow(settings)
+    study = optuna.load_study(study_name=settings.study_name, storage=settings.storage)
+    trials_before = len(study.trials)
+
+    workflow.run_workflow(_end_to_end_settings(tmp_path))
+
+    study = optuna.load_study(study_name=settings.study_name, storage=settings.storage)
+    assert len(study.trials) == trials_before
