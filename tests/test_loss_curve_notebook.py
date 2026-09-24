@@ -220,7 +220,7 @@ def test_plot_loss_curves_builds_two_slide_subplot_figures(tmp_path, capsys):
     diagnostics = plot_loss_curves(metrics_path, cfg)
 
     assert diagnostics["mismatches"] == ["val"]
-    assert [len(figure.axes) for figure in diagnostics["figures"]] == [9, 9]
+    assert [len(figure.axes) for figure in diagnostics["figures"]] == [12, 9]
     assert "summary" not in diagnostics
     assert "contribution_shares" not in diagnostics
 
@@ -228,7 +228,7 @@ def test_plot_loss_curves_builds_two_slide_subplot_figures(tmp_path, capsys):
     assert (
         raw_figure.axes[0].get_subplotspec().get_gridspec().nrows,
         raw_figure.axes[0].get_subplotspec().get_gridspec().ncols,
-    ) == (3, 3)
+    ) == (4, 3)
     assert (
         weighted_figure.axes[0].get_subplotspec().get_gridspec().nrows,
         weighted_figure.axes[0].get_subplotspec().get_gridspec().ncols,
@@ -268,13 +268,13 @@ def test_plot_loss_curves_builds_two_slide_subplot_figures(tmp_path, capsys):
     total_axis = raw_figure.axes[len(component_names)]
     total_lines = {line.get_label(): line for line in total_axis.lines}
     assert total_axis.get_title(loc="left") == "Logged Total"
-    np.testing.assert_array_equal(total_lines["total:train"].get_ydata(), [240.0, 204.0])
-    np.testing.assert_array_equal(total_lines["total:val"].get_ydata(), [259.0, 223.0])
+    np.testing.assert_array_equal(total_lines["total:train"].get_ydata(), [330.0, 285.0])
+    np.testing.assert_array_equal(total_lines["total:val"].get_ydata(), [353.5, 308.5])
     assert total_lines["total:train"].get_color() == "tab:blue"
     assert total_lines["total:val"].get_color() == "tab:orange"
     np.testing.assert_array_equal(total_lines["best_epoch"].get_xdata(), [1, 1])
-    assert raw_figure.axes[8].axison
-    assert not weighted_figure.axes[8].axison
+    assert all(not axis.axison for axis in raw_figure.axes[len(component_names) + 1 :])
+    assert all(axis.axison for axis in weighted_figure.axes)
     assert len(raw_figure.legends) == 0
     assert len(weighted_figure.legends) == 0
     assert raw_figure.axes[2].get_legend() is not None
@@ -294,10 +294,14 @@ def test_plot_loss_curves_builds_two_slide_subplot_figures(tmp_path, capsys):
             component_title_bounds = axis.title.get_window_extent(renderer)
             assert figure.bbox.contains(component_title_bounds.x0, component_title_bounds.y0)
             assert figure.bbox.contains(component_title_bounds.x1, component_title_bounds.y1)
+    # The panels above the blank cells keep their epoch tick labels.
+    for axis in raw_figure.axes[7:10]:
+        assert all(tick.label1.get_visible() for tick in axis.xaxis.get_major_ticks())
+    assert not any(tick.label1.get_visible() for tick in raw_figure.axes[4].xaxis.get_major_ticks())
     output = capsys.readouterr().out
     normalized_output = " ".join(output.split())
     assert "component train val weighted_train weighted_val" in normalized_output
-    assert r"$\Delta \mathrm{MET}$ 8 8.5 64 68" in normalized_output
+    assert r"$\Delta \mathrm{MET}$ 9 9.5 81 85.5" in normalized_output
     assert "could not be reconstructed exactly for: validation" in output
     plt.close("all")
 
@@ -328,9 +332,10 @@ def test_plot_loss_curves_reports_when_all_components_are_unavailable(tmp_path, 
     diagnostics = plot_loss_curves(metrics_path, {"parameters": {}})
 
     raw_figure, weighted_figure = diagnostics["figures"]
-    assert [len(figure.axes) for figure in diagnostics["figures"]] == [9, 9]
-    assert all(not axis.axison for axis in raw_figure.axes[:8])
-    assert raw_figure.axes[8].axison
+    assert [len(figure.axes) for figure in diagnostics["figures"]] == [12, 9]
+    assert all(not axis.axison for axis in raw_figure.axes[:9])
+    assert raw_figure.axes[9].axison
+    assert all(not axis.axison for axis in raw_figure.axes[10:])
     assert all(not axis.axison for axis in weighted_figure.axes)
     assert "summary" not in diagnostics
     assert "contribution_shares" not in diagnostics
@@ -342,9 +347,32 @@ def test_plot_loss_curves_reports_when_all_components_are_unavailable(tmp_path, 
 def test_plot_gradient_cosine_heatmaps_reports_missing_columns(capsys):
     df = pd.DataFrame({"epoch": [0], "loss": [1.0]})
 
-    plot_gradient_cosine_heatmaps(df)
+    figures = plot_gradient_cosine_heatmaps(df)
 
+    assert figures == {}
     assert "No grad_cos columns found" in capsys.readouterr().out
+
+
+def test_plot_gradient_cosine_heatmaps_returns_each_generated_figure():
+    df = pd.DataFrame(
+        {
+            "epoch": [0, 1],
+            "grad_cos/a__b": [0.1, 0.2],
+            "grad_cos/a__total": [0.3, 0.4],
+            "grad_cos/a__rest": [0.5, 0.6],
+        }
+    )
+
+    figures = plot_gradient_cosine_heatmaps(df)
+
+    assert set(figures) == {
+        "gradient_cosine_pairwise_history",
+        "gradient_cosine_pairwise_latest",
+        "gradient_cosine_total_history",
+        "gradient_cosine_rest_history",
+    }
+    assert all(isinstance(figure, plt.Figure) for figure in figures.values())
+    plt.close("all")
 
 
 def test_plot_gradient_norms_reports_missing_columns(capsys):

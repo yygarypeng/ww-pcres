@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import mplhep as hep
 import numpy as np
 import pandas as pd
@@ -10,6 +12,15 @@ from scipy.stats import wasserstein_distance
 
 hep.style.use(hep.style.ATLAS)
 ATLAS_LABEL_TEXT = "Internal Simulation"
+
+
+def save_figure(fig, directory, filename):
+    """Save a figure as a tightly cropped PDF and return its path."""
+    directory = Path(directory)
+    directory.mkdir(parents=True, exist_ok=True)
+    output_path = directory / Path(filename).with_suffix(".pdf").name
+    fig.savefig(output_path, format="pdf", bbox_inches="tight")
+    return output_path
 
 
 def _rel_err_func(a, b):
@@ -341,7 +352,9 @@ def plot_1d_hist(
     color="black",
     savepath=None,
     ratio_ylim=(0.5, 1.5),
-    ratio_text="Pred/True",
+    ratio_text=None,
+    pred_label="Pred",
+    truth_label="True",
 ):
     fig, (ax, rax) = plt.subplots(
         2,
@@ -354,7 +367,9 @@ def plot_1d_hist(
     pred_counts, _ = np.histogram(pred, bins=bins_edges)
     truth_counts, _ = np.histogram(truth, bins=bins_edges)
 
-    legend_text = ratio_text.split("/", 1) if "/" in ratio_text else [ratio_text, "True"]
+    if ratio_text is None:
+        ratio_text = f"{pred_label}/{truth_label}"
+    legend_text = ratio_text.split("/", 1) if "/" in ratio_text else [ratio_text, truth_label]
     ax.hist(pred, bins=bins_edges, linewidth=2, color="red", histtype="step", label=legend_text[0])
     ax.hist(
         truth, bins=bins_edges, linewidth=2, color="blue", histtype="step", label=legend_text[1]
@@ -381,6 +396,7 @@ def plot_1d_hist(
     if savepath is not None:
         fig.savefig(savepath, bbox_inches="tight")
     plt.show()
+    return fig
 
 
 def plot_2d_hist(
@@ -391,10 +407,12 @@ def plot_2d_hist(
     log=False,
     unit="GeV",
     color="black",
-    xlabel="Pred",
-    ylabel="True",
+    xlabel=None,
+    ylabel=None,
     vmax=1e2,
     savepath=None,
+    pred_label="Pred",
+    truth_label="True",
 ):
     err = 0.2
     cor_mask = np.abs(_rel_err_func(pred, truth)) <= err
@@ -403,6 +421,10 @@ def plot_2d_hist(
 
     ax.plot(bins_edges, bins_edges, color="gainsboro", linestyle="--")
 
+    if xlabel is None:
+        xlabel = pred_label
+    if ylabel is None:
+        ylabel = truth_label
     ax.set_xlabel(f"{xlabel} [{unit}]")
     ax.set_ylabel(f"{ylabel} [{unit}]")
     ax.set_title(f"{name}" + f" (RMSE: {_fmt_metric(_rmse(pred, truth))})", loc="right")
@@ -421,16 +443,47 @@ def plot_2d_hist(
     if savepath is not None:
         fig.savefig(savepath, bbox_inches="tight")
     plt.show()
+    return fig
 
 
-def plot_pair(pred, truth, name, bins_edges, unit="GeV", log=True, vmax=2e3):
+def plot_pair(
+    pred,
+    truth,
+    name,
+    bins_edges,
+    unit="GeV",
+    log=True,
+    vmax=2e3,
+    pred_label="Pred",
+    truth_label="True",
+):
     """The 1D comparison plus the 2D pred-vs-truth correlation, for one observable."""
-    plot_1d_hist(pred, truth, name, bins_edges=bins_edges, unit=unit)
-    plot_2d_hist(pred, truth, name, bins_edges=bins_edges, log=log, unit=unit, vmax=vmax)
+    fig_1d = plot_1d_hist(
+        pred,
+        truth,
+        name,
+        bins_edges=bins_edges,
+        unit=unit,
+        pred_label=pred_label,
+        truth_label=truth_label,
+    )
+    fig_2d = plot_2d_hist(
+        pred,
+        truth,
+        name,
+        bins_edges=bins_edges,
+        log=log,
+        unit=unit,
+        vmax=vmax,
+        pred_label=pred_label,
+        truth_label=truth_label,
+    )
+    return fig_1d, fig_2d
 
 
 LOSS_COMPONENTS = [
     ("w_fourvec", r"$W$ 4-vec L1"),
+    ("fourvec_bias", r"$W$ 4-vec bias"),
     ("higgs_fourvec", r"$H$ 4-vec L1"),
     ("higgs_mass", r"$m_H$ L1"),
     ("alpha_mmd", r"$\alpha$ MMD"),
@@ -442,6 +495,7 @@ LOSS_COMPONENTS = [
 
 DEFAULT_LOSS_WEIGHTS = {
     "w_fourvec": 1.0,
+    "fourvec_bias": 0.0,
     "higgs_fourvec": 0.0,
     "higgs_mass": 0.0,
     "alpha_mmd": 0.0,
@@ -561,6 +615,26 @@ def _top_right_visible_axis(axes):
     )
 
 
+def _loss_panel_grid(panels, ncols=3):
+    nrows = int(np.ceil(panels / ncols))
+    figure, axes = plt.subplots(
+        nrows, ncols, figsize=(14, 11 * nrows / 3), sharex=True, layout="constrained"
+    )
+    axes = axes.ravel()
+    for axis in axes[panels:]:
+        axis.set_axis_off()
+    return figure, axes
+
+
+def _label_lowest_visible_row(axes, ncols=3):
+    # sharex keeps tick labels on the bottom row only, which is blank when the
+    # panel count is not a multiple of ncols.
+    for index, axis in enumerate(axes):
+        below = index + ncols
+        if axis.axison and (below >= len(axes) or not axes[below].axison):
+            axis.xaxis.set_tick_params(labelbottom=True)
+
+
 def plot_loss_curves(metrics_path, cfg):
     print(f"Using metrics file: {metrics_path}")
     if not metrics_path.exists():
@@ -600,12 +674,9 @@ def plot_loss_curves(metrics_path, cfg):
         )
     print(f"Best loss values at best epoch {best_epoch} (min val_loss):")
     print(pd.DataFrame(rows).to_string(index=False))
-    fig_raw, raw_axes = plt.subplots(3, 3, figsize=(14, 11), sharex=True, layout="constrained")
-    fig_weighted, weighted_axes = plt.subplots(
-        3, 3, figsize=(14, 11), sharex=True, layout="constrained"
-    )
-    raw_axes = raw_axes.ravel()
-    weighted_axes = weighted_axes.ravel()
+    # One panel per component; the raw figure adds the logged total after them.
+    fig_raw, raw_axes = _loss_panel_grid(len(LOSS_COMPONENTS) + 1)
+    fig_weighted, weighted_axes = _loss_panel_grid(len(LOSS_COMPONENTS))
     stages = (
         ("train", "Training", "tab:blue", "-"),
         ("val", "Validation", "tab:orange", "--"),
@@ -657,8 +728,8 @@ def plot_loss_curves(metrics_path, cfg):
         )
     total_axis.set_title("Logged Total", loc="left")
     visible_raw_axes.append(total_axis)
-    for axis in weighted_axes[len(LOSS_COMPONENTS) :]:
-        axis.set_axis_off()
+    _label_lowest_visible_row(raw_axes)
+    _label_lowest_visible_row(weighted_axes)
 
     stage_handles = [
         Line2D([0], [0], color=color, linestyle=linestyle, linewidth=2.5, label=label)
@@ -719,19 +790,22 @@ def plot_loss_curves(metrics_path, cfg):
 
 
 def _plot_grad_cos_heatmap(heatmap, x_col, ylabel, title):
-    plt.figure(figsize=(16, max(8, 0.35 * len(heatmap))))
-    plt.imshow(heatmap, aspect="auto", cmap="coolwarm", vmin=-1, vmax=1, interpolation="nearest")
-    plt.colorbar(label="Gradient cosine")
-    plt.yticks(range(len(heatmap.index)), heatmap.index)
+    fig, ax = plt.subplots(figsize=(16, max(8, 0.35 * len(heatmap))))
+    image = ax.imshow(
+        heatmap, aspect="auto", cmap="coolwarm", vmin=-1, vmax=1, interpolation="nearest"
+    )
+    fig.colorbar(image, ax=ax, label="Gradient cosine")
+    ax.set_yticks(range(len(heatmap.index)), heatmap.index)
     tick_positions = np.linspace(
         0, len(heatmap.columns) - 1, min(10, len(heatmap.columns)), dtype=int
     )
-    plt.xticks(tick_positions, heatmap.columns[tick_positions])
-    plt.xlabel(x_col.capitalize())
-    plt.ylabel(ylabel)
-    plt.title(title)
-    plt.tight_layout()
+    ax.set_xticks(tick_positions, heatmap.columns[tick_positions])
+    ax.set_xlabel(x_col.capitalize())
+    ax.set_ylabel(ylabel)
+    ax.set_title(title)
+    fig.tight_layout()
     plt.show()
+    return fig
 
 
 def plot_gradient_cosine_heatmaps(df):
@@ -740,7 +814,7 @@ def plot_gradient_cosine_heatmaps(df):
         print(
             "No grad_cos columns found in metrics. Enable parameters.log_loss_gradient_cosines and rerun training."
         )
-        return
+        return {}
     populated_counts = df[grad_cols].notna().sum()
     grad_cols = sorted(populated_counts[populated_counts > 0].index)
     if not grad_cols:
@@ -751,7 +825,7 @@ def plot_gradient_cosine_heatmaps(df):
             "No gradient-cosine values were emitted. Older training code required adaptive_loss_weights: true even when log_loss_gradient_cosines was enabled."
         )
         print("Rerun with the current independent gradient-cosine logging implementation.")
-        return
+        return {}
 
     total_grad_cols = [col for col in grad_cols if col.endswith("__total")]
     rest_grad_cols = [col for col in grad_cols if col.endswith("__rest")]
@@ -762,13 +836,16 @@ def plot_gradient_cosine_heatmaps(df):
     x_col = "epoch" if "epoch" in df_grad.columns else "step"
 
     latest = df_grad[grad_cols].ffill().iloc[-1]
+    figures = {}
 
     if pair_grad_cols:
         heatmap = df_grad.set_index(x_col)[pair_grad_cols].ffill().T
         heatmap.index = [
             col.replace("grad_cos/", "").replace("__", " vs ") for col in heatmap.index
         ]
-        _plot_grad_cos_heatmap(heatmap, x_col, "Loss pair", "Pairwise Similarity Over Training")
+        figures["gradient_cosine_pairwise_history"] = _plot_grad_cos_heatmap(
+            heatmap, x_col, "Loss pair", "Pairwise Similarity Over Training"
+        )
 
         pair_latest = latest[pair_grad_cols].dropna()
         loss_names = sorted(
@@ -782,14 +859,15 @@ def plot_gradient_cosine_heatmaps(df):
             matrix.loc[name_a, name_b] = value
             matrix.loc[name_b, name_a] = value
 
-        plt.figure(figsize=(10, 8))
-        plt.imshow(matrix, cmap="coolwarm", vmin=-1, vmax=1)
-        plt.colorbar(label="Gradient cosine")
-        plt.xticks(range(len(loss_names)), loss_names, rotation=45, ha="right")
-        plt.yticks(range(len(loss_names)), loss_names)
-        plt.title(f"Pairwise Similarity Matrix ({x_col} {df_grad[x_col].iloc[-1]})")
-        plt.tight_layout()
+        fig, ax = plt.subplots(figsize=(10, 8))
+        image = ax.imshow(matrix, cmap="coolwarm", vmin=-1, vmax=1)
+        fig.colorbar(image, ax=ax, label="Gradient cosine")
+        ax.set_xticks(range(len(loss_names)), loss_names, rotation=45, ha="right")
+        ax.set_yticks(range(len(loss_names)), loss_names)
+        ax.set_title(f"Pairwise Similarity Matrix ({x_col} {df_grad[x_col].iloc[-1]})")
+        fig.tight_layout()
         plt.show()
+        figures["gradient_cosine_pairwise_latest"] = fig
     else:
         print("No populated pairwise grad_cos metrics found.")
 
@@ -803,7 +881,7 @@ def plot_gradient_cosine_heatmaps(df):
         if total_heatmap.empty:
             print("No populated loss-vs-total grad_cos metrics found.")
         else:
-            _plot_grad_cos_heatmap(
+            figures["gradient_cosine_total_history"] = _plot_grad_cos_heatmap(
                 total_heatmap, x_col, "Loss", "Loss-vs-Total Similarity Over Training"
             )
     else:
@@ -819,7 +897,7 @@ def plot_gradient_cosine_heatmaps(df):
         if rest_heatmap.empty:
             print("No populated loss-vs-rest grad_cos metrics found.")
         else:
-            _plot_grad_cos_heatmap(
+            figures["gradient_cosine_rest_history"] = _plot_grad_cos_heatmap(
                 rest_heatmap, x_col, "Loss", "Loss-vs-Rest Similarity Over Training"
             )
     else:
@@ -829,6 +907,7 @@ def plot_gradient_cosine_heatmaps(df):
         f"Visualized {len(pair_grad_cols)} pairwise, {len(total_grad_cols)} total, "
         f"and {len(rest_grad_cols)} rest grad_cos metrics across {len(df_grad)} logged rows."
     )
+    return figures
 
 
 def plot_gradient_norms(df):

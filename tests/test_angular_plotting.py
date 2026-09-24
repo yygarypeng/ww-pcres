@@ -14,7 +14,11 @@ from matplotlib.collections import LineCollection, PolyCollection
 from matplotlib.colors import LogNorm
 
 from notebooks import plottingtool
-from notebooks.plottingtool import plot_1d_hist, plot_angular_1d_grid, plot_angular_2d_grid
+from notebooks.plottingtool import (
+    plot_1d_hist,
+    plot_angular_1d_grid,
+    plot_angular_2d_grid,
+)
 
 NOTEBOOK_PATH = Path(__file__).parents[1] / "notebooks" / "visualize.ipynb"
 
@@ -38,6 +42,20 @@ def _notebook_code_cells():
 
 
 pytestmark = pytest.mark.filterwarnings("ignore:invalid escape sequence:DeprecationWarning")
+
+
+def test_save_figure_creates_directory_and_forces_pdf_extension(tmp_path):
+    fig, ax = plt.subplots()
+    ax.plot([0, 1], [0, 1])
+
+    try:
+        saved_path = plottingtool.save_figure(fig, tmp_path / "figure", "line_plot.png")
+
+        assert saved_path == tmp_path / "figure" / "line_plot.pdf"
+        assert saved_path.read_bytes().startswith(b"%PDF")
+        assert not saved_path.with_suffix(".png").exists()
+    finally:
+        plt.close(fig)
 
 
 def _observables():
@@ -92,7 +110,7 @@ def test_plot_1d_hist_renders_uncertainties_overflows_and_omits_zero_counts():
     figures_before = set(plt.get_fignums())
 
     try:
-        plot_1d_hist(
+        fig = plot_1d_hist(
             pred,
             truth,
             "x",
@@ -101,7 +119,47 @@ def test_plot_1d_hist_renders_uncertainties_overflows_and_omits_zero_counts():
             ratio_text="Model/Data",
         )
 
-        _assert_ratio_rendering(plt.gcf().axes[1], "Model/Data")
+        assert fig is plt.gcf()
+        _assert_ratio_rendering(fig.axes[1], "Model/Data")
+    finally:
+        for figure_number in set(plt.get_fignums()) - figures_before:
+            plt.close(figure_number)
+
+
+LABEL_CASES = [
+    ({}, ("Pred", "True")),
+    ({"pred_label": "Reco", "truth_label": "Truth"}, ("Reco", "Truth")),
+]
+
+
+@pytest.mark.parametrize(("labels", "expected"), LABEL_CASES)
+def test_plot_1d_hist_labels_the_legend_and_ratio(labels, expected):
+    figures_before = set(plt.get_fignums())
+    samples = np.array([0.25, 0.75])
+
+    try:
+        fig = plot_1d_hist(samples, samples, "x", bins_edges=np.array([0.0, 0.5, 1.0]), **labels)
+
+        assert {text.get_text() for text in fig.axes[0].get_legend().get_texts()} == set(expected)
+        assert fig.axes[1].get_ylabel() == "/".join(expected)
+    finally:
+        for figure_number in set(plt.get_fignums()) - figures_before:
+            plt.close(figure_number)
+
+
+@pytest.mark.parametrize(("labels", "expected"), LABEL_CASES)
+def test_plot_2d_hist_labels_and_returns_its_figure(labels, expected):
+    figures_before = set(plt.get_fignums())
+    samples = np.array([0.25, 0.75])
+
+    try:
+        fig = plottingtool.plot_2d_hist(
+            samples, samples, "x", bins_edges=np.array([0.0, 0.5, 1.0]), **labels
+        )
+
+        assert fig is plt.gcf()
+        assert fig.axes[0].get_xlabel() == f"{expected[0]} [GeV]"
+        assert fig.axes[0].get_ylabel() == f"{expected[1]} [GeV]"
     finally:
         for figure_number in set(plt.get_fignums()) - figures_before:
             plt.close(figure_number)
@@ -440,21 +498,57 @@ def test_notebook_uses_exported_loss_curve_helpers():
 
 def test_plot_pair_draws_the_1d_and_2d_views_of_one_observable(monkeypatch):
     calls = {}
+    figures = (object(), object())
     monkeypatch.setattr(
-        plottingtool, "plot_1d_hist", lambda *args, **kwargs: calls.setdefault("1d", (args, kwargs))
+        plottingtool,
+        "plot_1d_hist",
+        lambda *args, **kwargs: (calls.setdefault("1d", (args, kwargs)), figures[0])[1],
     )
     monkeypatch.setattr(
-        plottingtool, "plot_2d_hist", lambda *args, **kwargs: calls.setdefault("2d", (args, kwargs))
+        plottingtool,
+        "plot_2d_hist",
+        lambda *args, **kwargs: (calls.setdefault("2d", (args, kwargs)), figures[1])[1],
     )
     bins = np.linspace(0.0, 1.0, 5)
 
-    plottingtool.plot_pair([0.1], [0.2], "obs", bins, unit="null", log=False, vmax=7.0)
+    result = plottingtool.plot_pair([0.1], [0.2], "obs", bins, unit="null", log=False, vmax=7.0)
 
+    assert result == figures
     assert calls["1d"][0] == calls["2d"][0] == ([0.1], [0.2], "obs")
     for key in ("1d", "2d"):
         np.testing.assert_allclose(calls[key][1].pop("bins_edges"), bins)
-    assert calls["1d"][1] == {"unit": "null"}
-    assert calls["2d"][1] == {"log": False, "unit": "null", "vmax": 7.0}
+    assert calls["1d"][1] == {"unit": "null", "pred_label": "Pred", "truth_label": "True"}
+    assert calls["2d"][1] == {
+        "log": False,
+        "unit": "null",
+        "vmax": 7.0,
+        "pred_label": "Pred",
+        "truth_label": "True",
+    }
+
+
+def test_plot_pair_forwards_custom_reco_truth_labels(monkeypatch):
+    calls = {}
+    monkeypatch.setattr(
+        plottingtool, "plot_1d_hist", lambda *args, **kwargs: calls.setdefault("1d", kwargs)
+    )
+    monkeypatch.setattr(
+        plottingtool, "plot_2d_hist", lambda *args, **kwargs: calls.setdefault("2d", kwargs)
+    )
+
+    plottingtool.plot_pair(
+        [0.1],
+        [0.2],
+        "obs",
+        np.linspace(0.0, 1.0, 5),
+        pred_label="Reco",
+        truth_label="Truth",
+    )
+
+    assert calls["1d"]["pred_label"] == "Reco"
+    assert calls["1d"]["truth_label"] == "Truth"
+    assert calls["2d"]["pred_label"] == "Reco"
+    assert calls["2d"]["truth_label"] == "Truth"
 
 
 def test_notebook_reuses_physics_helpers_instead_of_redefining_them():
