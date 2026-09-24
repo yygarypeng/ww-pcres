@@ -3,18 +3,23 @@
 The PCRES regressor reconstructs the W+ and W- four-vectors from two charged
 leptons, up to two jets, and missing transverse momentum (MET).
 
-Use the ONNX models in `/eos/home-y/ypeng/qe/models/PCRes_260921`. Inference
+Use the ONNX models in `/eos/home-y/ypeng/qe/models/PCRes_260925`. Inference
 needs `onnxruntime` and those eight files; PyTorch, Lightning, and this
 repository's source are not required.
 
 Trained on ggF samples from the QE `v6.1` dataset, with the different-flavor
 (DF) lepton selection and the default TCPT selection.
 
+> These models replace `PCRes_260921` and fix its shifted W momentum mean. On
+> the 140,565 test events, the mean W± px and py residuals drop from up to
+> 4 GeV to at most 0.3 GeV, and pz stays within 0.4 GeV. The W energies still
+> sit about 20 GeV low, and the px and py resolution is 3 to 6% wider.
+
 ## Models
 
 | Property | Value |
 | --- | --- |
-| Location | `/eos/home-y/ypeng/qe/models/PCRes_260921` |
+| Location | `/eos/home-y/ypeng/qe/models/PCRes_260925` |
 | Files | `hww_regressor_fold0.onnx` ... `hww_regressor_fold7.onnx` |
 | Input tensor | `inputs`, `(n_events, 18)`, `float32` |
 | Output tensor | `outputs`, `(n_events, 8)`, `float32` |
@@ -95,7 +100,7 @@ not independent.
 import numpy as np
 import onnxruntime as ort
 
-MODEL_DIR = "/eos/home-y/ypeng/qe/models/PCRes_260921"
+MODEL_DIR = "/eos/home-y/ypeng/qe/models/PCRes_260925"
 FOLDS = 8
 SESSIONS = {
     fold: ort.InferenceSession(

@@ -5,6 +5,7 @@ The architecture is the same as `260921`; the training config is the sweep-tuned
 Model artifacts: hww_regressor_fold0.onnx ... hww_regressor_fold7.onnx  
 Source run: 8-fold cross-fitting under `fold_meta_ggF_tuned_v2/fold{0..7}`, each exported from its own best-val_loss checkpoint (`reg-epoch=<epoch>-val_loss=*.ckpt`).  
 ONNX version: opset 11; IR 6  
+Published at: `/eos/home-y/ypeng/qe/models/PCRes_260925`  
 Client contract: `docs/checkpoint_manual.md`
 
 Scored with the ONNX models on the shared test split, per fold and averaged over the reported angular observables (theta* and phi* per lepton charge, plus their sums and differences).  `w_fourvec_rmse` is the RMSE over the eight W four-vector components against truth in GeV; the angular columns are in radians, with `ks` the two-sample KS statistic and `emd` the Wasserstein distance between the predicted and truth distributions.
@@ -20,7 +21,7 @@ Scored with the ONNX models on the shared test split, per fold and averaged over
 | fold6 | 106 | 58.0475 | 1.5022 | 0.0053 | 0.0096 |
 | fold7 | 146 | 58.0510 | 1.5012 | 0.0052 | 0.0089 |
 
-Against the untuned `260921` export, the angular KS and EMD are lower on every fold, the per-event angular RMSE is ~0.006 rad higher, and the W four-vector RMSE is unchanged.
+Against the untuned `260921` export, the angular KS and EMD are lower on every fold, the per-event angular RMSE is ~0.006 rad higher, and the W four-vector RMSE is unchanged.  The shifted W momentum mean is fixed: on the test events, selecting each event's model by `eventNumber % 8`, the mean W± px and py residuals drop from up to 4 GeV to at most 0.3 GeV, while the W energies still sit about 20 GeV low.
 
 - Input: a float32 tensor with shape `(batch_size, 18)`.
   - l+: `(px, py, pz, energy)`

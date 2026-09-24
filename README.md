@@ -105,7 +105,7 @@ Outputs land under `sweep/outputs/` by default; nothing in `sweep/` writes to
   reports, for the same checkpoints and split, the MMD at each configured
   bandwidth of the alpha, mass, and angular features.
 - `onnx/README.md` covers ONNX export and the PyTorch/ONNX Runtime parity check.
-- `docs/checkpoint_manual.md` documents the published `260921` exports for
+- `docs/checkpoint_manual.md` documents the published `260925` exports for
   consumers: input columns, fold selection by `eventNumber`, and a minimal ONNX
   Runtime client.
 - `python -m physics.torchBoost` checks the PyTorch rest-frame decay angles
