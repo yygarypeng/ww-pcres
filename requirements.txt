@@ -13,3 +13,5 @@ onnxruntime
 wandb
 optuna
 ruff==0.16.2
+pandas
+pytest
