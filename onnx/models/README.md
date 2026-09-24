@@ -1,12 +1,14 @@
 # Local ONNX Models
 
-Each dated directory holds one export and a README describing it; the `*.onnx`
-binaries are gitignored and stay local.
+One directory per export, each with a model card; the `*.onnx` binaries are
+gitignored and stay local.
 
-- `260921/`: current. Eight cross-fitting models selected by `eventNumber % 8`,
-  trained on the ggF-only input.
-- `260919/`: superseded. Row-index folds on a mixed ggF/VBF input.
-- `260821/`: historical single-fold model.
+- `260925/`: latest. Eight cross-fitting models (`eventNumber % 8`) trained with
+  the sweep-tuned `configs/kfold_config.yaml` on the ggF-only input.
+- `260921/`: the untuned baseline with the same architecture, folds, and input;
+  `docs/checkpoint_manual.md` documents its published copy.
+- `260919/`: superseded. Eight models trained with row-index folds on an input
+  that mixed ggF and VBF.
+- `260821/`: historical single model; only its model card remains.
 
-All three take the 18-column input described in `onnx/README.md`; check
-`model.graph.input[0]` before using any other historical export.
+Every model card documents an 18-column input and an 8-column output.
